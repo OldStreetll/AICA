@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.LLM;
+using AICA.Core.Prompt;
 using Microsoft.Extensions.Logging;
 
 namespace AICA.Core.Agent
@@ -39,8 +40,15 @@ namespace AICA.Core.Agent
             IUIContext uiContext,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            // Build system prompt with tool definitions
+            var toolDefinitions = _toolDispatcher.GetToolDefinitions();
+            var systemPrompt = SystemPromptBuilder.GetDefaultPrompt(
+                context?.WorkingDirectory ?? Environment.CurrentDirectory,
+                toolDefinitions);
+
             var conversationHistory = new List<ChatMessage>
             {
+                ChatMessage.System(systemPrompt),
                 ChatMessage.User(userRequest)
             };
 
@@ -52,7 +60,6 @@ namespace AICA.Core.Agent
                 _logger?.LogDebug("Agent iteration {Iteration}", iteration);
 
                 // Get LLM response
-                var toolDefinitions = _toolDispatcher.GetToolDefinitions();
                 string assistantResponse = null;
                 var toolCalls = new List<ToolCall>();
 
