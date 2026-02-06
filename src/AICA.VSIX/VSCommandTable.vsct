@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+  <Include href="KnownImageIds.vsct" />
+  <Include href="VSGlobals.vsct" />
+
+  <Commands package="AICAPackage">
+
+    <Groups>
+      <Group guid="AICACommandSet" id="AICA_MenuGroup" />
+      <Group guid="AICACommandSet" id="AICA_CommandGroup" />
+    </Groups>
+
+    <Menus>
+      <Menu guid="AICACommandSet" id="AICA_Menu" type="Menu">
+        <Strings>
+          <ButtonText>AICA</ButtonText>
+        </Strings>
+      </Menu>
+    </Menus>
+
+    <Buttons>
+      <!-- Open Chat Window -->
+      <Button guid="AICACommandSet" id="OpenChatCommand" priority="0x0000" type="Button">
+        <Icon guid="ImageCatalogGuid" id="StatusInformation" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>Open AICA Chat</ButtonText>
+          <LocCanonicalName>.AICA.OpenChat</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <!-- Explain Code -->
+      <Button guid="AICACommandSet" id="ExplainCodeCommand" priority="0x0001" type="Button">
+        <Icon guid="ImageCatalogGuid" id="DescriptionViewer" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>Explain Code</ButtonText>
+          <LocCanonicalName>.AICA.ExplainCode</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <!-- Refactor -->
+      <Button guid="AICACommandSet" id="RefactorCommand" priority="0x0002" type="Button">
+        <Icon guid="ImageCatalogGuid" id="Refactoring" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>Refactor</ButtonText>
+          <LocCanonicalName>.AICA.Refactor</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <!-- Generate Tests -->
+      <Button guid="AICACommandSet" id="GenerateTestCommand" priority="0x0003" type="Button">
+        <Icon guid="ImageCatalogGuid" id="AddTest" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>Generate Tests</ButtonText>
+          <LocCanonicalName>.AICA.GenerateTests</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <!-- View Menu: Open Chat Window -->
+      <Button guid="AICACommandSet" id="OpenChatWindowMenuCommand" priority="0x0100" type="Button">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_WNDO_OTRWNDWS1" />
+        <Icon guid="ImageCatalogGuid" id="StatusInformation" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>AICA Chat</ButtonText>
+        </Strings>
+      </Button>
+    </Buttons>
+
+  </Commands>
+
+  <CommandPlacements>
+    <!-- Code Editor Context Menu -->
+    <CommandPlacement guid="AICACommandSet" id="AICA_MenuGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN" />
+    </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="AICA_Menu" priority="0x0100">
+      <Parent guid="AICACommandSet" id="AICA_MenuGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="AICA_CommandGroup" priority="0x0100">
+      <Parent guid="AICACommandSet" id="AICA_Menu" />
+    </CommandPlacement>
+    
+    <!-- Commands in AICA submenu -->
+    <CommandPlacement guid="AICACommandSet" id="OpenChatCommand" priority="0x0000">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="ExplainCodeCommand" priority="0x0001">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="RefactorCommand" priority="0x0002">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="GenerateTestCommand" priority="0x0003">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
+  </CommandPlacements>
+
+  <KeyBindings>
+    <KeyBinding guid="AICACommandSet" id="OpenChatCommand" mod1="Control Alt" key1="A" editor="guidVSStd97" />
+  </KeyBindings>
+
+  <Symbols>
+    <GuidSymbol name="AICAPackage" value="{D4E5F6A7-B8C9-0123-ABCD-456789ABCDEF}" />
+
+    <GuidSymbol name="AICACommandSet" value="{E5F6A7B8-C9D0-1234-ABCD-56789ABCDEF0}">
+      <IDSymbol name="AICA_MenuGroup" value="0x1000" />
+      <IDSymbol name="AICA_CommandGroup" value="0x1001" />
+      <IDSymbol name="AICA_Menu" value="0x1002" />
+      <IDSymbol name="OpenChatCommand" value="0x0100" />
+      <IDSymbol name="ExplainCodeCommand" value="0x0101" />
+      <IDSymbol name="RefactorCommand" value="0x0102" />
+      <IDSymbol name="GenerateTestCommand" value="0x0103" />
+      <IDSymbol name="OpenChatWindowMenuCommand" value="0x0104" />
+    </GuidSymbol>
+  </Symbols>
+
+</CommandTable>

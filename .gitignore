@@ -19,8 +19,9 @@ project.lock.json
 project.fragment.lock.json
 artifacts/
 
-# VSIX
+# VSIX build output (not the source directory)
 *.vsix
+!src/AICA.VSIX/
 
 # Test Results
 [Tt]est[Rr]esult*/
