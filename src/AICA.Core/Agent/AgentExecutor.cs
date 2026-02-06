@@ -235,7 +235,7 @@ namespace AICA.Core.Agent
                 foreach (Match paramMatch in paramPattern.Matches(body))
                 {
                     var key = paramMatch.Groups[1].Value.Trim();
-                    var value = paramMatch.Groups[2].Value.Trim();
+                    var value = SanitizeParameterValue(paramMatch.Groups[2].Value);
                     args[key] = value;
                 }
 
@@ -280,6 +280,38 @@ namespace AICA.Core.Agent
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Clean up parameter values extracted from text-based tool calls.
+        /// Removes control characters, XML remnants, and excess whitespace.
+        /// </summary>
+        private static string SanitizeParameterValue(string raw)
+        {
+            if (string.IsNullOrEmpty(raw))
+                return string.Empty;
+
+            // Remove any remaining XML/HTML tags
+            var cleaned = Regex.Replace(raw, @"<[^>]+>", " ");
+
+            // Remove control characters (newlines, tabs, etc.) - replace with space
+            cleaned = Regex.Replace(cleaned, @"[\x00-\x1F\x7F]+", " ");
+
+            // Collapse multiple spaces into one
+            cleaned = Regex.Replace(cleaned, @"\s{2,}", " ");
+
+            // Trim
+            cleaned = cleaned.Trim();
+
+            // Remove surrounding quotes if present
+            if (cleaned.Length >= 2 &&
+                ((cleaned[0] == '"' && cleaned[cleaned.Length - 1] == '"') ||
+                 (cleaned[0] == '\'' && cleaned[cleaned.Length - 1] == '\'')))
+            {
+                cleaned = cleaned.Substring(1, cleaned.Length - 2).Trim();
+            }
+
+            return cleaned;
         }
 
         public void Abort()

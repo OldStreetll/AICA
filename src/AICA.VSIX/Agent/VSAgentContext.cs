@@ -212,10 +212,41 @@ namespace AICA.Agent
             if (string.IsNullOrEmpty(path) || path == "." || path == "./" || path == "/" || path == "\\")
                 return WorkingDirectory ?? Environment.CurrentDirectory;
 
+            // Sanitize: remove control characters and illegal path chars
+            path = SanitizePath(path);
+
+            if (string.IsNullOrEmpty(path))
+                return WorkingDirectory ?? Environment.CurrentDirectory;
+
             if (Path.IsPathRooted(path))
                 return path;
 
             return Path.Combine(WorkingDirectory ?? Environment.CurrentDirectory, path);
+        }
+
+        private static string SanitizePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return path;
+
+            // Remove control characters
+            var sb = new System.Text.StringBuilder(path.Length);
+            foreach (var c in path)
+            {
+                if (c >= 0x20 && c != 0x7F) // skip control chars
+                    sb.Append(c);
+            }
+
+            var cleaned = sb.ToString().Trim();
+
+            // Remove surrounding quotes
+            if (cleaned.Length >= 2 &&
+                ((cleaned[0] == '"' && cleaned[cleaned.Length - 1] == '"') ||
+                 (cleaned[0] == '\'' && cleaned[cleaned.Length - 1] == '\'')))
+            {
+                cleaned = cleaned.Substring(1, cleaned.Length - 2).Trim();
+            }
+
+            return cleaned;
         }
 
         private static string GetRelativePath(string basePath, string fullPath)
