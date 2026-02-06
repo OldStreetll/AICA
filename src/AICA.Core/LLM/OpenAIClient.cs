@@ -32,7 +32,8 @@ namespace AICA.Core.LLM
 
             _httpClient = new HttpClient
             {
-                Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds)
+                // Use infinite timeout for streaming; we control cancellation via CancellationToken
+                Timeout = options.Stream ? System.Threading.Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(options.TimeoutSeconds)
             };
 
             if (!string.IsNullOrEmpty(options.ApiKey))
@@ -61,6 +62,15 @@ namespace AICA.Core.LLM
             var requestJson = JsonSerializer.Serialize(request, _jsonOptions);
 
             _logger?.LogDebug("LLM Request: {Request}", requestJson);
+            
+            // Write debug info for diagnostics
+            System.Diagnostics.Debug.WriteLine($"[AICA] LLM Request URL: {GetChatEndpoint()}");
+            System.Diagnostics.Debug.WriteLine($"[AICA] Tools count: {request.Tools?.Count ?? 0}");
+            System.Diagnostics.Debug.WriteLine($"[AICA] tool_choice: {request.ToolChoice ?? "(null)"}");
+            if (requestJson.Length < 5000)
+                System.Diagnostics.Debug.WriteLine($"[AICA] Request JSON: {requestJson}");
+            else
+                System.Diagnostics.Debug.WriteLine($"[AICA] Request JSON (truncated): {requestJson.Substring(0, 2000)}...");
 
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, GetChatEndpoint())
             {
@@ -174,6 +184,7 @@ namespace AICA.Core.LLM
                 // Handle tool calls
                 if (delta.ToolCalls != null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Received tool_calls in delta: {delta.ToolCalls.Count} calls");
                     foreach (var tc in delta.ToolCalls)
                     {
                         if (!toolCallsBuilder.TryGetValue(tc.Index, out var builder))
@@ -195,6 +206,12 @@ namespace AICA.Core.LLM
                     }
                 }
 
+                // Log finish reason
+                if (!string.IsNullOrEmpty(chunk.Choices[0].FinishReason))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] finish_reason: {chunk.Choices[0].FinishReason}");
+                }
+
                 // Check for finish reason
                 if (chunk.Choices[0].FinishReason == "tool_calls")
                 {
@@ -206,6 +223,7 @@ namespace AICA.Core.LLM
                             yield return LLMChunk.Tool(toolCall);
                         }
                     }
+                    toolCallsBuilder.Clear();
                 }
             }
         }
@@ -318,6 +336,7 @@ namespace AICA.Core.LLM
                         }
                     });
                 }
+                request.ToolChoice = "auto";
             }
 
             return request;
@@ -426,6 +445,8 @@ namespace AICA.Core.LLM
             public string Model { get; set; }
             public List<RequestMessage> Messages { get; set; }
             public List<RequestTool> Tools { get; set; }
+            [JsonPropertyName("tool_choice")]
+            public string ToolChoice { get; set; }
             [JsonPropertyName("max_tokens")]
             public int MaxTokens { get; set; }
             public double Temperature { get; set; }

@@ -39,19 +39,31 @@ namespace AICA.Core.Tools
 
         public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
         {
-            if (!call.Arguments.TryGetValue("path", out var pathObj) || pathObj == null)
+            string relativePath = ".";
+            if (call.Arguments.TryGetValue("path", out var pathObj) && pathObj != null)
             {
-                return Task.FromResult(ToolResult.Fail("Missing required parameter: path"));
+                relativePath = pathObj.ToString();
             }
 
-            var relativePath = pathObj.ToString();
+            // Normalize empty/root paths to "."
+            if (string.IsNullOrWhiteSpace(relativePath) || relativePath == "/" || relativePath == "\\")
+            {
+                relativePath = ".";
+            }
 
             if (!context.IsPathAccessible(relativePath))
             {
                 return Task.FromResult(ToolResult.Fail($"Access denied: {relativePath}"));
             }
 
-            var fullPath = Path.Combine(context.WorkingDirectory, relativePath);
+            // Resolve full path
+            string fullPath;
+            if (relativePath == "." || relativePath == "./")
+                fullPath = context.WorkingDirectory;
+            else if (Path.IsPathRooted(relativePath))
+                fullPath = relativePath;
+            else
+                fullPath = Path.Combine(context.WorkingDirectory, relativePath);
 
             if (!Directory.Exists(fullPath))
             {

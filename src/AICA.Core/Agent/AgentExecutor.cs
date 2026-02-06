@@ -58,29 +58,80 @@ namespace AICA.Core.Agent
             {
                 iteration++;
                 _logger?.LogDebug("Agent iteration {Iteration}", iteration);
+                System.Diagnostics.Debug.WriteLine($"[AICA] Agent iteration {iteration}");
 
-                // Get LLM response
+                // Get LLM response - collect text chunks to yield after try-catch
                 string assistantResponse = null;
                 var toolCalls = new List<ToolCall>();
+                var pendingTextChunks = new List<string>();
+                string streamError = null;
+                bool wasCancelled = false;
 
-                await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, toolDefinitions, ct))
+                try
                 {
-                    if (chunk.Type == LLMChunkType.Text)
+                    await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, toolDefinitions, ct))
                     {
-                        assistantResponse = (assistantResponse ?? string.Empty) + chunk.Text;
-                        yield return AgentStep.TextChunk(chunk.Text);
-                    }
-                    else if (chunk.Type == LLMChunkType.ToolCall)
-                    {
-                        toolCalls.Add(chunk.ToolCall);
+                        if (chunk.Type == LLMChunkType.Text)
+                        {
+                            assistantResponse = (assistantResponse ?? string.Empty) + chunk.Text;
+                            pendingTextChunks.Add(chunk.Text);
+                        }
+                        else if (chunk.Type == LLMChunkType.ToolCall)
+                        {
+                            toolCalls.Add(chunk.ToolCall);
+                        }
                     }
                 }
-
-                // Add assistant message to history
-                if (!string.IsNullOrEmpty(assistantResponse))
+                catch (OperationCanceledException)
                 {
-                    conversationHistory.Add(ChatMessage.Assistant(assistantResponse));
+                    wasCancelled = true;
                 }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] LLM stream error: {ex.Message}");
+                    streamError = ex.Message;
+                }
+
+                // Yield collected text chunks
+                foreach (var text in pendingTextChunks)
+                {
+                    yield return AgentStep.TextChunk(text);
+                }
+
+                // Handle errors after yielding text
+                if (wasCancelled)
+                {
+                    yield return AgentStep.WithError("Operation cancelled.");
+                    yield break;
+                }
+                if (streamError != null)
+                {
+                    yield return AgentStep.WithError($"LLM communication error: {streamError}");
+                    yield break;
+                }
+
+                // Build assistant message with tool calls for proper conversation history
+                var assistantMsg = ChatMessage.Assistant(assistantResponse);
+                if (toolCalls.Count > 0)
+                {
+                    assistantMsg.ToolCalls = new System.Collections.Generic.List<ToolCallMessage>();
+                    foreach (var tc in toolCalls)
+                    {
+                        assistantMsg.ToolCalls.Add(new ToolCallMessage
+                        {
+                            Id = tc.Id,
+                            Type = "function",
+                            Function = new FunctionCall
+                            {
+                                Name = tc.Name,
+                                Arguments = tc.Arguments != null 
+                                    ? System.Text.Json.JsonSerializer.Serialize(tc.Arguments) 
+                                    : "{}"
+                            }
+                        });
+                    }
+                }
+                conversationHistory.Add(assistantMsg);
 
                 // If no tool calls, we're done
                 if (toolCalls.Count == 0)
@@ -89,17 +140,34 @@ namespace AICA.Core.Agent
                     yield break;
                 }
 
+                System.Diagnostics.Debug.WriteLine($"[AICA] Executing {toolCalls.Count} tool calls");
+
                 // Execute tool calls
                 foreach (var toolCall in toolCalls)
                 {
                     yield return AgentStep.ToolStart(toolCall);
 
-                    var result = await _toolDispatcher.ExecuteAsync(toolCall, context, uiContext, ct);
+                    ToolResult result;
+                    try
+                    {
+                        result = await _toolDispatcher.ExecuteAsync(toolCall, context, uiContext, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Tool {toolCall.Name} exception: {ex.Message}");
+                        result = ToolResult.Fail($"Tool execution error: {ex.Message}");
+                    }
 
                     yield return AgentStep.WithToolResult(toolCall, result);
 
                     // Add tool result to conversation
-                    conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, result.Success ? result.Content : result.Error));
+                    var resultContent = result.Success ? result.Content : $"Error: {result.Error}";
+                    // Truncate very long results to avoid token overflow
+                    if (resultContent != null && resultContent.Length > 8000)
+                    {
+                        resultContent = resultContent.Substring(0, 8000) + "\n... (truncated, total length: " + resultContent.Length + " chars)";
+                    }
+                    conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, resultContent));
                 }
             }
 

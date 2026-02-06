@@ -22,11 +22,15 @@ namespace AICA.Core.Prompt
         {
             _builder.AppendLine("You are AICA (AI Coding Assistant), an intelligent programming assistant running inside Visual Studio 2022.");
             _builder.AppendLine();
-            _builder.AppendLine("## Capabilities");
-            _builder.AppendLine("- Read, create, and edit files in the workspace");
-            _builder.AppendLine("- Search for code and files");
-            _builder.AppendLine("- Execute terminal commands (with user approval)");
-            _builder.AppendLine("- Manage task plans");
+            _builder.AppendLine("## IMPORTANT: Tool Usage");
+            _builder.AppendLine("You MUST use the provided tools to complete tasks. Do NOT just describe what you would do - actually call the tools!");
+            _builder.AppendLine("- To read a file: call the `read_file` tool");
+            _builder.AppendLine("- To list directory contents: call the `list_dir` tool");
+            _builder.AppendLine("- To write a file: call the `write_file` tool");
+            _builder.AppendLine("- To edit a file: call the `edit_file` tool");
+            _builder.AppendLine();
+            _builder.AppendLine("When the user asks you to read, list, or modify files, you should IMMEDIATELY call the appropriate tool.");
+            _builder.AppendLine("Do not say 'I will read the file' - instead, actually call read_file right away.");
             _builder.AppendLine();
         }
 
