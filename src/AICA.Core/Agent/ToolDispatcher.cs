@@ -58,7 +58,7 @@ namespace AICA.Core.Agent
             try
             {
                 _logger?.LogDebug("Executing tool: {ToolName}", call.Name);
-                var result = await tool.ExecuteAsync(call, context, ct);
+                var result = await tool.ExecuteAsync(call, context, ct).ConfigureAwait(false);
                 _logger?.LogDebug("Tool {ToolName} completed: Success={Success}", call.Name, result.Success);
                 return result;
             }

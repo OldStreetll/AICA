@@ -37,7 +37,7 @@
         <Icon guid="ImageCatalogGuid" id="DescriptionViewer" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
-          <ButtonText>Explain Code</ButtonText>
+          <ButtonText>解释代码</ButtonText>
           <LocCanonicalName>.AICA.ExplainCode</LocCanonicalName>
         </Strings>
       </Button>
@@ -47,7 +47,7 @@
         <Icon guid="ImageCatalogGuid" id="Refactoring" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
-          <ButtonText>Refactor</ButtonText>
+          <ButtonText>重构代码</ButtonText>
           <LocCanonicalName>.AICA.Refactor</LocCanonicalName>
         </Strings>
       </Button>
@@ -57,7 +57,7 @@
         <Icon guid="ImageCatalogGuid" id="AddTest" />
         <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
-          <ButtonText>Generate Tests</ButtonText>
+          <ButtonText>生成测试</ButtonText>
           <LocCanonicalName>.AICA.GenerateTests</LocCanonicalName>
         </Strings>
       </Button>

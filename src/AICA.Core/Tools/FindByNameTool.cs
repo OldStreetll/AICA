@@ -142,7 +142,7 @@ namespace AICA.Core.Tools
                     sb.AppendLine($"\n[Results truncated at {maxResults}]");
 
                 return ToolResult.Ok(sb.ToString());
-            }, ct);
+            }, ct).ConfigureAwait(false);
         }
 
         private void SearchDirectory(string directory, string pattern, string typeFilter,

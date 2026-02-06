@@ -123,7 +123,7 @@ namespace AICA.Core.Tools
                 return ToolResult.Fail($"Invalid regex pattern: {ex.Message}");
             }
 
-            // Execute search
+            // Execute search - ConfigureAwait(false) to avoid deadlock with UI thread
             return await Task.Run(() =>
             {
                 var results = new StringBuilder();
@@ -202,7 +202,7 @@ namespace AICA.Core.Tools
                     summary += $" [truncated at {maxResults} results]";
 
                 return ToolResult.Ok(summary + "\n" + results.ToString());
-            }, ct);
+            }, ct).ConfigureAwait(false);
         }
 
         private IEnumerable<string> GetSearchFiles(string directory, string includePattern)
@@ -213,14 +213,72 @@ namespace AICA.Core.Tools
                 searchPattern = includePattern;
             }
 
-            try
+            // Use manual recursive enumeration to handle per-directory access errors gracefully
+            return EnumerateFilesSafe(directory, searchPattern);
+        }
+
+        /// <summary>
+        /// Recursively enumerate files, skipping directories that throw access errors.
+        /// Unlike Directory.EnumerateFiles(AllDirectories), this won't abort on permission errors.
+        /// </summary>
+        private IEnumerable<string> EnumerateFilesSafe(string directory, string searchPattern, int maxFiles = 10000)
+        {
+            int count = 0;
+            var dirs = new Stack<string>();
+            dirs.Push(directory);
+
+            while (dirs.Count > 0 && count < maxFiles)
             {
-                return Directory.EnumerateFiles(directory, searchPattern, SearchOption.AllDirectories);
+                var currentDir = dirs.Pop();
+
+                // Skip excluded directories early
+                if (IsExcludedDirectory(currentDir))
+                    continue;
+
+                // Enumerate files in current directory
+                IEnumerable<string> files;
+                try
+                {
+                    files = Directory.EnumerateFiles(currentDir, searchPattern);
+                }
+                catch
+                {
+                    continue; // Skip directories we can't read
+                }
+
+                foreach (var file in files)
+                {
+                    if (count >= maxFiles) yield break;
+                    count++;
+                    yield return file;
+                }
+
+                // Enumerate subdirectories
+                try
+                {
+                    foreach (var subDir in Directory.EnumerateDirectories(currentDir))
+                    {
+                        dirs.Push(subDir);
+                    }
+                }
+                catch
+                {
+                    // Skip if we can't enumerate subdirectories
+                }
             }
-            catch
+        }
+
+        private bool IsExcludedDirectory(string dirPath)
+        {
+            var dirName = Path.GetFileName(dirPath);
+            if (string.IsNullOrEmpty(dirName)) return false;
+
+            var excludedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                return Array.Empty<string>();
-            }
+                ".git", ".vs", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults"
+            };
+
+            return excludedNames.Contains(dirName);
         }
 
         private bool IsExcludedFile(string path)

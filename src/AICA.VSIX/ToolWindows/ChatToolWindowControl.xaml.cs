@@ -269,57 +269,72 @@ namespace AICA.ToolWindows
             var toolOutputBuilder = new StringBuilder();
             var hasToolCalls = false;
 
-            await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, _currentCts.Token))
+            // Capture the WPF dispatcher so we can marshal UI updates from background thread
+            var dispatcher = this.Dispatcher;
+
+            // Run the entire agent loop on a background thread to prevent UI deadlocks.
+            // The IAsyncEnumerable pattern causes MoveNextAsync() to resume the generator
+            // on the caller's thread. If the caller is the UI thread, all awaits in the
+            // generator chain (AgentExecutor -> OpenAIClient -> HttpClient) capture the UI
+            // sync context, causing deadlocks when tool execution tries to post back.
+            await System.Threading.Tasks.Task.Run(async () =>
             {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-                switch (step.Type)
+                await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, _currentCts.Token))
                 {
-                    case AgentStepType.TextChunk:
-                        responseBuilder.Append(step.Text);
-                        RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
-                        break;
-
-                    case AgentStepType.ToolStart:
-                        hasToolCalls = true;
-                        toolOutputBuilder.AppendLine();
-                        toolOutputBuilder.AppendLine($"🔧 **Calling tool:** `{step.ToolCall.Name}`");
-                        RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
-                        break;
-
-                    case AgentStepType.ToolResult:
-                        var status = step.Result.Success ? "✅" : "❌";
-                        var resultPreview = TruncateForDisplay(step.Result.Success ? step.Result.Content : step.Result.Error, 200);
-                        toolOutputBuilder.AppendLine($"{status} **Result:** {resultPreview}");
-                        toolOutputBuilder.AppendLine();
-                        RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
-                        break;
-
-                    case AgentStepType.Complete:
-                        var finalContent = responseBuilder.ToString() + toolOutputBuilder.ToString();
-                        
-                        // Add diagnostic hint if no tools were called but response suggests tool usage was intended
-                        if (!hasToolCalls && ContainsToolIntentLanguage(responseBuilder.ToString()))
+                    // Marshal UI updates to the UI thread via Dispatcher.Invoke.
+                    // This blocks the background thread until the UI processes the update,
+                    // ensuring sequential rendering. The UI thread is free (awaiting Task.Run).
+                    dispatcher.Invoke(new Action(() =>
+                    {
+                        switch (step.Type)
                         {
-                            finalContent += "\n\n---\n⚠️ **提示**: AI 描述了要执行的操作但未实际调用工具。\n" +
-                                "可能原因：\n" +
-                                "1. LLM 服务器未启用 function calling（需要 `--enable-auto-tool-choice`）\n" +
-                                "2. 模型不支持 OpenAI 格式的工具调用\n" +
-                                "3. 在选项中检查 'Enable Tool Calling' 是否已启用";
-                        }
-                        
-                        if (!string.IsNullOrWhiteSpace(finalContent))
-                        {
-                            _conversation.Add(new ConversationMessage { Role = "assistant", Content = finalContent });
-                        }
-                        RenderConversation();
-                        break;
+                            case AgentStepType.TextChunk:
+                                responseBuilder.Append(step.Text);
+                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                break;
 
-                    case AgentStepType.Error:
-                        AppendMessage("assistant", $"❌ Agent Error: {step.ErrorMessage}");
-                        break;
+                            case AgentStepType.ToolStart:
+                                hasToolCalls = true;
+                                toolOutputBuilder.AppendLine();
+                                toolOutputBuilder.AppendLine($"🔧 **Calling tool:** `{step.ToolCall.Name}`");
+                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                break;
+
+                            case AgentStepType.ToolResult:
+                                var status = step.Result.Success ? "✅" : "❌";
+                                var resultPreview = TruncateForDisplay(step.Result.Success ? step.Result.Content : step.Result.Error, 200);
+                                toolOutputBuilder.AppendLine($"{status} **Result:** {resultPreview}");
+                                toolOutputBuilder.AppendLine();
+                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                break;
+
+                            case AgentStepType.Complete:
+                                var finalContent = responseBuilder.ToString() + toolOutputBuilder.ToString();
+
+                                // Add diagnostic hint if no tools were called but response suggests tool usage was intended
+                                if (!hasToolCalls && ContainsToolIntentLanguage(responseBuilder.ToString()))
+                                {
+                                    finalContent += "\n\n---\n⚠️ **提示**: AI 描述了要执行的操作但未实际调用工具。\n" +
+                                        "可能原因：\n" +
+                                        "1. LLM 服务器未启用 function calling（需要 `--enable-auto-tool-choice`）\n" +
+                                        "2. 模型不支持 OpenAI 格式的工具调用\n" +
+                                        "3. 在选项中检查 'Enable Tool Calling' 是否已启用";
+                                }
+
+                                if (!string.IsNullOrWhiteSpace(finalContent))
+                                {
+                                    _conversation.Add(new ConversationMessage { Role = "assistant", Content = finalContent });
+                                }
+                                RenderConversation();
+                                break;
+
+                            case AgentStepType.Error:
+                                AppendMessage("assistant", $"❌ Agent Error: {step.ErrorMessage}");
+                                break;
+                        }
+                    }));
                 }
-            }
+            });
         }
 
         private async System.Threading.Tasks.Task ExecuteChatModeAsync(string userMessage)
@@ -336,20 +351,25 @@ namespace AICA.ToolWindows
             _llmHistory.Add(ChatMessage.User(userMessage));
 
             var responseBuilder = new StringBuilder();
-            
-            await foreach (var chunk in _llmClient.StreamChatAsync(_llmHistory, null, _currentCts.Token))
+            var dispatcher = this.Dispatcher;
+
+            // Run LLM streaming on background thread, dispatch UI updates via Dispatcher.Invoke
+            await System.Threading.Tasks.Task.Run(async () =>
             {
-                if (chunk.Type == LLMChunkType.Text && !string.IsNullOrEmpty(chunk.Text))
+                await foreach (var chunk in _llmClient.StreamChatAsync(_llmHistory, null, _currentCts.Token))
                 {
-                    responseBuilder.Append(chunk.Text);
-                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    RenderConversation(responseBuilder.ToString());
+                    if (chunk.Type == LLMChunkType.Text && !string.IsNullOrEmpty(chunk.Text))
+                    {
+                        responseBuilder.Append(chunk.Text);
+                        var content = responseBuilder.ToString();
+                        dispatcher.Invoke(new Action(() => RenderConversation(content)));
+                    }
+                    else if (chunk.Type == LLMChunkType.Done)
+                    {
+                        break;
+                    }
                 }
-                else if (chunk.Type == LLMChunkType.Done)
-                {
-                    break;
-                }
-            }
+            });
 
             var finalResponse = responseBuilder.ToString();
             if (!string.IsNullOrEmpty(finalResponse))

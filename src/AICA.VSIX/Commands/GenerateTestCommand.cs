@@ -17,7 +17,7 @@ namespace AICA.Commands
             var docView = await VS.Documents.GetActiveDocumentViewAsync();
             if (docView?.TextView == null)
             {
-                await VS.MessageBox.ShowWarningAsync("AICA", "No active document found.");
+                await VS.MessageBox.ShowWarningAsync("AICA", "未找到活动文档。");
                 return;
             }
 
@@ -26,7 +26,7 @@ namespace AICA.Commands
 
             if (string.IsNullOrWhiteSpace(selectedText))
             {
-                await VS.MessageBox.ShowWarningAsync("AICA", "Please select a method or class to generate tests for.");
+                await VS.MessageBox.ShowWarningAsync("AICA", "请先选择需要生成测试的方法或类。");
                 return;
             }
 
@@ -46,7 +46,7 @@ namespace AICA.Commands
             {
                 var contentType = docView.TextView.TextDataModel.ContentType.DisplayName;
                 var fileName = docView.FilePath != null ? System.IO.Path.GetFileName(docView.FilePath) : "unknown";
-                var prompt = $"Please generate comprehensive unit tests for the following {contentType} code from file `{fileName}` using xUnit. Include edge cases and use Arrange/Act/Assert pattern:\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
+                var prompt = $"请用中文为以下来自文件 `{fileName}` 的 {contentType} 代码生成全面的单元测试，使用 xUnit 框架。请包含边界情况并使用 Arrange/Act/Assert 模式，并用中文注释说明每个测试的目的：\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
                 
                 await window.SendProgrammaticMessageAsync(prompt);
             }

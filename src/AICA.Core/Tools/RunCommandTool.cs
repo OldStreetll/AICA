@@ -164,7 +164,7 @@ namespace AICA.Core.Tools
 
                 // Wait with timeout and cancellation
                 var timeoutMs = timeoutSeconds * 1000;
-                var completed = await Task.Run(() => process.WaitForExit(timeoutMs), ct);
+                var completed = await Task.Run(() => process.WaitForExit(timeoutMs), ct).ConfigureAwait(false);
 
                 if (!completed)
                 {

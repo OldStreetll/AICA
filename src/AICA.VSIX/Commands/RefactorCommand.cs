@@ -17,7 +17,7 @@ namespace AICA.Commands
             var docView = await VS.Documents.GetActiveDocumentViewAsync();
             if (docView?.TextView == null)
             {
-                await VS.MessageBox.ShowWarningAsync("AICA", "No active document found.");
+                await VS.MessageBox.ShowWarningAsync("AICA", "未找到活动文档。");
                 return;
             }
 
@@ -26,7 +26,7 @@ namespace AICA.Commands
 
             if (string.IsNullOrWhiteSpace(selectedText))
             {
-                await VS.MessageBox.ShowWarningAsync("AICA", "Please select some code to refactor.");
+                await VS.MessageBox.ShowWarningAsync("AICA", "请先选择需要重构的代码。");
                 return;
             }
 
@@ -46,7 +46,7 @@ namespace AICA.Commands
             {
                 var contentType = docView.TextView.TextDataModel.ContentType.DisplayName;
                 var fileName = docView.FilePath != null ? System.IO.Path.GetFileName(docView.FilePath) : "unknown";
-                var prompt = $"Please refactor the following {contentType} code from file `{fileName}` to improve readability, performance, and maintainability. Show the improved code and explain the changes:\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
+                var prompt = $"请用中文重构以下来自文件 `{fileName}` 的 {contentType} 代码，以提高可读性、性能和可维护性。请展示改进后的代码并解释修改内容：\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
                 
                 await window.SendProgrammaticMessageAsync(prompt);
             }

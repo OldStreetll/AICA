@@ -70,7 +70,7 @@ namespace AICA.Core.Agent
 
                 try
                 {
-                    await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, toolDefinitions, ct))
+                    await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, toolDefinitions, ct).ConfigureAwait(false))
                     {
                         if (chunk.Type == LLMChunkType.Text)
                         {
@@ -180,7 +180,12 @@ namespace AICA.Core.Agent
                     ToolResult result;
                     try
                     {
-                        result = await _toolDispatcher.ExecuteAsync(toolCall, context, uiContext, ct);
+                        // Use ConfigureAwait(false) to avoid deadlock when resumed on UI thread
+                        using (var toolCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                        {
+                            toolCts.CancelAfter(TimeSpan.FromSeconds(60)); // 60s timeout per tool
+                            result = await _toolDispatcher.ExecuteAsync(toolCall, context, uiContext, toolCts.Token).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception ex)
                     {

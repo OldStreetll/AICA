@@ -17,7 +17,7 @@ namespace AICA.Commands
             var docView = await VS.Documents.GetActiveDocumentViewAsync();
             if (docView?.TextView == null)
             {
-                await VS.MessageBox.ShowWarningAsync("AICA", "No active document found.");
+                await VS.MessageBox.ShowWarningAsync("AICA", "未找到活动文档。");
                 return;
             }
 
@@ -26,7 +26,7 @@ namespace AICA.Commands
 
             if (string.IsNullOrWhiteSpace(selectedText))
             {
-                await VS.MessageBox.ShowWarningAsync("AICA", "Please select some code to explain.");
+                await VS.MessageBox.ShowWarningAsync("AICA", "请先选择需要解释的代码。");
                 return;
             }
 
@@ -46,7 +46,7 @@ namespace AICA.Commands
             {
                 var contentType = docView.TextView.TextDataModel.ContentType.DisplayName;
                 var fileName = docView.FilePath != null ? System.IO.Path.GetFileName(docView.FilePath) : "unknown";
-                var prompt = $"Please explain the following {contentType} code from file `{fileName}`:\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
+                var prompt = $"请用中文详细解释以下来自文件 `{fileName}` 的 {contentType} 代码，包括其功能、逻辑和关键细节：\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
                 
                 await window.SendProgrammaticMessageAsync(prompt);
             }
