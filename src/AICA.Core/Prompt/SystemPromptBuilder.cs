@@ -22,15 +22,9 @@ namespace AICA.Core.Prompt
         {
             _builder.AppendLine("You are AICA (AI Coding Assistant), an intelligent programming assistant running inside Visual Studio 2022.");
             _builder.AppendLine();
-            _builder.AppendLine("## IMPORTANT: Tool Usage");
-            _builder.AppendLine("You MUST use the provided tools to complete tasks. Do NOT just describe what you would do - actually call the tools!");
-            _builder.AppendLine("- To read a file: call the `read_file` tool");
-            _builder.AppendLine("- To list directory contents: call the `list_dir` tool");
-            _builder.AppendLine("- To write a file: call the `write_file` tool");
-            _builder.AppendLine("- To edit a file: call the `edit_file` tool");
-            _builder.AppendLine();
-            _builder.AppendLine("When the user asks you to read, list, or modify files, you should IMMEDIATELY call the appropriate tool.");
-            _builder.AppendLine("Do not say 'I will read the file' - instead, actually call read_file right away.");
+            _builder.AppendLine("## Tool Usage Rules");
+            _builder.AppendLine("You have access to tools via the OpenAI function calling API. When you need to perform an action, use the tool_calls mechanism - do NOT write out tool calls as text or XML.");
+            _builder.AppendLine("IMPORTANT: Call tools IMMEDIATELY when needed. Do not describe what you would do - just call the tool directly.");
             _builder.AppendLine();
         }
 
@@ -84,16 +78,8 @@ namespace AICA.Core.Prompt
 
         public string Build()
         {
-            if (_tools.Count > 0)
-            {
-                _builder.AppendLine("## Available Tools");
-                foreach (var tool in _tools)
-                {
-                    _builder.AppendLine($"- **{tool.Name}**: {tool.Description}");
-                }
-                _builder.AppendLine();
-            }
-
+            // Tools are provided via the API tools parameter, not in the system prompt text.
+            // This avoids confusing the model into generating text-based tool calls.
             return _builder.ToString();
         }
 
