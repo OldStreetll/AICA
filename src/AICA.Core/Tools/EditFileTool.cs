@@ -108,11 +108,8 @@ namespace AICA.Core.Tools
                 ? content.Replace(oldString, newString)
                 : ReplaceFirst(content, oldString, newString);
 
-            // Request confirmation
-            var confirmed = await context.RequestConfirmationAsync(
-                "Edit File",
-                $"Edit file: {path}\n\nReplace:\n```\n{Truncate(oldString, 200)}\n```\n\nWith:\n```\n{Truncate(newString, 200)}\n```",
-                ct);
+            // Show diff preview and request confirmation
+            var confirmed = await context.ShowDiffPreviewAsync(path, content, newContent, ct);
 
             if (!confirmed)
                 return ToolResult.Fail("Operation cancelled by user");

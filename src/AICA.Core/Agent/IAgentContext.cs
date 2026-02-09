@@ -53,6 +53,12 @@ namespace AICA.Core.Agent
         /// Request user confirmation for an operation
         /// </summary>
         Task<bool> RequestConfirmationAsync(string operation, string details, CancellationToken ct = default);
+
+        /// <summary>
+        /// Show diff preview for file changes and ask user to confirm.
+        /// Returns true if user accepts the changes.
+        /// </summary>
+        Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
     }
 
     /// <summary>

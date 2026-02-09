@@ -100,7 +100,7 @@ namespace AICA.Core.LLM
             {
                 var errorContent = await response.Content.ReadAsStringAsync();
                 _logger?.LogError("LLM API error: {StatusCode} - {Content}", response.StatusCode, errorContent);
-                throw new LLMException($"LLM API returned {response.StatusCode}: {errorContent}");
+                throw new LLMException($"LLM API returned {response.StatusCode}: {errorContent}", (int)response.StatusCode);
             }
 
             if (_options.Stream)
@@ -224,6 +224,12 @@ namespace AICA.Core.LLM
                         }
                     }
                     toolCallsBuilder.Clear();
+                }
+
+                // Emit finish reason so the caller can detect truncation (finish_reason=length)
+                if (!string.IsNullOrEmpty(chunk.Choices[0].FinishReason))
+                {
+                    yield return LLMChunk.Finished(chunk.Choices[0].FinishReason);
                 }
             }
         }
@@ -573,7 +579,34 @@ namespace AICA.Core.LLM
     /// </summary>
     public class LLMException : Exception
     {
+        public int StatusCode { get; }
+
         public LLMException(string message) : base(message) { }
         public LLMException(string message, Exception inner) : base(message, inner) { }
+        public LLMException(string message, int statusCode) : base(message)
+        {
+            StatusCode = statusCode;
+        }
+
+        /// <summary>
+        /// Whether this error indicates the context window was exceeded.
+        /// Detects patterns from OpenAI, vLLM, ollama, LM Studio, etc.
+        /// </summary>
+        public bool IsContextExceeded =>
+            StatusCode == 400 &&
+            (Message.Contains("context_length_exceeded") ||
+             Message.Contains("maximum context length") ||
+             Message.Contains("context window") ||
+             Message.Contains("token limit") ||
+             Message.Contains("max_tokens") ||
+             Message.Contains("too long") ||
+             Message.Contains("exceeds the model"));
+
+        /// <summary>
+        /// Whether this error is transient and worth retrying (server errors, timeouts).
+        /// </summary>
+        public bool IsTransient =>
+            StatusCode == 429 || StatusCode == 500 || StatusCode == 502 ||
+            StatusCode == 503 || StatusCode == 504;
     }
 }

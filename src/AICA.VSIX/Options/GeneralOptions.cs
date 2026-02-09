@@ -59,6 +59,12 @@ namespace AICA.Options
         [DefaultValue(120)]
         public int RequestTimeoutSeconds { get; set; } = 120;
 
+        [Category("Agent Configuration")]
+        [DisplayName("Custom Instructions")]
+        [Description("Additional custom instructions to include in the system prompt (optional)")]
+        [DefaultValue("")]
+        public string CustomInstructions { get; set; } = string.Empty;
+
         [Category("UI Settings")]
         [DisplayName("Format Changed Text")]
         [Description("Automatically format code after AI modifications")]

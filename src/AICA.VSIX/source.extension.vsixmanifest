@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="AICA.B2C3D4E5-F6A7-8901-BCDE-F12345678901" Version="1.0.0" Language="en-US" Publisher="AICA Team" />
+    <Identity Id="AICA.B2C3D4E5-F6A7-8901-BCDE-F12345678901" Version="1.8.0" Language="en-US" Publisher="AICA Team" />
     <DisplayName>AICA - AI Coding Assistant</DisplayName>
     <Description xml:space="preserve">AI Coding Assistant for Visual Studio 2022 - An intelligent programming assistant powered by private LLM, providing code generation, editing, refactoring, and more.</Description>
     <MoreInfo>https://github.com/aica-project</MoreInfo>

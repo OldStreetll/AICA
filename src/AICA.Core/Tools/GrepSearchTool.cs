@@ -83,7 +83,20 @@ namespace AICA.Core.Tools
 
             string includePattern = null;
             if (call.Arguments.TryGetValue("includes", out var includesObj) && includesObj != null)
-                includePattern = includesObj.ToString();
+            {
+                // Handle JsonElement arrays: ["*.h", "*.cpp"] -> "*.h,*.cpp"
+                if (includesObj is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    var parts = new List<string>();
+                    foreach (var item in je.EnumerateArray())
+                        parts.Add(item.GetString() ?? item.ToString());
+                    includePattern = string.Join(",", parts);
+                }
+                else
+                {
+                    includePattern = includesObj.ToString();
+                }
+            }
 
             bool fixedStrings = false;
             if (call.Arguments.TryGetValue("fixed_strings", out var fixedObj) && fixedObj != null)
@@ -157,6 +170,13 @@ namespace AICA.Core.Tools
 
                         try
                         {
+                            // Skip files larger than 1MB to avoid reading huge generated files
+                            var fileInfo = new FileInfo(file);
+                            if (fileInfo.Length > 1024 * 1024)
+                            {
+                                continue;
+                            }
+
                             var lines = File.ReadAllLines(file);
                             bool fileHasMatch = false;
 
@@ -207,14 +227,35 @@ namespace AICA.Core.Tools
 
         private IEnumerable<string> GetSearchFiles(string directory, string includePattern)
         {
-            var searchPattern = "*.*";
+            // Support multiple patterns separated by comma or semicolon
+            // e.g. "*.h,*.cpp" or "*.h;*.cpp" or just "*.h"
+            var patterns = new List<string>();
             if (!string.IsNullOrEmpty(includePattern))
             {
-                searchPattern = includePattern;
+                // Clean up array-like input from LLM: ["*.h", "*.cpp"] -> *.h, *.cpp
+                var cleaned = includePattern.Trim().TrimStart('[').TrimEnd(']');
+                cleaned = cleaned.Replace("\"", "").Replace("'", "");
+                foreach (var p in cleaned.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmed = p.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                        patterns.Add(trimmed);
+                }
             }
+            if (patterns.Count == 0)
+                patterns.Add("*.*");
 
             // Use manual recursive enumeration to handle per-directory access errors gracefully
-            return EnumerateFilesSafe(directory, searchPattern);
+            // Merge results from all patterns
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pattern in patterns)
+            {
+                foreach (var file in EnumerateFilesSafe(directory, pattern))
+                {
+                    if (seen.Add(file))
+                        yield return file;
+                }
+            }
         }
 
         /// <summary>
@@ -275,7 +316,8 @@ namespace AICA.Core.Tools
 
             var excludedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ".git", ".vs", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults"
+                ".git", ".vs", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults",
+                "Debug", "Release", "RelWithDebInfo", "MinSizeRel", "x64", "x86"
             };
 
             return excludedNames.Contains(dirName);
@@ -304,11 +346,13 @@ namespace AICA.Core.Tools
             var ext = Path.GetExtension(path)?.ToLowerInvariant();
             var binaryExtensions = new HashSet<string>
             {
-                ".exe", ".dll", ".pdb", ".obj", ".o", ".lib", ".so",
-                ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
-                ".zip", ".tar", ".gz", ".rar", ".7z",
+                ".exe", ".dll", ".pdb", ".obj", ".o", ".lib", ".so", ".a",
+                ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+                ".zip", ".tar", ".gz", ".rar", ".7z", ".bz2",
                 ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-                ".vsix", ".nupkg", ".snk"
+                ".vsix", ".nupkg", ".snk",
+                ".tlog", ".log", ".cache", ".ilk", ".idb", ".ipch", ".sdf", ".suo",
+                ".pch", ".ncb", ".opensdf", ".res", ".lastbuildstate"
             };
 
             return binaryExtensions.Contains(ext);

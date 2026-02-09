@@ -13,7 +13,15 @@ namespace AICA.Core.Tools
     public class ListDirTool : IAgentTool
     {
         public string Name => "list_dir";
-        public string Description => "List files and directories in the specified path.";
+        public string Description => "List files and directories in the specified path. " +
+            "Use recursive=true when user asks for full/complete structure, directory tree, 完整结构, 目录树. " +
+            "For large projects, set max_depth=2 or 3 to avoid excessive output.";
+
+        private static readonly HashSet<string> ExcludedDirs = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
+        {
+            ".git", ".vs", ".vscode", "bin", "obj", "node_modules", "packages",
+            "__pycache__", ".idea", "dist", ".next", ".nuget", "TestResults"
+        };
 
         public ToolDefinition GetDefinition()
         {
@@ -30,6 +38,16 @@ namespace AICA.Core.Tools
                         {
                             Type = "string",
                             Description = "The directory path to list (relative to workspace root)"
+                        },
+                        ["recursive"] = new ToolParameterProperty
+                        {
+                            Type = "boolean",
+                            Description = "If true, list contents recursively in tree format. Default: false"
+                        },
+                        ["max_depth"] = new ToolParameterProperty
+                        {
+                            Type = "integer",
+                            Description = "Maximum depth for recursive listing (1-10). Default: 3. Only used when recursive=true"
                         }
                     },
                     Required = new[] { "path" }
@@ -70,25 +88,53 @@ namespace AICA.Core.Tools
                 return Task.FromResult(ToolResult.Fail($"Directory not found: {relativePath}"));
             }
 
+            // Parse recursive and max_depth parameters
+            bool recursive = false;
+            if (call.Arguments.TryGetValue("recursive", out var recObj) && recObj != null)
+            {
+                if (recObj is bool b) recursive = b;
+                else if (recObj is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.True) recursive = true;
+                else bool.TryParse(recObj.ToString(), out recursive);
+            }
+
+            int maxDepth = 3;
+            if (call.Arguments.TryGetValue("max_depth", out var depthObj) && depthObj != null)
+            {
+                if (depthObj is System.Text.Json.JsonElement dje && dje.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    maxDepth = dje.GetInt32();
+                else
+                    int.TryParse(depthObj.ToString(), out maxDepth);
+            }
+            maxDepth = System.Math.Max(1, System.Math.Min(10, maxDepth));
+
             var sb = new StringBuilder();
-            sb.AppendLine($"{relativePath}/");
+            int itemCount_total = 0;
+            const int maxItems = 500;
 
             try
             {
-                // List directories
-                foreach (var dir in Directory.GetDirectories(fullPath))
+                if (recursive)
                 {
-                    var name = Path.GetFileName(dir);
-                    var itemCount = GetItemCount(dir);
-                    sb.AppendLine($"  {name}/ ({itemCount} items)");
+                    sb.AppendLine($"{relativePath}/");
+                    ListDirectoryRecursive(fullPath, sb, "", 1, maxDepth, ref itemCount_total, maxItems);
+                    if (itemCount_total >= maxItems)
+                        sb.AppendLine($"\n... (output truncated at {maxItems} items)");
                 }
-
-                // List files
-                foreach (var file in Directory.GetFiles(fullPath))
+                else
                 {
-                    var name = Path.GetFileName(file);
-                    var size = new FileInfo(file).Length;
-                    sb.AppendLine($"  {name} ({FormatSize(size)})");
+                    sb.AppendLine($"{relativePath}/");
+                    foreach (var dir in Directory.GetDirectories(fullPath))
+                    {
+                        var name = Path.GetFileName(dir);
+                        var count = GetItemCount(dir);
+                        sb.AppendLine($"  {name}/ ({count} items)");
+                    }
+                    foreach (var file in Directory.GetFiles(fullPath))
+                    {
+                        var name = Path.GetFileName(file);
+                        var size = new FileInfo(file).Length;
+                        sb.AppendLine($"  {name} ({FormatSize(size)})");
+                    }
                 }
             }
             catch (System.UnauthorizedAccessException)
@@ -97,6 +143,64 @@ namespace AICA.Core.Tools
             }
 
             return Task.FromResult(ToolResult.Ok(sb.ToString()));
+        }
+
+        private void ListDirectoryRecursive(string dirPath, StringBuilder sb, string indent, int currentDepth, int maxDepth, ref int itemCount, int maxItems)
+        {
+            if (itemCount >= maxItems) return;
+
+            string[] dirs;
+            string[] files;
+            try
+            {
+                dirs = Directory.GetDirectories(dirPath);
+                files = Directory.GetFiles(dirPath);
+            }
+            catch (System.UnauthorizedAccessException)
+            {
+                sb.AppendLine($"{indent}  [access denied]");
+                return;
+            }
+
+            // Sort for consistent output
+            System.Array.Sort(dirs);
+            System.Array.Sort(files);
+
+            // BREADTH-FIRST: List ALL items at current level first
+            // This ensures the model sees all top-level directories before budget is consumed
+            var subDirsToRecurse = new List<(string path, string name)>();
+
+            foreach (var dir in dirs)
+            {
+                if (itemCount >= maxItems) return;
+                var name = Path.GetFileName(dir);
+                if (ExcludedDirs.Contains(name)) continue;
+
+                var count = GetItemCount(dir);
+                sb.AppendLine($"{indent}  {name}/ ({count} items)");
+                itemCount++;
+
+                if (currentDepth < maxDepth)
+                {
+                    subDirsToRecurse.Add((dir, name));
+                }
+            }
+
+            foreach (var file in files)
+            {
+                if (itemCount >= maxItems) return;
+                var name = Path.GetFileName(file);
+                var size = new FileInfo(file).Length;
+                sb.AppendLine($"{indent}  {name} ({FormatSize(size)})");
+                itemCount++;
+            }
+
+            // THEN recurse into subdirectories
+            foreach (var (subDir, _) in subDirsToRecurse)
+            {
+                if (itemCount >= maxItems) return;
+                ListDirectoryRecursive(subDir, sb, indent + "  ", currentDepth + 1, maxDepth, ref itemCount, maxItems);
+            }
         }
 
         private int GetItemCount(string directory)

@@ -207,6 +207,76 @@ namespace AICA.Agent
             return readOnlyOps.Any(op => operation.IndexOf(op, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
+        public async Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
+        {
+            try
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+                // Create temp files for diff comparison
+                var ext = Path.GetExtension(filePath);
+                var tempDir = Path.Combine(Path.GetTempPath(), "AICA_Diff");
+                if (!Directory.Exists(tempDir))
+                    Directory.CreateDirectory(tempDir);
+
+                var originalFile = Path.Combine(tempDir, $"original{ext}");
+                var modifiedFile = Path.Combine(tempDir, $"modified{ext}");
+
+                File.WriteAllText(originalFile, originalContent ?? "");
+                File.WriteAllText(modifiedFile, newContent ?? "");
+
+                // Try to use VS built-in diff viewer
+                var diffSvc = await AsyncServiceProvider.GlobalProvider
+                    .GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsDifferenceService))
+                    as Microsoft.VisualStudio.Shell.Interop.IVsDifferenceService;
+
+                if (diffSvc != null)
+                {
+                    var fileName = Path.GetFileName(filePath);
+                    var frame = diffSvc.OpenComparisonWindow2(
+                        originalFile,
+                        modifiedFile,
+                        $"AICA Diff: {fileName}",   // caption
+                        $"Review changes to {fileName}", // tooltip
+                        $"Original: {fileName}",     // leftLabel
+                        $"Modified: {fileName}",     // rightLabel
+                        $"Changes to {fileName}",    // inlineLabel
+                        null,                        // roles
+                        0);                          // grfDiffOptions
+
+                    // Ask user to confirm after viewing the diff
+                    var result = Microsoft.VisualStudio.Shell.VsShellUtilities.ShowMessageBox(
+                        ServiceProvider.GlobalProvider,
+                        $"Apply the changes shown in the diff to {fileName}?",
+                        "AICA - Confirm Changes",
+                        Microsoft.VisualStudio.Shell.Interop.OLEMSGICON.OLEMSGICON_QUERY,
+                        Microsoft.VisualStudio.Shell.Interop.OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+                        Microsoft.VisualStudio.Shell.Interop.OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+
+                    // Close diff window after decision
+                    try { frame?.CloseFrame((uint)Microsoft.VisualStudio.Shell.Interop.__FRAMECLOSE.FRAMECLOSE_NoSave); }
+                    catch { }
+
+                    // Clean up temp files
+                    try { File.Delete(originalFile); File.Delete(modifiedFile); } catch { }
+
+                    return result == 6; // IDYES
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Diff preview failed: {ex.Message}");
+            }
+
+            // Fallback: simple confirmation dialog
+            return await RequestConfirmationAsync(
+                "Edit File",
+                $"Apply changes to {Path.GetFileName(filePath)}?\n\n" +
+                $"Original: {(originalContent?.Split('\n').Length ?? 0)} lines\n" +
+                $"Modified: {(newContent?.Split('\n').Length ?? 0)} lines",
+                ct);
+        }
+
         private string GetFullPath(string path)
         {
             if (string.IsNullOrEmpty(path) || path == "." || path == "./" || path == "/" || path == "\\")

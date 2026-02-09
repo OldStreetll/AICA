@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,6 +12,7 @@ using AICA.Options;
 using AICA.Core.LLM;
 using AICA.Core.Agent;
 using AICA.Core.Tools;
+using AICA.Core.Storage;
 using AICA.Agent;
 using EnvDTE80;
 
@@ -30,6 +32,8 @@ namespace AICA.ToolWindows
         private ToolDispatcher _toolDispatcher;
         private VSAgentContext _agentContext;
         private VSUIContext _uiContext;
+        private readonly ConversationStorage _conversationStorage = new ConversationStorage();
+        private string _currentConversationId;
 
         public ChatToolWindowControl()
         {
@@ -82,6 +86,7 @@ namespace AICA.ToolWindows
             _toolDispatcher = null;
             _agentContext = null;
             _uiContext = null;
+            _currentConversationId = null;
             UpdateBrowserContent(string.Empty);
         }
 
@@ -96,6 +101,10 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new GrepSearchTool());
             _toolDispatcher.RegisterTool(new FindByNameTool());
             _toolDispatcher.RegisterTool(new RunCommandTool());
+            _toolDispatcher.RegisterTool(new UpdatePlanTool());
+            _toolDispatcher.RegisterTool(new AttemptCompletionTool());
+            _toolDispatcher.RegisterTool(new CondenseTool());
+            _toolDispatcher.RegisterTool(new ListCodeDefinitionsTool());
 
             // Initialize LLM client
             var clientOptions = new LLMClientOptions
@@ -134,8 +143,15 @@ namespace AICA.ToolWindows
                     });
             });
 
-            // Initialize Agent executor
-            _agentExecutor = new AgentExecutor(_llmClient, _toolDispatcher);
+            // Initialize Agent executor with custom instructions and token budget from options
+            // Token budget: maxTokens * 8 gives rough context window size (response tokens vs context tokens)
+            int tokenBudget = Math.Max(8000, options.MaxTokens * 8);
+            _agentExecutor = new AgentExecutor(
+                _llmClient,
+                _toolDispatcher,
+                maxIterations: options.MaxAgentIterations,
+                maxTokenBudget: tokenBudget,
+                customInstructions: options.CustomInstructions);
         }
 
         private void RenderConversation(string streamingContent = null)
@@ -200,10 +216,10 @@ namespace AICA.ToolWindows
 
         private async System.Threading.Tasks.Task SendMessageAsync()
         {
-            if (_isSending) return;
-
             var userMessage = InputTextBox.Text.Trim();
             if (string.IsNullOrWhiteSpace(userMessage)) return;
+
+            if (_isSending) return;
 
             _isSending = true;
             InputTextBox.IsEnabled = false;
@@ -238,6 +254,9 @@ namespace AICA.ToolWindows
                 {
                     await ExecuteChatModeAsync(userMessage);
                 }
+
+                // Auto-save conversation after each exchange
+                await SaveConversationAsync();
             }
             catch (OperationCanceledException)
             {
@@ -290,10 +309,29 @@ namespace AICA.ToolWindows
                         {
                             case AgentStepType.TextChunk:
                                 responseBuilder.Append(step.Text);
-                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                // If text is growing long (>100 chars) and no tools yet,
+                                // show a thinking indicator instead of potentially hallucinated text.
+                                // Short text (<= 100 chars) is shown normally (greetings, brief plans).
+                                if (!hasToolCalls && responseBuilder.Length > 100)
+                                {
+                                    RenderConversation("💭 *正在分析...*" + toolOutputBuilder.ToString());
+                                }
+                                else
+                                {
+                                    RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                }
                                 break;
 
                             case AgentStepType.ToolStart:
+                                // When first tool arrives: discard any buffered pre-tool text
+                                if (!hasToolCalls)
+                                {
+                                    if (responseBuilder.Length > 100)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"[AICA-UI] Discarding {responseBuilder.Length} chars of pre-tool text");
+                                    }
+                                    responseBuilder.Clear();
+                                }
                                 hasToolCalls = true;
                                 toolOutputBuilder.AppendLine();
                                 toolOutputBuilder.AppendLine($"🔧 **Calling tool:** `{step.ToolCall.Name}`");
@@ -309,10 +347,23 @@ namespace AICA.ToolWindows
                                 break;
 
                             case AgentStepType.Complete:
-                                var finalContent = responseBuilder.ToString() + toolOutputBuilder.ToString();
+                                // Build final content: for tool-assisted responses, include
+                                // completion text from attempt_completion if available
+                                string finalContent;
+                                if (hasToolCalls)
+                                {
+                                    // Tools were used: responseBuilder was cleared, use completion text + tool output
+                                    var completionText = !string.IsNullOrWhiteSpace(step.Text) ? step.Text + "\n" : "";
+                                    finalContent = completionText + toolOutputBuilder.ToString();
+                                }
+                                else
+                                {
+                                    finalContent = responseBuilder.ToString() + toolOutputBuilder.ToString();
+                                }
 
-                                // Add diagnostic hint if no tools were called but response suggests tool usage was intended
-                                if (!hasToolCalls && ContainsToolIntentLanguage(responseBuilder.ToString()))
+                                // Diagnostic hint: only if no tools AND response has action-like language
+                                // AND response is substantial (>200 chars to avoid false positives on greetings)
+                                if (!hasToolCalls && responseBuilder.Length > 200 && ContainsToolIntentLanguage(responseBuilder.ToString()))
                                 {
                                     finalContent += "\n\n---\n⚠️ **提示**: AI 描述了要执行的操作但未实际调用工具。\n" +
                                         "可能原因：\n" +
@@ -412,6 +463,54 @@ namespace AICA.ToolWindows
                     return true;
             }
             return false;
+        }
+
+        private async System.Threading.Tasks.Task SaveConversationAsync()
+        {
+            try
+            {
+                if (_conversation.Count == 0) return;
+
+                var record = new ConversationRecord
+                {
+                    Id = _currentConversationId ?? Guid.NewGuid().ToString("N"),
+                    WorkingDirectory = _agentContext?.WorkingDirectory,
+                    Messages = new List<ConversationMessageRecord>()
+                };
+
+                // Set title from first user message
+                foreach (var msg in _conversation)
+                {
+                    if (msg.Role == "user" && string.IsNullOrEmpty(record.Title))
+                    {
+                        record.Title = msg.Content.Length > 50
+                            ? msg.Content.Substring(0, 47) + "..."
+                            : msg.Content;
+                    }
+
+                    record.Messages.Add(new ConversationMessageRecord
+                    {
+                        Role = msg.Role,
+                        Content = msg.Content
+                    });
+                }
+
+                if (_currentConversationId == null)
+                {
+                    _currentConversationId = record.Id;
+                    record.CreatedAt = DateTimeOffset.UtcNow;
+                }
+
+                await _conversationStorage.SaveConversationAsync(record);
+
+                // Periodic cleanup
+                if (_conversation.Count % 20 == 0)
+                    await _conversationStorage.CleanupOldConversationsAsync(100);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Failed to save conversation: {ex.Message}");
+            }
         }
 
         private void ClearButton_Click(object sender, RoutedEventArgs e)

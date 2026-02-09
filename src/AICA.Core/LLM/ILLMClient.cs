@@ -32,10 +32,12 @@ namespace AICA.Core.LLM
         public string Text { get; set; }
         public ToolCall ToolCall { get; set; }
         public UsageInfo Usage { get; set; }
+        public string FinishReason { get; set; }
 
         public static LLMChunk TextContent(string text) => new LLMChunk { Type = LLMChunkType.Text, Text = text };
         public static LLMChunk Tool(ToolCall call) => new LLMChunk { Type = LLMChunkType.ToolCall, ToolCall = call };
         public static LLMChunk Done(UsageInfo usage = null) => new LLMChunk { Type = LLMChunkType.Done, Usage = usage };
+        public static LLMChunk Finished(string reason) => new LLMChunk { Type = LLMChunkType.Done, FinishReason = reason };
     }
 
     public enum LLMChunkType

@@ -137,8 +137,14 @@ namespace AICA.Core.Tools
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
+                // On Windows, cmd.exe pipes output in OEM codepage (e.g. CP936 for Chinese)
+                // On other platforms, use UTF-8
+                StandardOutputEncoding = Environment.OSVersion.Platform == PlatformID.Win32NT
+                    ? Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
+                    : Encoding.UTF8,
+                StandardErrorEncoding = Environment.OSVersion.Platform == PlatformID.Win32NT
+                    ? Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
+                    : Encoding.UTF8
             };
 
             var stdoutBuilder = new StringBuilder();
