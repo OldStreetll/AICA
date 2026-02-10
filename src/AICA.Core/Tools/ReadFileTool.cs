@@ -28,7 +28,7 @@ namespace AICA.Core.Tools
                         ["path"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "The path to the file to read (relative to workspace root)"
+                            Description = "The path to the file to read (relative to workspace root or source roots)"
                         },
                         ["offset"] = new ToolParameterProperty
                         {
@@ -55,16 +55,26 @@ namespace AICA.Core.Tools
 
             var path = pathObj.ToString();
 
-            if (!context.IsPathAccessible(path))
+            // Try to resolve across working directory and source roots
+            var resolvedPath = context.ResolveFilePath(path);
+
+            if (resolvedPath != null)
             {
-                return ToolResult.Fail($"Access denied: {path}");
+                // Resolved path found — check accessibility
+                if (!context.IsPathAccessible(resolvedPath))
+                    return ToolResult.Fail($"Access denied: {path}");
+            }
+            else
+            {
+                // Not resolved — check original path accessibility
+                if (!context.IsPathAccessible(path))
+                    return ToolResult.Fail($"Access denied: {path}");
+
+                if (!await context.FileExistsAsync(path, ct))
+                    return ToolResult.Fail($"File not found: {path}");
             }
 
-            if (!await context.FileExistsAsync(path, ct))
-            {
-                return ToolResult.Fail($"File not found: {path}");
-            }
-
+            // ReadFileAsync already uses ResolveFilePath internally
             var content = await context.ReadFileAsync(path, ct);
 
             // Handle offset and limit if provided

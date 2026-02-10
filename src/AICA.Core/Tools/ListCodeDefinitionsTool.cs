@@ -74,7 +74,12 @@ namespace AICA.Core.Tools
             else if (Path.IsPathRooted(relativePath))
                 fullPath = relativePath;
             else
-                fullPath = Path.Combine(context.WorkingDirectory, relativePath);
+            {
+                // Try resolving via source roots
+                var resolvedDir = context.ResolveDirectoryPath(relativePath);
+                var resolvedFile = resolvedDir == null ? context.ResolveFilePath(relativePath) : null;
+                fullPath = resolvedDir ?? resolvedFile ?? Path.Combine(context.WorkingDirectory, relativePath);
+            }
 
             var sb = new StringBuilder();
             int fileCount = 0;

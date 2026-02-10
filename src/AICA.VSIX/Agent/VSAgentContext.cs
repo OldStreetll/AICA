@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
 using AICA.Core.Security;
+using AICA.Core.Workspace;
 using AICA.Options;
 using EnvDTE;
 using EnvDTE80;
@@ -22,10 +23,18 @@ namespace AICA.Agent
         private TaskPlan _currentPlan;
         private readonly Func<string, string, CancellationToken, Task<bool>> _confirmationHandler;
         private SafetyGuard _safetyGuard;
+        private SolutionSourceIndex _sourceIndex;
+        private PathResolver _pathResolver;
 
         public string WorkingDirectory { get; private set; }
 
         public TaskPlan CurrentPlan => _currentPlan;
+
+        private string _pathMismatchWarning;
+        public string PathMismatchWarning => _pathMismatchWarning;
+
+        public IReadOnlyList<string> SourceRoots =>
+            _sourceIndex?.SourceRoots?.AsReadOnly() ?? (IReadOnlyList<string>)Array.Empty<string>();
 
         public VSAgentContext(
             DTE2 dte,
@@ -50,8 +59,134 @@ namespace AICA.Agent
                 });
             }
 
-            // Initialize SafetyGuard with security options
+            // Build source file index from solution
+            InitializeSourceIndex();
+
+            // Check if project is at its original build location
+            CheckPathMismatch();
+
+            // Initialize SafetyGuard with security options (after source index, so we can pass SourceRoots)
             InitializeSafetyGuard();
+        }
+
+        private void InitializeSourceIndex()
+        {
+            try
+            {
+                string slnPath = null;
+                ThreadHelper.JoinableTaskFactory.Run(async () =>
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (_dte?.Solution != null && !string.IsNullOrEmpty(_dte.Solution.FullName))
+                        slnPath = _dte.Solution.FullName;
+                });
+
+                if (!string.IsNullOrEmpty(slnPath) && File.Exists(slnPath))
+                {
+                    _sourceIndex = SolutionSourceIndex.BuildFromSolution(slnPath, WorkingDirectory);
+                    _pathResolver = new PathResolver(WorkingDirectory, _sourceIndex);
+
+                    if (_sourceIndex.SourceRoots.Count > 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Source index built: {_sourceIndex.TotalFiles} files, " +
+                            $"{_sourceIndex.SourceRoots.Count} source roots: " +
+                            string.Join(", ", _sourceIndex.SourceRoots));
+                    }
+                }
+                else
+                {
+                    _pathResolver = new PathResolver(WorkingDirectory);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Source index initialization failed: {ex.Message}");
+                _pathResolver = new PathResolver(WorkingDirectory);
+            }
+        }
+
+        /// <summary>
+        /// Check if the current project is opened from a different location than where it was originally built.
+        /// Uses CMakeCache.txt (for CMake projects) or source index detection.
+        /// </summary>
+        private void CheckPathMismatch()
+        {
+            try
+            {
+                // First check source index detection
+                if (!string.IsNullOrEmpty(_sourceIndex?.PathMismatchInfo))
+                {
+                    _pathMismatchWarning = _sourceIndex.PathMismatchInfo;
+                    return;
+                }
+
+                // Fallback: check CMakeCache.txt directly
+                if (string.IsNullOrEmpty(WorkingDirectory))
+                    return;
+
+                var cmakeCachePath = Path.Combine(WorkingDirectory, "CMakeCache.txt");
+                if (!File.Exists(cmakeCachePath))
+                    return;
+
+                string cmakeHomeDir = null;
+                using (var reader = new StreamReader(cmakeCachePath))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (line.StartsWith("CMAKE_HOME_DIRECTORY:INTERNAL=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            cmakeHomeDir = line.Substring("CMAKE_HOME_DIRECTORY:INTERNAL=".Length).Trim();
+                            cmakeHomeDir = cmakeHomeDir.Replace('/', '\\');
+                            break;
+                        }
+                    }
+                }
+
+                if (string.IsNullOrEmpty(cmakeHomeDir))
+                    return;
+
+                // Check if CMAKE_HOME_DIRECTORY is a sibling of the current WorkingDirectory
+                // (i.e., they share the same parent). For a correctly located project:
+                //   WorkingDirectory = D:\Project_Decode\FreeCAD0191\build\
+                //   CMAKE_HOME_DIR  = D:\Project_Decode\FreeCAD0191\FreeCAD-0.19.1
+                //   → same parent: D:\Project_Decode\FreeCAD0191\ → OK
+                // For a relocated project:
+                //   WorkingDirectory = D:\Project\AIConsProject\FreeCAD0191\build\
+                //   CMAKE_HOME_DIR  = D:\Project_Decode\FreeCAD0191\FreeCAD-0.19.1
+                //   → different parents → WARNING
+                var workingParent = Path.GetDirectoryName(WorkingDirectory.TrimEnd('\\', '/'));
+                var cmakeParent = Path.GetDirectoryName(cmakeHomeDir.TrimEnd('\\', '/'));
+
+                bool isUnderSameRoot = false;
+                if (!string.IsNullOrEmpty(workingParent) && !string.IsNullOrEmpty(cmakeParent))
+                {
+                    var wpNorm = workingParent.TrimEnd('\\', '/') + "\\";
+                    var cpNorm = cmakeParent.TrimEnd('\\', '/') + "\\";
+                    // Check if they share a common parent (one contains the other, or they're equal)
+                    isUnderSameRoot =
+                        wpNorm.Equals(cpNorm, StringComparison.OrdinalIgnoreCase) ||
+                        cmakeHomeDir.StartsWith(wpNorm, StringComparison.OrdinalIgnoreCase) ||
+                        WorkingDirectory.StartsWith(cpNorm, StringComparison.OrdinalIgnoreCase);
+                }
+
+                if (!isUnderSameRoot)
+                {
+                    _pathMismatchWarning =
+                        $"\u5f53\u524d\u9879\u76ee\u4e0d\u5728\u539f\u59cb\u7f16\u8bd1\u76ee\u5f55\u4e2d\u6253\u5f00\uff1a\n" +
+                        $"\u539f\u59cb\u6e90\u7801\u76ee\u5f55: {cmakeHomeDir}\n" +
+                        $"\u5f53\u524d\u5de5\u4f5c\u76ee\u5f55: {WorkingDirectory}\n\n" +
+                        $"AICA \u53ef\u80fd\u65e0\u6cd5\u6b63\u786e\u89e3\u6790\u6e90\u7801\u6587\u4ef6\u8def\u5f84\u3002\n" +
+                        $"\u8bf7\u5728\u539f\u59cb\u7f16\u8bd1\u76ee\u5f55\u4e2d\u6253\u5f00\u89e3\u51b3\u65b9\u6848\uff0c\u6216\u91cd\u65b0\u8fd0\u884c CMake \u751f\u6210\u4ee5\u66f4\u65b0\u8def\u5f84\u3002";
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Path mismatch: CMAKE_HOME_DIRECTORY={cmakeHomeDir}, WorkingDirectory={WorkingDirectory}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] CheckPathMismatch failed: {ex.Message}");
+            }
         }
 
         private void InitializeSafetyGuard()
@@ -62,6 +197,7 @@ namespace AICA.Agent
                 _safetyGuard = new SafetyGuard(new SafetyGuardOptions
                 {
                     WorkingDirectory = WorkingDirectory,
+                    SourceRoots = _sourceIndex?.SourceRoots?.ToArray(),
                     ProtectedPaths = secOptions.ProtectedPaths?
                         .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                         .Select(p => p.Trim()).ToArray(),
@@ -156,7 +292,8 @@ namespace AICA.Agent
 
         public async Task<string> ReadFileAsync(string path, CancellationToken ct = default)
         {
-            var fullPath = GetFullPath(path);
+            // Try PathResolver first (covers source roots), fallback to GetFullPath
+            var fullPath = ResolveFilePath(path) ?? GetFullPath(path);
 
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException($"File not found: {path}", fullPath);
@@ -186,7 +323,7 @@ namespace AICA.Agent
 
         public Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
         {
-            var fullPath = GetFullPath(path);
+            var fullPath = ResolveFilePath(path) ?? GetFullPath(path);
             return Task.FromResult(File.Exists(fullPath));
         }
 
@@ -275,6 +412,16 @@ namespace AICA.Agent
                 $"Original: {(originalContent?.Split('\n').Length ?? 0)} lines\n" +
                 $"Modified: {(newContent?.Split('\n').Length ?? 0)} lines",
                 ct);
+        }
+
+        public string ResolveFilePath(string requestedPath)
+        {
+            return _pathResolver?.ResolveFile(requestedPath);
+        }
+
+        public string ResolveDirectoryPath(string requestedPath)
+        {
+            return _pathResolver?.ResolveDirectory(requestedPath);
         }
 
         private string GetFullPath(string path)

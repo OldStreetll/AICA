@@ -12,6 +12,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -36,11 +37,26 @@
             </Grid>
         </Border>
 
+        <!-- Warning Banner -->
+        <Border x:Name="WarningBanner" Grid.Row="1" Visibility="Collapsed"
+                Background="#332200" BorderBrush="#AA7700" BorderThickness="0,0,0,1" Padding="10,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="⚠" FontSize="14" Margin="0,0,6,0" 
+                           Foreground="#FFAA00" VerticalAlignment="Top" />
+                <TextBlock x:Name="WarningText" Grid.Column="1" TextWrapping="Wrap" 
+                           Foreground="#FFCC44" FontSize="12" />
+            </Grid>
+        </Border>
+
         <!-- Chat Content -->
-        <WebBrowser x:Name="ChatBrowser" Grid.Row="1" />
+        <WebBrowser x:Name="ChatBrowser" Grid.Row="2" />
 
         <!-- Input Area -->
-        <Border Grid.Row="2" BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" 
+        <Border Grid.Row="3" BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" 
                 BorderThickness="0,1,0,0" Padding="8">
             <Grid>
                 <Grid.ColumnDefinitions>

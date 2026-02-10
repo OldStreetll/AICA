@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -59,7 +60,8 @@ namespace AICA.Core.Agent
             var systemPrompt = SystemPromptBuilder.GetDefaultPrompt(
                 context?.WorkingDirectory ?? Environment.CurrentDirectory,
                 toolDefinitions,
-                _customInstructions);
+                _customInstructions,
+                context?.SourceRoots);
 
             var conversationHistory = new List<ChatMessage>
             {
@@ -235,7 +237,10 @@ namespace AICA.Core.Agent
                 // ── Hallucination suppression (silent — UI handles visual feedback) ──
                 // If text > 100 chars AND tool calls exist, suppress the hallucinated text.
                 // If text > 100 chars AND no tool calls on iteration 1, defer (nudge will follow).
-                bool suppressText = hasToolCalls &&
+                // Exception: when attempt_completion is among the tool calls, the text is the
+                // actual final response and must NOT be suppressed.
+                bool hasAttemptCompletion = toolCalls.Any(tc => tc.Name == "attempt_completion");
+                bool suppressText = hasToolCalls && !hasAttemptCompletion &&
                     !string.IsNullOrEmpty(assistantResponse) &&
                     assistantResponse.Length > 100;
 

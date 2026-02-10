@@ -153,11 +153,37 @@ namespace AICA.Core.Prompt
             return this;
         }
 
-        public SystemPromptBuilder AddWorkspaceContext(string workingDirectory, IEnumerable<string> recentFiles = null)
+        public SystemPromptBuilder AddWorkspaceContext(
+            string workingDirectory,
+            IEnumerable<string> sourceRoots = null,
+            IEnumerable<string> recentFiles = null)
         {
             _builder.AppendLine("## Workspace");
             _builder.AppendLine($"Working Directory: {workingDirectory}");
-            
+
+            // Source roots from solution/project file analysis
+            if (sourceRoots != null)
+            {
+                var rootList = sourceRoots.ToList();
+                if (rootList.Count > 0)
+                {
+                    _builder.AppendLine();
+                    _builder.AppendLine("### Source Roots");
+                    _builder.AppendLine("The following directories contain source files referenced by the solution's project files (.vcxproj/.csproj).");
+                    _builder.AppendLine("These are outside the working directory but are accessible for reading and searching.");
+                    foreach (var root in rootList)
+                    {
+                        _builder.AppendLine($"- {root}");
+                    }
+                    _builder.AppendLine();
+                    _builder.AppendLine("### Path Resolution");
+                    _builder.AppendLine("- File paths are automatically resolved across the working directory AND source roots.");
+                    _builder.AppendLine("- You can use relative paths like 'src/App/Application.h' — the system will search source roots automatically.");
+                    _builder.AppendLine("- If multiple files match the same name, use the full relative path to disambiguate.");
+                    _builder.AppendLine("- Write operations on source files outside the working directory require explicit user confirmation.");
+                }
+            }
+
             if (recentFiles != null)
             {
                 var fileList = recentFiles.ToList();
@@ -214,13 +240,14 @@ namespace AICA.Core.Prompt
         public static string GetDefaultPrompt(
             string workingDirectory,
             IEnumerable<ToolDefinition> tools,
-            string customInstructions = null)
+            string customInstructions = null,
+            IEnumerable<string> sourceRoots = null)
         {
             return new SystemPromptBuilder()
                 .AddTools(tools)
                 .AddToolDescriptions()
                 .AddRules()
-                .AddWorkspaceContext(workingDirectory)
+                .AddWorkspaceContext(workingDirectory, sourceRoots)
                 .AddCustomInstructions(customInstructions)
                 .Build();
         }

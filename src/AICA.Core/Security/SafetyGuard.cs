@@ -16,10 +16,16 @@ namespace AICA.Core.Security
         private readonly HashSet<string> _commandBlacklist;
         private readonly List<Regex> _ignorePatterns;
         private readonly string _workingDirectory;
+        private readonly HashSet<string> _sourceRoots;
 
         public SafetyGuard(SafetyGuardOptions options)
         {
             _workingDirectory = options?.WorkingDirectory ?? Environment.CurrentDirectory;
+            _sourceRoots = new HashSet<string>(
+                (options?.SourceRoots ?? Array.Empty<string>())
+                    .Where(r => !string.IsNullOrEmpty(r))
+                    .Select(r => Path.GetFullPath(r).TrimEnd('\\', '/')),
+                StringComparer.OrdinalIgnoreCase);
             _protectedPaths = new HashSet<string>(
                 options?.ProtectedPaths ?? new[] { ".git", ".vs", "node_modules", "bin", "obj" },
                 StringComparer.OrdinalIgnoreCase);
@@ -94,14 +100,50 @@ namespace AICA.Core.Security
                 }
             }
 
-            // Check if path is within working directory
-            var fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, path));
-            if (!fullPath.StartsWith(_workingDirectory, StringComparison.OrdinalIgnoreCase))
+            // Check if path is within working directory or source roots
+            string fullPath;
+            try
             {
-                return PathAccessResult.Denied("Path is outside working directory");
+                fullPath = Path.IsPathRooted(path)
+                    ? Path.GetFullPath(path)
+                    : Path.GetFullPath(Path.Combine(_workingDirectory, path));
+            }
+            catch
+            {
+                return PathAccessResult.Denied("Invalid path");
             }
 
-            return PathAccessResult.Allowed();
+            // Normalize for directory-boundary-safe comparisons
+            var normalizedFull = fullPath.TrimEnd('\\', '/');
+            var normalizedFullSlash = normalizedFull + "\\";
+            var workDirNorm = _workingDirectory.TrimEnd('\\', '/');
+            var workDirSlash = workDirNorm + "\\";
+
+            // Check if path is the working directory or within it
+            if (normalizedFull.Equals(workDirNorm, StringComparison.OrdinalIgnoreCase) ||
+                normalizedFullSlash.StartsWith(workDirSlash, StringComparison.OrdinalIgnoreCase))
+                return PathAccessResult.Allowed();
+
+            // Check SourceRoots: exact match, child path, or parent path
+            foreach (var root in _sourceRoots)
+            {
+                var rootNorm = root.TrimEnd('\\', '/');
+                var rootSlash = rootNorm + "\\";
+
+                // Exact match: path IS a source root
+                if (normalizedFull.Equals(rootNorm, StringComparison.OrdinalIgnoreCase))
+                    return PathAccessResult.AllowedExternal(root);
+
+                // Child: path is within a source root
+                if (normalizedFullSlash.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase))
+                    return PathAccessResult.AllowedExternal(root);
+
+                // Parent: path is an ancestor of a source root (needed for navigation)
+                if (rootNorm.StartsWith(normalizedFullSlash, StringComparison.OrdinalIgnoreCase))
+                    return PathAccessResult.AllowedExternal(root);
+            }
+
+            return PathAccessResult.Denied("Path is outside working directory and source roots");
         }
 
         /// <summary>
@@ -145,6 +187,7 @@ namespace AICA.Core.Security
     public class SafetyGuardOptions
     {
         public string WorkingDirectory { get; set; }
+        public string[] SourceRoots { get; set; }
         public string[] ProtectedPaths { get; set; }
         public string[] CommandWhitelist { get; set; }
         public string[] CommandBlacklist { get; set; }
@@ -156,7 +199,19 @@ namespace AICA.Core.Security
         public bool IsAllowed { get; set; }
         public string Reason { get; set; }
 
+        /// <summary>
+        /// Whether this path is external (in SourceRoots, not working directory).
+        /// Write operations on external paths should require extra confirmation.
+        /// </summary>
+        public bool IsExternal { get; set; }
+
+        /// <summary>
+        /// The source root that contains this path (if external).
+        /// </summary>
+        public string SourceRoot { get; set; }
+
         public static PathAccessResult Allowed() => new PathAccessResult { IsAllowed = true };
+        public static PathAccessResult AllowedExternal(string sourceRoot) => new PathAccessResult { IsAllowed = true, IsExternal = true, SourceRoot = sourceRoot };
         public static PathAccessResult Denied(string reason) => new PathAccessResult { IsAllowed = false, Reason = reason };
     }
 

@@ -74,14 +74,17 @@ namespace AICA.Core.Tools
                 return Task.FromResult(ToolResult.Fail($"Access denied: {relativePath}"));
             }
 
-            // Resolve full path
+            // Resolve full path (supports source roots)
             string fullPath;
             if (relativePath == "." || relativePath == "./")
                 fullPath = context.WorkingDirectory;
             else if (Path.IsPathRooted(relativePath))
                 fullPath = relativePath;
             else
-                fullPath = Path.Combine(context.WorkingDirectory, relativePath);
+            {
+                var resolved = context.ResolveDirectoryPath(relativePath);
+                fullPath = resolved ?? Path.Combine(context.WorkingDirectory, relativePath);
+            }
 
             if (!Directory.Exists(fullPath))
             {

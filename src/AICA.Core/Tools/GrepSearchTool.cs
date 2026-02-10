@@ -110,17 +110,25 @@ namespace AICA.Core.Tools
             if (call.Arguments.TryGetValue("max_results", out var maxObj) && maxObj != null)
                 int.TryParse(maxObj.ToString(), out maxResults);
 
-            // Resolve full path
+            // Resolve full path (supports source roots)
             string fullPath;
             if (string.IsNullOrEmpty(searchPath) || searchPath == "." || searchPath == "./")
                 fullPath = context.WorkingDirectory;
             else if (Path.IsPathRooted(searchPath))
                 fullPath = searchPath;
             else
-                fullPath = Path.Combine(context.WorkingDirectory, searchPath);
+            {
+                // Try resolving via source roots first
+                var resolved = context.ResolveDirectoryPath(searchPath);
+                fullPath = resolved ?? Path.Combine(context.WorkingDirectory, searchPath);
+            }
 
             if (!context.IsPathAccessible(searchPath))
-                return ToolResult.Fail($"Access denied: {searchPath}");
+            {
+                // Also check if the resolved path is accessible
+                if (fullPath == null || !context.IsPathAccessible(fullPath))
+                    return ToolResult.Fail($"Access denied: {searchPath}");
+            }
 
             // Build regex
             Regex regex;

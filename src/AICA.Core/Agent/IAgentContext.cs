@@ -59,6 +59,32 @@ namespace AICA.Core.Agent
         /// Returns true if user accepts the changes.
         /// </summary>
         Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
+
+        /// <summary>
+        /// If non-null, contains a warning message indicating that the project
+        /// was opened from a different location than where it was originally built.
+        /// The UI should display this to the user.
+        /// </summary>
+        string PathMismatchWarning { get; }
+
+        /// <summary>
+        /// Source root directories discovered from solution/project files.
+        /// Contains directories outside WorkingDirectory that hold source files
+        /// referenced by .vcxproj/.csproj projects.
+        /// </summary>
+        IReadOnlyList<string> SourceRoots { get; }
+
+        /// <summary>
+        /// Resolve a file path across working directory and source roots.
+        /// Returns the absolute path if found, null otherwise.
+        /// </summary>
+        string ResolveFilePath(string requestedPath);
+
+        /// <summary>
+        /// Resolve a directory path across working directory and source roots.
+        /// Returns the absolute path if found, null otherwise.
+        /// </summary>
+        string ResolveDirectoryPath(string requestedPath);
     }
 
     /// <summary>

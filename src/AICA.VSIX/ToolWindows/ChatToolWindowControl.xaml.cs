@@ -45,6 +45,75 @@ namespace AICA.ToolWindows
 
             ChatBrowser.LoadCompleted += ChatBrowser_LoadCompleted;
             ChatBrowser.NavigateToString(BuildPageHtml(string.Empty));
+
+            Loaded += ChatToolWindowControl_Loaded;
+        }
+
+        private void ChatToolWindowControl_Loaded(object sender, RoutedEventArgs e)
+        {
+            // Run path mismatch check on load (independent of agent initialization)
+            try
+            {
+                ThreadHelper.JoinableTaskFactory.Run(async () =>
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    var dte = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(EnvDTE.DTE)) as DTE2;
+                    if (dte?.Solution == null || string.IsNullOrEmpty(dte.Solution.FullName))
+                        return;
+
+                    var slnDir = System.IO.Path.GetDirectoryName(dte.Solution.FullName);
+                    var cmakeCachePath = System.IO.Path.Combine(slnDir, "CMakeCache.txt");
+                    if (!System.IO.File.Exists(cmakeCachePath))
+                        return;
+
+                    string cmakeHomeDir = null;
+                    using (var reader = new System.IO.StreamReader(cmakeCachePath))
+                    {
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            if (line.StartsWith("CMAKE_HOME_DIRECTORY:INTERNAL=", StringComparison.OrdinalIgnoreCase))
+                            {
+                                cmakeHomeDir = line.Substring("CMAKE_HOME_DIRECTORY:INTERNAL=".Length).Trim();
+                                cmakeHomeDir = cmakeHomeDir.Replace('/', '\\');
+                                break;
+                            }
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(cmakeHomeDir))
+                        return;
+
+                    var workingParent = System.IO.Path.GetDirectoryName(slnDir.TrimEnd('\\', '/'));
+                    var cmakeParent = System.IO.Path.GetDirectoryName(cmakeHomeDir.TrimEnd('\\', '/'));
+
+                    bool isUnderSameRoot = false;
+                    if (!string.IsNullOrEmpty(workingParent) && !string.IsNullOrEmpty(cmakeParent))
+                    {
+                        var wpNorm = workingParent.TrimEnd('\\', '/') + "\\";
+                        var cpNorm = cmakeParent.TrimEnd('\\', '/') + "\\";
+                        isUnderSameRoot =
+                            wpNorm.Equals(cpNorm, StringComparison.OrdinalIgnoreCase) ||
+                            cmakeHomeDir.StartsWith(wpNorm, StringComparison.OrdinalIgnoreCase) ||
+                            slnDir.StartsWith(cpNorm, StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    if (!isUnderSameRoot)
+                    {
+                        WarningText.Text =
+                            $"\u5f53\u524d\u9879\u76ee\u4e0d\u5728\u539f\u59cb\u7f16\u8bd1\u76ee\u5f55\u4e2d\u6253\u5f00\uff1a\n" +
+                            $"\u539f\u59cb\u6e90\u7801\u76ee\u5f55: {cmakeHomeDir}\n" +
+                            $"\u5f53\u524d\u5de5\u4f5c\u76ee\u5f55: {slnDir}\n\n" +
+                            $"AICA \u53ef\u80fd\u65e0\u6cd5\u6b63\u786e\u89e3\u6790\u6e90\u7801\u6587\u4ef6\u8def\u5f84\u3002\n" +
+                            $"\u8bf7\u5728\u539f\u59cb\u7f16\u8bd1\u76ee\u5f55\u4e2d\u6253\u5f00\u89e3\u51b3\u65b9\u6848\uff0c\u6216\u91cd\u65b0\u8fd0\u884c CMake \u751f\u6210\u4ee5\u66f4\u65b0\u8def\u5f84\u3002";
+                        WarningBanner.Visibility = Visibility.Visible;
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Path mismatch check on load failed: {ex.Message}");
+            }
         }
 
         private void ChatBrowser_LoadCompleted(object sender, System.Windows.Navigation.NavigationEventArgs e)
@@ -86,6 +155,7 @@ namespace AICA.ToolWindows
             _toolDispatcher = null;
             _agentContext = null;
             _uiContext = null;
+            WarningBanner.Visibility = Visibility.Collapsed;
             _currentConversationId = null;
             UpdateBrowserContent(string.Empty);
         }
@@ -131,6 +201,13 @@ namespace AICA.ToolWindows
                     {
                         return await _uiContext.ShowConfirmationAsync(op, details, ct);
                     });
+
+                // Check for path mismatch warning (project opened from non-original location)
+                if (!string.IsNullOrEmpty(_agentContext.PathMismatchWarning))
+                {
+                    WarningText.Text = _agentContext.PathMismatchWarning;
+                    WarningBanner.Visibility = Visibility.Visible;
+                }
 
                 _uiContext = new VSUIContext(
                     streamingContentUpdater: content =>
@@ -333,14 +410,23 @@ namespace AICA.ToolWindows
                                     responseBuilder.Clear();
                                 }
                                 hasToolCalls = true;
-                                toolOutputBuilder.AppendLine();
-                                toolOutputBuilder.AppendLine($"🔧 **Calling tool:** `{step.ToolCall.Name}`");
+                                // Don't show attempt_completion in tool logs (its text becomes the main response)
+                                if (step.ToolCall.Name != "attempt_completion")
+                                {
+                                    toolOutputBuilder.AppendLine();
+                                    toolOutputBuilder.AppendLine($"🔧 **Calling tool:** `{step.ToolCall.Name}`");
+                                }
                                 RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
                                 break;
 
                             case AgentStepType.ToolResult:
+                                // Skip attempt_completion results in tool log (shown as main response)
+                                if (step.ToolCall?.Name == "attempt_completion")
+                                {
+                                    break;
+                                }
                                 var status = step.Result.Success ? "✅" : "❌";
-                                var resultPreview = TruncateForDisplay(step.Result.Success ? step.Result.Content : step.Result.Error, 200);
+                                var resultPreview = TruncateForDisplay(step.Result.Success ? step.Result.Content : step.Result.Error, 1000);
                                 toolOutputBuilder.AppendLine($"{status} **Result:** {resultPreview}");
                                 toolOutputBuilder.AppendLine();
                                 RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
@@ -348,13 +434,33 @@ namespace AICA.ToolWindows
 
                             case AgentStepType.Complete:
                                 // Build final content: for tool-assisted responses, include
-                                // completion text from attempt_completion if available
+                                // the detailed text the LLM generated after seeing tool results.
                                 string finalContent;
                                 if (hasToolCalls)
                                 {
-                                    // Tools were used: responseBuilder was cleared, use completion text + tool output
-                                    var completionText = !string.IsNullOrWhiteSpace(step.Text) ? step.Text + "\n" : "";
-                                    finalContent = completionText + toolOutputBuilder.ToString();
+                                    // Prefer responseBuilder (detailed LLM text from post-tool iterations)
+                                    // over step.Text (brief attempt_completion summary).
+                                    var mainText = responseBuilder.ToString().Trim();
+                                    var completionText = step.Text?.Trim() ?? "";
+
+                                    string textContent;
+                                    if (!string.IsNullOrEmpty(mainText))
+                                    {
+                                        // Use the detailed streaming text the user saw during generation
+                                        textContent = mainText;
+                                    }
+                                    else if (!string.IsNullOrEmpty(completionText))
+                                    {
+                                        // Fallback to attempt_completion summary
+                                        textContent = completionText;
+                                    }
+                                    else
+                                    {
+                                        textContent = "";
+                                    }
+
+                                    finalContent = (!string.IsNullOrEmpty(textContent) ? textContent + "\n" : "")
+                                        + toolOutputBuilder.ToString();
                                 }
                                 else
                                 {
