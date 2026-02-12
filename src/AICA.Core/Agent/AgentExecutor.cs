@@ -91,6 +91,44 @@ namespace AICA.Core.Agent
                         conversationHistory, conversationBudget);
                 }
 
+                // ── Force-completion: when enough tools have been called, remove tools to force text-only summary ──
+                int currentTokens = conversationHistory.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                double tokenUsageRatio = (double)currentTokens / conversationBudget;
+                // Primary trigger: absolute tool call count >=8 (most reliable)
+                // Backup triggers: iteration>=6 with tools used, token usage, near max iterations
+                bool forceCompletion = _taskState.HasEverUsedTools &&
+                    (_taskState.TotalToolCallCount >= 8 ||
+                     _taskState.Iteration >= 6 ||
+                     tokenUsageRatio > 0.60 ||
+                     _taskState.Iteration >= _maxIterations - 2);
+                System.Diagnostics.Debug.WriteLine($"[AICA] forceCompletion check: TotalToolCalls={_taskState.TotalToolCallCount}, Iteration={_taskState.Iteration}, tokenRatio={tokenUsageRatio:F2}, result={forceCompletion}");
+
+                if (forceCompletion)
+                {
+                    string reason = _taskState.TotalToolCallCount >= 10
+                        ? $"{_taskState.TotalToolCallCount} tool calls executed"
+                        : tokenUsageRatio > 0.65
+                            ? $"context window {tokenUsageRatio:P0} full"
+                            : $"iteration {_taskState.Iteration}/{_maxIterations}";
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Force-completion triggered: {reason}");
+
+                    bool alreadySummarizing = conversationHistory.Any(m =>
+                        m.Role == LLM.ChatRole.System && m.Content != null &&
+                        m.Content.Contains("[SUMMARIZE]"));
+
+                    if (!alreadySummarizing)
+                    {
+                        // Visible diagnostic so user can confirm force-completion is active
+                        yield return AgentStep.TextChunk($"\n\nℹ️ *正在整理分析结果 ({reason})...*\n\n");
+
+                        conversationHistory.Add(ChatMessage.System(
+                            $"[SUMMARIZE] Resources are running low ({reason}). " +
+                            "You MUST now generate a comprehensive final answer based on ALL the information " +
+                            "you have gathered so far. Synthesize your findings into a clear, well-structured response. " +
+                            "Do NOT call any more tools."));
+                    }
+                }
+
                 // Get LLM response with auto-retry
                 string assistantResponse = null;
                 var toolCalls = new List<ToolCall>();
@@ -120,7 +158,9 @@ namespace AICA.Core.Agent
 
                     try
                     {
-                        await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, toolDefinitions, ct).ConfigureAwait(false))
+                        // When forceCompletion is active, pass null tools to prevent LLM from making tool calls
+                        var effectiveTools = forceCompletion ? null : toolDefinitions;
+                        await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, effectiveTools, ct).ConfigureAwait(false))
                         {
                             if (chunk.Type == LLMChunkType.Text)
                             {
@@ -208,7 +248,8 @@ namespace AICA.Core.Agent
                 }
 
                 // ── Resolve ALL tool calls (API + text-based) BEFORE any decisions ──
-                if (toolCalls.Count == 0 && !string.IsNullOrEmpty(assistantResponse))
+                // Skip text-based parsing in force-completion mode (LLM should only produce text)
+                if (!forceCompletion && toolCalls.Count == 0 && !string.IsNullOrEmpty(assistantResponse))
                 {
                     var parsedCalls = TryParseTextToolCalls(assistantResponse);
                     if (parsedCalls.Count > 0)
@@ -234,27 +275,23 @@ namespace AICA.Core.Agent
                     yield break;
                 }
 
-                // ── Hallucination suppression (silent — UI handles visual feedback) ──
-                // If text > 100 chars AND tool calls exist, suppress the hallucinated text.
-                // If text > 100 chars AND no tool calls on iteration 1, defer (nudge will follow).
+                // ── Hallucination suppression ──
+                // If text > 100 chars AND tool calls exist, suppress the hallucinated pre-tool text.
                 // Exception: when attempt_completion is among the tool calls, the text is the
                 // actual final response and must NOT be suppressed.
+                // NOTE: We do NOT suppress text when there are no tool calls. For knowledge
+                // questions (e.g. "explain SOLID principles"), the text IS the real answer.
                 bool hasAttemptCompletion = toolCalls.Any(tc => tc.Name == "attempt_completion");
                 bool suppressText = hasToolCalls && !hasAttemptCompletion &&
                     !string.IsNullOrEmpty(assistantResponse) &&
                     assistantResponse.Length > 100;
 
-                bool deferFirstIterText = !hasToolCalls &&
-                    _taskState.Iteration == 1 &&
-                    !string.IsNullOrEmpty(assistantResponse) &&
-                    assistantResponse.Length > 100;
-
-                if (suppressText || deferFirstIterText)
+                if (suppressText)
                 {
                     System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] Suppressing text ({assistantResponse?.Length ?? 0} chars): suppress={suppressText}, defer={deferFirstIterText}");
+                        $"[AICA] Suppressing pre-tool text ({assistantResponse?.Length ?? 0} chars)");
                     assistantResponse = null;
-                    // Do NOT yield any text — UI layer handles the visual "thinking" indicator
+                    // Do NOT yield any text — tool results will follow
                 }
                 else
                 {
@@ -290,7 +327,17 @@ namespace AICA.Core.Agent
                 // ── No tool calls at all ──
                 if (toolCalls.Count == 0)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] No tool calls. Iteration={_taskState.Iteration}, wasTruncated={wasTruncated}");
+                    System.Diagnostics.Debug.WriteLine($"[AICA] No tool calls. Iteration={_taskState.Iteration}, wasTruncated={wasTruncated}, forceCompletion={forceCompletion}");
+
+                    // Force-completion mode: text-only response IS the final answer
+                    if (forceCompletion && !string.IsNullOrWhiteSpace(assistantResponse))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Force-completion: yielding text response as Complete ({assistantResponse.Length} chars)");
+                        // Note: pendingTextChunks were already yielded in the suppression block above,
+                        // so we only yield the Complete step here (not the text chunks again).
+                        yield return AgentStep.Complete(assistantResponse);
+                        yield break;
+                    }
 
                     if (wasTruncated)
                     {
@@ -298,8 +345,9 @@ namespace AICA.Core.Agent
                         continue;
                     }
 
-                    // First iteration with no tools and no defer: genuine text response
-                    if (_taskState.Iteration == 1 && !deferFirstIterText)
+                    // First iteration with no tools: genuine text response
+                    // (knowledge questions, explanations, conversational replies)
+                    if (_taskState.Iteration == 1)
                     {
                         yield return AgentStep.Complete(assistantResponse);
                         yield break;
@@ -340,6 +388,7 @@ namespace AICA.Core.Agent
                         && !executedToolSignatures.Add(toolSignature))
                     {
                         System.Diagnostics.Debug.WriteLine($"[AICA] Skipping duplicate tool call: {toolCall.Name}");
+                        _taskState.TotalToolCallCount++; // Count duplicates too for force-completion
                         var dupResult = ToolResult.Fail(
                             $"Duplicate call: You already called {toolCall.Name} with the same arguments. " +
                             "Use the previous result instead of calling again. If you need different information, change the parameters.");
@@ -352,6 +401,7 @@ namespace AICA.Core.Agent
                     yield return AgentStep.ToolStart(toolCall);
 
                     _taskState.LastToolName = toolCall.Name;
+                    _taskState.TotalToolCallCount++;
 
                     ToolResult result;
                     try
@@ -423,9 +473,9 @@ namespace AICA.Core.Agent
                     // Add tool result to conversation
                     var resultContent = result.Success ? result.Content : $"Error: {result.Error}";
                     // Truncate very long results to avoid token overflow
-                    if (resultContent != null && resultContent.Length > 8000)
+                    if (resultContent != null && resultContent.Length > 4000)
                     {
-                        resultContent = resultContent.Substring(0, 8000) + "\n... (truncated, total length: " + resultContent.Length + " chars)";
+                        resultContent = resultContent.Substring(0, 4000) + "\n... (truncated, total length: " + resultContent.Length + " chars)";
                     }
                     conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, resultContent));
                 }

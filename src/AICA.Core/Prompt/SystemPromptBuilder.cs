@@ -84,6 +84,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- When a coding task is complete, call the `attempt_completion` tool with a result summary.");
             _builder.AppendLine("- Keep your text output minimal before tool calls. A brief one-line plan is acceptable, but never write the expected results before receiving actual tool output.");
             _builder.AppendLine("- For casual conversation or greetings (e.g. \"你好\", \"hello\"), respond naturally in text WITHOUT calling any tools. Only use tools when the user has a specific task or question about code/files.");
+            _builder.AppendLine("- For general programming knowledge questions (e.g. \"explain SOLID principles\", \"what is dependency injection\"), respond with **detailed, complete text content** using full Markdown formatting — headers (#, ##), code blocks (```csharp), bullet lists, bold text, etc. Do NOT summarize or give meta-descriptions like 'I have explained X'. Instead, write out the actual explanation with real code examples.");
             _builder.AppendLine();
 
             // Tool usage tips

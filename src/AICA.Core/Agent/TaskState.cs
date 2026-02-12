@@ -25,6 +25,9 @@ namespace AICA.Core.Agent
         public int ApiRequestCount { get; set; }
         public int Iteration { get; set; }
 
+        // Tool call counting for force-completion
+        public int TotalToolCallCount { get; set; }
+
         // noToolsUsed tracking
         public int ConsecutiveNoToolCount { get; set; }
 

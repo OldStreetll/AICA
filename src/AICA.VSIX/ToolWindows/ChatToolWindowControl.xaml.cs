@@ -365,6 +365,9 @@ namespace AICA.ToolWindows
             var toolOutputBuilder = new StringBuilder();
             var hasToolCalls = false;
 
+            // Show immediate feedback while waiting for LLM's first token (TTFT)
+            RenderConversation("💭 *思考中...*");
+
             // Capture the WPF dispatcher so we can marshal UI updates from background thread
             var dispatcher = this.Dispatcher;
 
@@ -386,17 +389,12 @@ namespace AICA.ToolWindows
                         {
                             case AgentStepType.TextChunk:
                                 responseBuilder.Append(step.Text);
-                                // If text is growing long (>100 chars) and no tools yet,
-                                // show a thinking indicator instead of potentially hallucinated text.
-                                // Short text (<= 100 chars) is shown normally (greetings, brief plans).
-                                if (!hasToolCalls && responseBuilder.Length > 100)
-                                {
-                                    RenderConversation("💭 *正在分析...*" + toolOutputBuilder.ToString());
-                                }
-                                else
-                                {
-                                    RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
-                                }
+                                // Always show streaming text in real-time.
+                                // For tool-using responses, pre-tool text is discarded
+                                // when the first ToolStart arrives (see below).
+                                // For non-tool responses (knowledge questions, explanations),
+                                // the streaming text IS the actual answer.
+                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
                                 break;
 
                             case AgentStepType.ToolStart:
@@ -509,6 +507,9 @@ namespace AICA.ToolWindows
 
             var responseBuilder = new StringBuilder();
             var dispatcher = this.Dispatcher;
+
+            // Show immediate feedback while waiting for LLM's first token (TTFT)
+            RenderConversation("💭 *思考中...*");
 
             // Run LLM streaming on background thread, dispatch UI updates via Dispatcher.Invoke
             await System.Threading.Tasks.Task.Run(async () =>

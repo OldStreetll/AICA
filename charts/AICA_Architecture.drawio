@@ -1,0 +1,221 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.2.9 Chrome/140.0.7339.249 Electron/38.7.2 Safari/537.36" version="29.2.9">
+  <diagram id="aica-3phase" name="AICA 三阶段架构">
+    <mxGraphModel dx="2160" dy="1018" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1250" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;fontSize=27;fontStyle=1;align=center;verticalAlign=middle;fillColor=none;strokeColor=none;fontColor=#333333;" value="HNC AICA — AI Coding Assistant 三阶段架构总览" vertex="1">
+          <mxGeometry height="50" width="1560" x="20" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;fontSize=12;align=center;verticalAlign=middle;fillColor=none;strokeColor=none;fontColor=#666666;" value="Visual Studio 2022 AI 编码助手插件  |  对标 Cline v3.56.2  |  总工时约 59 天（12 周）" vertex="1">
+          <mxGeometry height="24" width="1560" x="20" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="leg1" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;verticalAlign=middle;fillColor=none;strokeColor=none;fontColor=#2E7D32;" value="■ 第一阶段 — 已实现 (v1.9.0+)" vertex="1">
+          <mxGeometry height="22" width="240" x="380" y="82" as="geometry" />
+        </mxCell>
+        <mxCell id="leg2" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;verticalAlign=middle;fillColor=none;strokeColor=none;fontColor=#E65100;" value="■ 第二阶段 — 近期 Sprint 5‑7 (35天)" vertex="1">
+          <mxGeometry height="22" width="280" x="640" y="82" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;verticalAlign=middle;fillColor=none;strokeColor=none;fontColor=#1565C0;" value="■ 第三阶段 — 远期 Sprint 8‑9 (24天)" vertex="1">
+          <mxGeometry height="22" width="280" x="940" y="82" as="geometry" />
+        </mxCell>
+        <mxCell id="core" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#424242;strokeWidth=2;shadow=1;arcSize=8;fontSize=17;" value="&lt;b&gt;HNC AICA 插件核心&lt;/b&gt;&lt;br&gt;&lt;hr style=&quot;margin:4px 0&quot;&gt;&lt;span&gt;AICA.VSIX (net4.8) + AICA.Core (netstandard2.0)&lt;br&gt;配置中心: API 密钥 / 模型选择 / 安全策略 / 审批策略&lt;/span&gt;" vertex="1">
+          <mxGeometry height="80" width="640" x="480" y="112" as="geometry" />
+        </mxCell>
+        <mxCell id="p1bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#4CAF50;strokeWidth=2;arcSize=4;opacity=60;" value="" vertex="1">
+          <mxGeometry height="940" width="480" x="20" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="p1hdr" parent="1" style="text;html=1;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;fillColor=#A5D6A7;strokeColor=#4CAF50;rounded=1;fontColor=#1B5E20;" value="第一阶段：已实现能力 (v1.9.0+)" vertex="1">
+          <mxGeometry height="32" width="440" x="40" y="230" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Agent 执行引擎&lt;/b&gt;（完成度 95%）" vertex="1">
+          <mxGeometry height="100" width="440" x="40" y="272" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_agent_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• 迭代循环 (max 25 轮)　• 流式输出　• 重试机制&lt;br&gt;• 工具调用去重（签名去重）　• 幻觉抑制　• 参数增强&lt;br&gt;• AgentExecutor / ToolDispatcher / TaskState&lt;/div&gt;" vertex="1">
+          <mxGeometry height="65" width="420" x="50" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_tools" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;基础工具系统&lt;/b&gt;（11 个工具，覆盖 46%）" vertex="1">
+          <mxGeometry height="120" width="440" x="40" y="382" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_tools_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;line-height: 1.5;&quot;&gt;&lt;table style=&quot;width:100%&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;&amp;nbsp;read_file&lt;/td&gt;&lt;td&gt;&amp;nbsp;edit&lt;/td&gt;&lt;td&gt;&amp;nbsp;write_to_file&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&amp;nbsp;list_dir&lt;/td&gt;&lt;td&gt;&amp;nbsp;grep_search&lt;/td&gt;&lt;td&gt;&amp;nbsp;find_by_name&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&amp;nbsp;list_code_defs&lt;/td&gt;&lt;td&gt;&amp;nbsp;run_command&lt;/td&gt;&lt;td&gt;&amp;nbsp;update_plan&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&amp;nbsp;attempt_completion&lt;/td&gt;&lt;td&gt;&amp;nbsp;condense&lt;/td&gt;&lt;td&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="85" width="420" x="50" y="399.5" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;LLM 通信层&lt;/b&gt;（100%）" vertex="1">
+          <mxGeometry height="115" width="215" x="40" y="512" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_llm_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• OpenAI 兼容 API&lt;br&gt;• SSE 流式传输&lt;br&gt;• Tool Calling 解析&lt;br&gt;• 错误重试&lt;/div&gt;" vertex="1">
+          <mxGeometry height="58" width="200" x="48" y="538" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_ws" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;工作区感知&lt;/b&gt;（100%）" vertex="1">
+          <mxGeometry height="115" width="215" x="265" y="512" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_ws_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• SolutionSourceIndex&lt;br&gt;• PathResolver (CMake)&lt;br&gt;• .sln / .vcxproj / .csproj&lt;br&gt;• 多根目录解析&lt;/div&gt;" vertex="1">
+          <mxGeometry height="65" width="200" x="273" y="538" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_sec" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;安全机制&lt;/b&gt;（70%）" vertex="1">
+          <mxGeometry height="117" width="215" x="40" y="631" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_sec_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• SafetyGuard 路径保护&lt;br&gt;• 命令白 / 黑名单&lt;br&gt;• .aicaignore&lt;br&gt;• OEM 编码修复&lt;/div&gt;" vertex="1">
+          <mxGeometry height="65" width="200" x="48" y="664" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_ctx" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;上下文 &amp;amp; Prompt&lt;/b&gt;（60‑70%）" vertex="1">
+          <mxGeometry height="117" width="215" x="265" y="631" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_ctx_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• ContextManager&lt;br&gt;• CJK Token 估算&lt;br&gt;• 对话截断&lt;br&gt;• SystemPromptBuilder&lt;/div&gt;" vertex="1">
+          <mxGeometry height="67" width="200" x="273" y="657" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_ui" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;UI 基础 &amp;amp; 对话持久化&lt;/b&gt;（50‑75%）" vertex="1">
+          <mxGeometry height="109" width="440" x="38" y="757" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_ui_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• WPF WebBrowser 聊天窗口　• Markdown 渲染 (Markdig)&lt;br&gt;• 右键菜单 (4 个命令)　• VS Diff 预览服务&lt;br&gt;• ConversationStorage (JSON + Markdown 导出)　• build.ps1&lt;/div&gt;" vertex="1">
+          <mxGeometry height="74" width="420" x="48" y="785" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_star" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;AICA 特点&lt;/b&gt;" vertex="1">
+          <mxGeometry height="106" width="440" x="38" y="876" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_star_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• SolutionSourceIndex — .sln/.vcxproj/.csproj 解析, CMake out‑of‑source&lt;br&gt;• PathResolver — 跨工作区 + 源码根统一路径解析&lt;br&gt;• VS 原生集成 — 右键菜单、Diff 服务、Error List、Solution Explorer&lt;/div&gt;" vertex="1">
+          <mxGeometry height="52" width="420" x="48" y="902" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_bar" parent="1" style="text;html=1;fontSize=14;fontStyle=2;align=center;verticalAlign=middle;fillColor=#A5D6A7;strokeColor=#4CAF50;rounded=1;fontColor=#1B5E20;" value="&amp;nbsp;当前状态：核心可用，可完成基本 Agent 对话和工具调用" vertex="1">
+          <mxGeometry height="41" width="440" x="38" y="1002" as="geometry" />
+        </mxCell>
+        <mxCell id="p2bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=2;arcSize=4;opacity=60;" value="" vertex="1">
+          <mxGeometry height="940" width="500" x="520" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="p2hdr" parent="1" style="text;html=1;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;fillColor=#FFCC80;strokeColor=#FF9800;rounded=1;fontColor=#E65100;" value="第二阶段：近期实现 Sprint 5‑7 (35天)" vertex="1">
+          <mxGeometry height="32" width="460" x="540" y="230" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_s5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FF9800;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Sprint 5：Agent 交互闭环（P0，10 天）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="179" width="460" x="540" y="272" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_s5_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.7;&quot;&gt;&lt;b&gt;&amp;nbsp;ask_followup_question&lt;/b&gt; — Agent 主动提问 + 预设选项 + 自由输入&lt;br&gt;&lt;b&gt;&amp;nbsp;AutoApproveManager&lt;/b&gt; — 按类别自动审批（读/写/命令/YOLO）&lt;br&gt;&lt;b&gt;&amp;nbsp;工具调用可视化 UI&lt;/b&gt; — 可折叠卡片（参数+结果+耗时+状态）&lt;br&gt;&lt;b&gt;&amp;nbsp;attempt_completion 增强&lt;/b&gt; — 结果卡片 + 满意/不满意反馈&lt;br&gt;&lt;b&gt;&amp;nbsp;IUIContext 扩展&lt;/b&gt; — ShowFollowupQuestionAsync&lt;br&gt;&lt;hr style=&quot;margin:3px 0&quot;&gt;&lt;span style=&quot;color:#E65100;font-weight:bold&quot;&gt;里程碑 M1：&lt;/span&gt;Agent 可完成完整交互流程&lt;/div&gt;" vertex="1">
+          <mxGeometry height="138" width="440" x="550" y="298" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_s6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FF9800;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Sprint 6：安全 + 模式 + 规则（P1‑A，10 天）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="180" width="460" x="540" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_s6_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.7;&quot;&gt;&lt;b&gt;&amp;nbsp;Plan/Act 双模式&lt;/b&gt; — 规划模式只分析，执行模式调用工具&lt;br&gt;&lt;b&gt;&amp;nbsp;用户规则系统&lt;/b&gt; — .aicarules / .clinerules 兼容加载&lt;br&gt;&lt;b&gt;&amp;nbsp;命令权限控制器&lt;/b&gt; — Glob 匹配 + Shell 操作符检测&lt;br&gt;&lt;b&gt;&amp;nbsp;apply_patch 工具&lt;/b&gt; — V4A diff 格式多文件补丁&lt;br&gt;&lt;b&gt;&amp;nbsp;SafetyGuard 集成&lt;/b&gt; — CommandPermissionController&lt;br&gt;&lt;hr style=&quot;margin:3px 0&quot;&gt;&lt;span style=&quot;color:#E65100;font-weight:bold&quot;&gt;里程碑 M2：&lt;/span&gt;安全可控，可先规划后执行&lt;/div&gt;" vertex="1">
+          <mxGeometry height="138" width="440" x="550" y="486" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_s7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FF9800;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Sprint 7：检查点 + 上下文 + Prompt（P1‑B，15 天）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="223" width="460" x="540" y="647" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_s7_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.7;&quot;&gt;&lt;b&gt;&amp;nbsp;Checkpoint 快照系统&lt;/b&gt; — Shadow Git 工作区快照 / 回滚&lt;br&gt;&lt;b&gt;&amp;nbsp;FileContextTracker&lt;/b&gt; — 跟踪已读/已改文件，避免重复读取&lt;br&gt;&lt;b&gt;&amp;nbsp;EnvironmentContextTracker&lt;/b&gt; — 自动收集 VS 环境信息&lt;br&gt;&lt;b&gt;&amp;nbsp;Prompt 变体系统&lt;/b&gt; — 按模型家族选择模板&lt;br&gt;　　Qwen / DeepSeek / ChatGLM / Generic&lt;br&gt;&lt;b&gt;&amp;nbsp;ContextManager 增强&lt;/b&gt; — Token 预算分配 + 智能截断&lt;br&gt;&lt;b&gt;&amp;nbsp;对话历史浏览 UI&lt;/b&gt; — 历史列表 + 恢复 + 导出&lt;br&gt;&lt;hr style=&quot;margin:3px 0&quot;&gt;&lt;span style=&quot;color:#E65100;font-weight:bold&quot;&gt;里程碑 M3：&lt;/span&gt;长任务稳定运行，出问题可回滚&lt;/div&gt;" vertex="1">
+          <mxGeometry height="185" width="440" x="550" y="673" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_tech" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FFA000;strokeWidth=1;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;关键技术决策&lt;/b&gt;" vertex="1">
+          <mxGeometry height="121" width="460" x="540" y="876" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_tech_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.6;&quot;&gt;• Checkpoint 使用隔离 Shadow Git Repo，不影响用户 Git&lt;br&gt;• V4A Diff 使用上下文行定位（比 edit 精确匹配更智能）&lt;br&gt;• AutoApprove 支持路径感知（工作区内/外区分审批策略）&lt;br&gt;• Prompt 变体以 Generic 为基础，变体只覆盖差异部分&lt;/div&gt;" vertex="1">
+          <mxGeometry height="55" width="440" x="550" y="900" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_bar" parent="1" style="text;html=1;fontSize=14;fontStyle=2;align=center;verticalAlign=middle;fillColor=#FFCC80;strokeColor=#FF9800;rounded=1;fontColor=#E65100;" value="&amp;nbsp;新建 14 个文件　|　修改 9 个现有文件" vertex="1">
+          <mxGeometry height="40" width="460" x="540" y="1004" as="geometry" />
+        </mxCell>
+        <mxCell id="p3bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#2196F3;strokeWidth=2;arcSize=4;opacity=60;" value="" vertex="1">
+          <mxGeometry height="940" width="500" x="1040" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="5LtJfkAf6Ei6ulfYZjt7-1" edge="1" parent="1" source="p3hdr" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="p3_s8_d" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p3hdr" parent="1" style="text;html=1;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;fillColor=#90CAF9;strokeColor=#2196F3;rounded=1;fontColor=#1565C0;" value="第三阶段：远期实现 Sprint 8‑9 (24天)" vertex="1">
+          <mxGeometry height="32" width="460" x="1060" y="230" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_s8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2196F3;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Sprint 8：UI/UX 高级增强（P2‑A，12 天）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="275" width="460" x="1060" y="272" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_s8_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.7;&quot;&gt;&lt;b&gt;&amp;nbsp;@mention 上下文引用&lt;/b&gt;&lt;br&gt;　　@file:path · @folder:path · @problems&lt;br&gt;　　@selection · @git:diff&lt;br&gt;&lt;b&gt;&amp;nbsp;Slash 命令&lt;/b&gt;&lt;br&gt;　　/new /clear /plan /act /history /export /checkpoint /rollback&lt;br&gt;&lt;b&gt;&amp;nbsp;任务计划面板&lt;/b&gt; — 实时步骤状态（⏳ 🔄 ✅ ❌）&lt;br&gt;&lt;b&gt;&amp;nbsp;Markdown 增强&lt;/b&gt; — 代码块复制 / 行号 / 语言标签 / Mermaid&lt;br&gt;&lt;b&gt;&amp;nbsp;通知系统&lt;/b&gt; — VS InfoBar 桌面通知&lt;br&gt;&lt;b&gt;&amp;nbsp;new_task 子任务&lt;/b&gt; — 独立上下文的子任务&lt;br&gt;&lt;hr style=&quot;margin:3px 0&quot;&gt;&lt;span style=&quot;color:#1565C0;font-weight:bold&quot;&gt;里程碑 M4：&lt;/span&gt;UI 交互体验接近 Cline 水平&lt;/div&gt;" vertex="1">
+          <mxGeometry height="228" width="440" x="1070" y="298" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_s9a" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2196F3;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Sprint 9：扩展系统（P2‑B，12 天）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="227" width="460" x="1060" y="558" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_s9a_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.7;&quot;&gt;&lt;b&gt;&amp;nbsp;Hooks 系统&lt;/b&gt;&lt;br&gt;　　pre‑edit / post‑edit / pre‑command / post‑command&lt;br&gt;　　.aica/hooks/ 目录，超时 30s，可阻止工具执行&lt;br&gt;&lt;b&gt;&amp;nbsp;Skills 系统&lt;/b&gt;&lt;br&gt;　　.aica/skills/ 预定义任务模板&lt;br&gt;　　/skill:create‑unit‑test 等 Slash 命令触发&lt;br&gt;&lt;b&gt;&amp;nbsp;Focus Chain&lt;/b&gt; — 工具执行相关文件的焦点链管理&lt;br&gt;&lt;hr style=&quot;margin:3px 0&quot;&gt;&lt;span style=&quot;color:#757575&quot;&gt;可扩展：MCP 协议（低优先级，后续考虑）&lt;/span&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="138" width="440" x="1070" y="584" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_qa" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2196F3;strokeWidth=1.5;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;Sprint 9：质量保障&lt;/b&gt;" vertex="1">
+          <mxGeometry height="155" width="460" x="1060" y="798" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_qa_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.7;&quot;&gt;&lt;b&gt;&amp;nbsp;单元测试框架&lt;/b&gt;（AICA.Tests / xUnit）&lt;br&gt;　　Agent / Tools / Workspace / Security / Context&lt;br&gt;&lt;b&gt;&amp;nbsp;CI/CD 构建发布&lt;/b&gt;&lt;br&gt;　　自动版本号 / Release 构建 / 代码签名 / CHANGELOG&lt;br&gt;&lt;hr style=&quot;margin:3px 0&quot;&gt;&lt;span style=&quot;color:#1565C0;font-weight:bold&quot;&gt;里程碑 M5：&lt;/span&gt;功能完备，可扩展&lt;/div&gt;" vertex="1">
+          <mxGeometry height="88" width="440" x="1070" y="824" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_skip" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1F5FE;strokeColor=#0288D1;strokeWidth=1;fontSize=17;verticalAlign=top;spacingTop=4;align=center;" value="&lt;b&gt;&amp;nbsp;不支持的内容&lt;/b&gt;" vertex="1">
+          <mxGeometry height="94" width="460" x="1060" y="964" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_skip_d" parent="1" style="text;html=1;fillColor=none;strokeColor=none;fontSize=13;" value="&lt;div style=&quot;text-align: left; line-height: 1.5;&quot;&gt;❌ 浏览器自动化（离线）　❌ Web 搜索/抓取（离线）&lt;br&gt;❌ MCP 协议（后续扩展）　❌ React Webview（VS2022 限制）&lt;br&gt;❌ 40+ LLM 提供商（仅需 OpenAI 兼容 API 内网 LLM）&lt;/div&gt;" vertex="1">
+          <mxGeometry height="52" width="440" x="1070" y="988" as="geometry" />
+        </mxCell>
+        <mxCell id="p3_bar" parent="1" style="text;html=1;fontSize=14;fontStyle=2;align=center;verticalAlign=middle;fillColor=#90CAF9;strokeColor=#2196F3;rounded=1;fontColor=#1565C0;" value="&amp;nbsp;全部完成后预计达到 Cline 92% 功能覆盖" vertex="1">
+          <mxGeometry height="32" width="460" x="1060" y="1073" as="geometry" />
+        </mxCell>
+        <mxCell id="a_c1" edge="1" parent="1" source="core" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#4CAF50;strokeWidth=2;endArrow=blockThin;endFill=1;" target="p1hdr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a_c2" edge="1" parent="1" source="core" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#FF9800;strokeWidth=2;endArrow=blockThin;endFill=1;" target="p2hdr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a_c3" edge="1" parent="1" source="core" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#2196F3;strokeWidth=2;endArrow=blockThin;endFill=1;" target="p3hdr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a_12" edge="1" parent="1" source="p1bg" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#9E9E9E;strokeWidth=1.5;dashed=1;endArrow=blockThin;endFill=1;" target="p2bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a_12_lb" connectable="0" parent="a_12" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" value="基础就绪" vertex="1">
+          <mxGeometry relative="1" x="-0.1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a_23" edge="1" parent="1" source="p2bg" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#9E9E9E;strokeWidth=1.5;dashed=1;endArrow=blockThin;endFill=1;" target="p3bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a_23_lb" connectable="0" parent="a_23" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" value="能力增强" vertex="1">
+          <mxGeometry relative="1" x="-0.1" as="geometry">
+            <mxPoint y="7" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="tl_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="1520" x="20" y="1180" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_lbl" parent="1" style="text;html=1;fontSize=11;fontStyle=1;align=left;verticalAlign=middle;fillColor=none;strokeColor=none;" value="📅 时间线" vertex="1">
+          <mxGeometry height="40" width="70" x="30" y="1185" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_done" parent="1" style="text;html=1;fontSize=10;align=center;verticalAlign=middle;fillColor=#C8E6C9;strokeColor=#4CAF50;rounded=1;fontColor=#2E7D32;fontStyle=1;" value="已完成 ✅" vertex="1">
+          <mxGeometry height="30" width="310" x="110" y="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_s5" parent="1" style="text;html=1;fontSize=9;align=center;verticalAlign=middle;fillColor=#FFE0B2;strokeColor=#FF9800;rounded=1;fontColor=#E65100;" value="S5 W1‑2" vertex="1">
+          <mxGeometry height="30" width="85" x="627" y="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_s6" parent="1" style="text;html=1;fontSize=9;align=center;verticalAlign=middle;fillColor=#FFE0B2;strokeColor=#FF9800;rounded=1;fontColor=#E65100;" value="S6 W3‑4" vertex="1">
+          <mxGeometry height="30" width="85" x="722" y="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_s7" parent="1" style="text;html=1;fontSize=9;align=center;verticalAlign=middle;fillColor=#FFE0B2;strokeColor=#FF9800;rounded=1;fontColor=#E65100;" value="S7 W5‑7" vertex="1">
+          <mxGeometry height="30" width="110" x="817" y="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_s8" parent="1" style="text;html=1;fontSize=9;align=center;verticalAlign=middle;fillColor=#BBDEFB;strokeColor=#2196F3;rounded=1;fontColor=#1565C0;" value="S8 W8‑10" vertex="1">
+          <mxGeometry height="30" width="110" x="1171" y="1193" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_s9" parent="1" style="text;html=1;fontSize=9;align=center;verticalAlign=middle;fillColor=#BBDEFB;strokeColor=#2196F3;rounded=1;fontColor=#1565C0;" value="S9 W11‑13" vertex="1">
+          <mxGeometry height="30" width="110" x="1291" y="1193" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_m1" parent="1" style="text;html=1;fontSize=8;align=center;verticalAlign=middle;fillColor=#FF9800;strokeColor=none;rounded=1;fontColor=#FFFFFF;fontStyle=1;" value="M1" vertex="1">
+          <mxGeometry height="24" width="24" x="712" y="1193" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_m2" parent="1" style="text;html=1;fontSize=8;align=center;verticalAlign=middle;fillColor=#FF9800;strokeColor=none;rounded=1;fontColor=#FFFFFF;fontStyle=1;" value="M2" vertex="1">
+          <mxGeometry height="24" width="24" x="807" y="1193" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_m3" parent="1" style="text;html=1;fontSize=8;align=center;verticalAlign=middle;fillColor=#FF9800;strokeColor=none;rounded=1;fontColor=#FFFFFF;fontStyle=1;" value="M3" vertex="1">
+          <mxGeometry height="24" width="24" x="916" y="1193" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_m4" parent="1" style="text;html=1;fontSize=8;align=center;verticalAlign=middle;fillColor=#2196F3;strokeColor=none;rounded=1;fontColor=#FFFFFF;fontStyle=1;" value="M4" vertex="1">
+          <mxGeometry height="24" width="24" x="1281" y="1196" as="geometry" />
+        </mxCell>
+        <mxCell id="tl_m5" parent="1" style="text;html=1;fontSize=8;align=center;verticalAlign=middle;fillColor=#2196F3;strokeColor=none;rounded=1;fontColor=#FFFFFF;fontStyle=1;" value="M5" vertex="1">
+          <mxGeometry height="24" width="24" x="1401" y="1196" as="geometry" />
+        </mxCell>
+        <mxCell id="5LtJfkAf6Ei6ulfYZjt7-2" edge="1" parent="1" source="p3_s9a_d" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="p3_s9a_d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

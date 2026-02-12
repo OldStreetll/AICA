@@ -50,8 +50,8 @@ namespace AICA.Options
         [Category("Agent Configuration")]
         [DisplayName("Max Agent Iterations")]
         [Description("Maximum number of iterations for the Agent loop")]
-        [DefaultValue(50)]
-        public int MaxAgentIterations { get; set; } = 50;
+        [DefaultValue(25)]
+        public int MaxAgentIterations { get; set; } = 25;
 
         [Category("Agent Configuration")]
         [DisplayName("Request Timeout (seconds)")]
