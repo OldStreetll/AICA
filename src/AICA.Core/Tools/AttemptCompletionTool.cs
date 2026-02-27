@@ -42,7 +42,7 @@ namespace AICA.Core.Tools
             };
         }
 
-        public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
+        public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
             if (!call.Arguments.TryGetValue("result", out var resultObj) || resultObj == null)
                 return Task.FromResult(ToolResult.Fail("Missing required parameter: result"));
@@ -58,15 +58,15 @@ namespace AICA.Core.Tools
                 command = cmdObj.ToString();
             }
 
-            // Build the completion message that will be shown to the user
-            var completionMessage = result;
-            if (!string.IsNullOrWhiteSpace(command))
+            // Create structured completion result
+            var completionResult = new CompletionResult
             {
-                completionMessage += "\n\nSuggested command to verify:\n" + command;
-            }
+                Summary = result,
+                Command = command
+            };
 
-            // Return TASK_COMPLETED — the AgentExecutor checks for this and ends the loop
-            return Task.FromResult(ToolResult.Ok("TASK_COMPLETED:" + completionMessage));
+            // Return serialized completion result
+            return Task.FromResult(ToolResult.Ok(completionResult.Serialize()));
         }
 
         public Task HandlePartialAsync(ToolCall call, IUIContext ui, CancellationToken ct = default)

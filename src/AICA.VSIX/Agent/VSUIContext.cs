@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.VSIX.Dialogs;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 
@@ -143,6 +145,36 @@ namespace AICA.Agent
 
             var diffText = diff > 0 ? $"+{diff}" : diff.ToString();
             return $"Lines: {originalLines} → {modifiedLines} ({diffText})\n\nApply these changes?";
+        }
+
+        public async Task<FollowupQuestionResult> ShowFollowupQuestionAsync(
+            string question,
+            List<QuestionOption> options,
+            bool allowCustomInput = false,
+            CancellationToken ct = default)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+            try
+            {
+                var dialog = new FollowupQuestionDialog(question, options, allowCustomInput);
+                var result = dialog.ShowDialog();
+
+                if (result == true)
+                {
+                    return dialog.Result;
+                }
+                else
+                {
+                    return FollowupQuestionResult.Canceled();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log error and return cancelled
+                System.Diagnostics.Debug.WriteLine($"Error showing followup question: {ex}");
+                return FollowupQuestionResult.Canceled();
+            }
         }
     }
 }

@@ -41,7 +41,7 @@ namespace AICA.Core.Tools
             };
         }
 
-        public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
+        public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
             string explanation = null;
             if (call.Arguments.TryGetValue("explanation", out var explObj) && explObj != null)

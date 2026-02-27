@@ -2,6 +2,7 @@ using Markdig;
 using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,6 +45,7 @@ namespace AICA.ToolWindows
                 .Build();
 
             ChatBrowser.LoadCompleted += ChatBrowser_LoadCompleted;
+            ChatBrowser.Navigating += ChatBrowser_Navigating;
             ChatBrowser.NavigateToString(BuildPageHtml(string.Empty));
 
             Loaded += ChatToolWindowControl_Loaded;
@@ -121,6 +123,33 @@ namespace AICA.ToolWindows
             _isBrowserReady = true;
         }
 
+        private void ChatBrowser_Navigating(object sender, System.Windows.Navigation.NavigatingCancelEventArgs e)
+        {
+            // Intercept feedback navigation
+            if (e.Uri != null && e.Uri.Scheme == "aica" && e.Uri.Host == "feedback")
+            {
+                e.Cancel = true; // Prevent actual navigation
+
+                try
+                {
+                    // Parse query parameters
+                    var query = e.Uri.Query.TrimStart('?');
+                    var parameters = System.Web.HttpUtility.ParseQueryString(query);
+                    var messageIdStr = parameters["messageId"];
+                    var feedback = parameters["feedback"];
+
+                    if (int.TryParse(messageIdStr, out int messageId))
+                    {
+                        RecordFeedback(messageId, feedback);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Error handling feedback navigation: {ex.Message}");
+                }
+            }
+        }
+
         public void UpdateContent(string content)
         {
             var html = Markdig.Markdown.ToHtml(content ?? string.Empty, _markdownPipeline);
@@ -175,6 +204,7 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new AttemptCompletionTool());
             _toolDispatcher.RegisterTool(new CondenseTool());
             _toolDispatcher.RegisterTool(new ListCodeDefinitionsTool());
+            _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
 
             // Initialize LLM client
             var clientOptions = new LLMClientOptions
@@ -234,11 +264,29 @@ namespace AICA.ToolWindows
         private void RenderConversation(string streamingContent = null)
         {
             var bodyBuilder = new StringBuilder();
-            
-            foreach (var message in _conversation)
+
+            for (int i = 0; i < _conversation.Count; i++)
             {
+                var message = _conversation[i];
                 var roleClass = message.Role == "user" ? "user" : "assistant";
                 var roleName = message.Role == "user" ? "You" : "AI";
+
+                // Check if this is a completion message
+                if (message.Role == "assistant" && !string.IsNullOrEmpty(message.CompletionData))
+                {
+                    var completionResult = CompletionResult.Deserialize(message.CompletionData);
+                    if (completionResult != null)
+                    {
+                        // Render as completion card
+                        bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
+                        bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
+                        bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+                        bodyBuilder.AppendLine("</div>");
+                        continue;
+                    }
+                }
+
+                // Regular message rendering
                 var html = Markdig.Markdown.ToHtml(message.Content ?? string.Empty, _markdownPipeline);
                 bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{html}</div></div>");
             }
@@ -365,6 +413,10 @@ namespace AICA.ToolWindows
             var toolOutputBuilder = new StringBuilder();
             var hasToolCalls = false;
 
+            // Add user message to history BEFORE executing agent
+            // This ensures the next turn can see this message in previousMessages
+            _llmHistory.Add(ChatMessage.User(userMessage));
+
             // Show immediate feedback while waiting for LLM's first token (TTFT)
             RenderConversation("💭 *思考中...*");
 
@@ -378,7 +430,13 @@ namespace AICA.ToolWindows
             // sync context, causing deadlocks when tool execution tries to post back.
             await System.Threading.Tasks.Task.Run(async () =>
             {
-                await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, _currentCts.Token))
+                // Pass previous conversation history to Agent (excluding current user message which is already in history)
+                // We pass all messages except the system prompt (which will be regenerated)
+                var previousMessages = _llmHistory
+                    .Where(m => m.Role != ChatRole.System)
+                    .ToList();
+
+                await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, previousMessages, _currentCts.Token))
                 {
                     // Marshal UI updates to the UI thread via Dispatcher.Invoke.
                     // This blocks the background thread until the UI processes the update,
@@ -431,6 +489,13 @@ namespace AICA.ToolWindows
                                 break;
 
                             case AgentStepType.Complete:
+                                // Try to parse CompletionResult from step.Text
+                                CompletionResult completionResult = null;
+                                if (!string.IsNullOrEmpty(step.Text) && step.Text.StartsWith("TASK_COMPLETED:"))
+                                {
+                                    completionResult = CompletionResult.Deserialize(step.Text);
+                                }
+
                                 // Build final content: for tool-assisted responses, include
                                 // the detailed text the LLM generated after seeing tool results.
                                 string finalContent;
@@ -439,7 +504,7 @@ namespace AICA.ToolWindows
                                     // Prefer responseBuilder (detailed LLM text from post-tool iterations)
                                     // over step.Text (brief attempt_completion summary).
                                     var mainText = responseBuilder.ToString().Trim();
-                                    var completionText = step.Text?.Trim() ?? "";
+                                    var completionText = completionResult?.Summary?.Trim() ?? step.Text?.Trim() ?? "";
 
                                     string textContent;
                                     if (!string.IsNullOrEmpty(mainText))
@@ -478,7 +543,15 @@ namespace AICA.ToolWindows
 
                                 if (!string.IsNullOrWhiteSpace(finalContent))
                                 {
-                                    _conversation.Add(new ConversationMessage { Role = "assistant", Content = finalContent });
+                                    var message = new ConversationMessage
+                                    {
+                                        Role = "assistant",
+                                        Content = finalContent,
+                                        CompletionData = completionResult != null ? step.Text : null
+                                    };
+                                    _conversation.Add(message);
+                                    // Also add to LLM history for next turn's context
+                                    _llmHistory.Add(ChatMessage.Assistant(finalContent));
                                 }
                                 RenderConversation();
                                 break;
@@ -650,6 +723,10 @@ namespace AICA.ToolWindows
             pre code {{ background: #f6f8fa; color: #1e1e1e; }}
             .message {{ background: #f5f7fb; border-color: #d0d7de; }}
             .message.user {{ background: #e8f1ff; border-color: #b7cff9; }}
+            .completion-card {{ background: #e8f5e9; border-color: #81c784; }}
+            .feedback-btn {{ background: #f5f5f5; color: #333; }}
+            .feedback-btn:hover {{ background: #e0e0e0; }}
+            .feedback-btn.selected {{ background: #4caf50; color: white; }}
         }}
         .message {{
             margin: 0 0 12px 0; padding: 10px 12px;
@@ -658,6 +735,49 @@ namespace AICA.ToolWindows
         }}
         .message.user {{ background: #0e3a5c; border-color: #2d5f8a; }}
         .message.streaming {{ opacity: 0.85; }}
+        .completion-card {{
+            background: #1b3a1b; border-color: #4caf50;
+            border-left: 4px solid #4caf50;
+        }}
+        .completion-header {{
+            font-size: 13px; font-weight: 600;
+            color: #81c784; margin-bottom: 8px;
+            display: flex; align-items: center; gap: 6px;
+        }}
+        .completion-icon {{ font-size: 16px; }}
+        .completion-command {{
+            margin-top: 10px; padding: 8px 10px;
+            background: rgba(0,0,0,0.2); border-radius: 4px;
+            font-family: Consolas, monospace; font-size: 12px;
+        }}
+        .feedback-section {{
+            margin-top: 12px; padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }}
+        .feedback-label {{
+            font-size: 12px; color: #9ca3af;
+            margin-bottom: 6px;
+        }}
+        .feedback-buttons {{
+            display: flex; gap: 8px;
+        }}
+        .feedback-btn {{
+            padding: 6px 14px; border-radius: 4px;
+            border: 1px solid #3c3c3c;
+            background: #2d2d30; color: #d4d4d4;
+            cursor: pointer; font-size: 12px;
+            transition: all 0.2s;
+        }}
+        .feedback-btn:hover {{
+            background: #3c3c3c; border-color: #4caf50;
+        }}
+        .feedback-btn.selected {{
+            background: #4caf50; color: white;
+            border-color: #4caf50;
+        }}
+        .feedback-btn.unsatisfied.selected {{
+            background: #f44336; border-color: #f44336;
+        }}
         .role {{
             font-size: 11px; letter-spacing: 0.03em;
             text-transform: uppercase; color: #9ca3af; margin-bottom: 6px;
@@ -677,6 +797,29 @@ namespace AICA.ToolWindows
         a:hover {{ text-decoration: underline; }}
         h1, h2, h3, h4, h5, h6 {{ margin-top: 1.4em; margin-bottom: 0.6em; }}
     </style>
+    <script>
+        function provideFeedback(messageId, feedback) {{
+            // Toggle selection
+            var btns = document.querySelectorAll('[data-message-id=""' + messageId + '""]');
+            var currentFeedback = 'none';
+            btns.forEach(function(btn) {{
+                if (btn.dataset.feedback === feedback) {{
+                    if (btn.classList.contains('selected')) {{
+                        btn.classList.remove('selected');
+                        currentFeedback = 'none';
+                    }} else {{
+                        btn.classList.add('selected');
+                        currentFeedback = feedback;
+                    }}
+                }} else {{
+                    btn.classList.remove('selected');
+                }}
+            }});
+
+            // Notify host via navigation (will be intercepted)
+            window.location.href = 'aica://feedback?messageId=' + messageId + '&feedback=' + currentFeedback;
+        }}
+    </script>
 </head>
 <body>
 <div id=""chat-log"" class=""container"">
@@ -690,6 +833,76 @@ namespace AICA.ToolWindows
         {
             public string Role { get; set; }
             public string Content { get; set; }
+            public string CompletionData { get; set; } // Stores serialized CompletionResult
+        }
+
+        /// <summary>
+        /// Build HTML for a completion card with feedback buttons
+        /// </summary>
+        private string BuildCompletionCardHtml(string summary, string command, int messageIndex)
+        {
+            var html = new StringBuilder();
+            html.AppendLine("<div class=\"completion-card\">");
+            html.AppendLine("  <div class=\"completion-header\">");
+            html.AppendLine("    <span class=\"completion-icon\">✅</span>");
+            html.AppendLine("    <span>Task Completed</span>");
+            html.AppendLine("  </div>");
+            html.AppendLine($"  <div class=\"content\">{Markdown.ToHtml(summary, _markdownPipeline)}</div>");
+
+            if (!string.IsNullOrWhiteSpace(command))
+            {
+                html.AppendLine("  <div class=\"completion-command\">");
+                html.AppendLine($"    <strong>Suggested command:</strong> <code>{System.Web.HttpUtility.HtmlEncode(command)}</code>");
+                html.AppendLine("  </div>");
+            }
+
+            html.AppendLine("  <div class=\"feedback-section\">");
+            html.AppendLine("    <div class=\"feedback-label\">Was this helpful?</div>");
+            html.AppendLine("    <div class=\"feedback-buttons\">");
+            html.AppendLine($"      <button class=\"feedback-btn\" data-message-id=\"{messageIndex}\" data-feedback=\"satisfied\" onclick=\"provideFeedback({messageIndex}, 'satisfied')\">👍 Yes</button>");
+            html.AppendLine($"      <button class=\"feedback-btn unsatisfied\" data-message-id=\"{messageIndex}\" data-feedback=\"unsatisfied\" onclick=\"provideFeedback({messageIndex}, 'unsatisfied')\">👎 No</button>");
+            html.AppendLine("    </div>");
+            html.AppendLine("  </div>");
+            html.AppendLine("</div>");
+
+            return html.ToString();
+        }
+
+        /// <summary>
+        /// Record user feedback on task completion
+        /// </summary>
+        public void RecordFeedback(int messageIndex, string feedback)
+        {
+            try
+            {
+                if (messageIndex < 0 || messageIndex >= _conversation.Count)
+                    return;
+
+                var message = _conversation[messageIndex];
+                if (string.IsNullOrEmpty(message.CompletionData))
+                    return;
+
+                var completionResult = CompletionResult.Deserialize(message.CompletionData);
+                if (completionResult == null)
+                    return;
+
+                // Update feedback
+                if (feedback == "satisfied")
+                    completionResult.Feedback = CompletionFeedback.Satisfied;
+                else if (feedback == "unsatisfied")
+                    completionResult.Feedback = CompletionFeedback.Unsatisfied;
+                else
+                    completionResult.Feedback = CompletionFeedback.None;
+
+                // Log feedback
+                System.Diagnostics.Debug.WriteLine($"[AICA] User feedback on completion: {completionResult.Feedback}");
+
+                // TODO: Persist feedback to storage or analytics
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Error recording feedback: {ex.Message}");
+            }
         }
     }
 }

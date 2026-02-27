@@ -37,7 +37,7 @@ namespace AICA.Core.Tools
             };
         }
 
-        public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
+        public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
             if (!call.Arguments.TryGetValue("summary", out var summaryObj) || summaryObj == null)
                 return Task.FromResult(ToolResult.Fail("Missing required parameter: summary"));

@@ -26,6 +26,12 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("You help developers with code generation, editing, refactoring, testing, debugging, and code understanding.");
             _builder.AppendLine("You operate primarily in an offline/private environment. Do not assume internet access.");
             _builder.AppendLine();
+            _builder.AppendLine("## CRITICAL: Focus on Current Request");
+            _builder.AppendLine("- **ALWAYS respond to the MOST RECENT user message**, not previous messages in the conversation history.");
+            _builder.AppendLine("- The conversation history is provided for context, but your PRIMARY task is to address the LATEST user request.");
+            _builder.AppendLine("- If the latest request is completely different from previous requests, switch tasks immediately.");
+            _builder.AppendLine("- Example: If the user previously asked about code optimization, but now asks to read a file, ONLY read the file - do NOT continue optimizing code.");
+            _builder.AppendLine();
         }
 
         public SystemPromptBuilder AddTools(IEnumerable<ToolDefinition> tools)
@@ -80,6 +86,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("### Tool Calling");
             _builder.AppendLine("- ALWAYS use the function calling API to invoke tools. NEVER output tool calls as text, XML, or JSON in your response.");
             _builder.AppendLine("- **CRITICAL: Do NOT generate answers or descriptions BEFORE calling tools. Call the tool FIRST, then describe the results AFTER you receive the tool output.** For example, if the user asks to list a directory, call `list_dir` immediately — do NOT write out the directory contents from imagination.");
+            _builder.AppendLine("- **CRITICAL: After calling tools, ONLY describe the results of THOSE tools in relation to the CURRENT user request. Do NOT continue discussing or analyzing previous tasks.** For example, if the user previously asked about code optimization but now asks to read a file, ONLY summarize the file contents - do NOT provide optimization suggestions.");
             _builder.AppendLine("- Call tools directly when you know what to do. Do not ask for permission for read-only operations.");
             _builder.AppendLine("- When a coding task is complete, call the `attempt_completion` tool with a result summary.");
             _builder.AppendLine("- Keep your text output minimal before tool calls. A brief one-line plan is acceptable, but never write the expected results before receiving actual tool output.");
@@ -111,6 +118,16 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- Prefer non-destructive commands. Avoid `rm -rf`, `del /s`, `format`, etc.");
             _builder.AppendLine("- Always specify the appropriate working directory via the tool parameter.");
             _builder.AppendLine();
+            _builder.AppendLine("### CRITICAL: Platform-Specific Commands");
+            _builder.AppendLine("- **NEVER use Unix/Linux commands (head, tail, grep, find, cat, ls, etc.) on Windows systems.**");
+            _builder.AppendLine("- **ALWAYS use the built-in tools instead of shell commands for file operations:**");
+            _builder.AppendLine("  - Use `grep_search` instead of `grep` or `rg` commands");
+            _builder.AppendLine("  - Use `find_by_name` instead of `find` or `dir /s` commands");
+            _builder.AppendLine("  - Use `read_file` instead of `cat`, `type`, `head`, or `tail` commands");
+            _builder.AppendLine("  - Use `list_dir` instead of `ls` or `dir` commands");
+            _builder.AppendLine("- The built-in tools are cross-platform, faster, and provide better error handling.");
+            _builder.AppendLine("- Only use `run_command` for operations that cannot be done with built-in tools (e.g., `dotnet build`, `git status`, `npm install`).");
+            _builder.AppendLine();
 
             // Anti-hallucination rules
             _builder.AppendLine("### Anti-Hallucination (CRITICAL)");
@@ -133,7 +150,8 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("### Search Strategy");
             _builder.AppendLine("- Start searching in the most specific directory first (e.g., if asked about `src/App`, search there, not the entire project).");
             _builder.AppendLine("- If a file is not found, check the parent directory listing to see what IS available before searching elsewhere.");
-            _builder.AppendLine("- Prefer `grep_search` and `find_by_name` over `run_command` for searching files. The built-in tools are faster and safer.");
+            _builder.AppendLine("- **ALWAYS use `grep_search` and `find_by_name` for searching files. NEVER use `run_command` with grep/find/head/tail.**");
+            _builder.AppendLine("- The built-in search tools are cross-platform and work reliably on both Windows and Unix systems.");
             _builder.AppendLine();
 
             // Safety rules

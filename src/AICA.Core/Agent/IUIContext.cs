@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -37,5 +38,19 @@ namespace AICA.Core.Agent
         /// Show diff preview for file changes
         /// </summary>
         Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
+
+        /// <summary>
+        /// Show a followup question with multiple choice options and optional custom input
+        /// </summary>
+        /// <param name="question">The question to ask the user</param>
+        /// <param name="options">List of predefined options</param>
+        /// <param name="allowCustomInput">Whether to allow custom text input</param>
+        /// <param name="ct">Cancellation token</param>
+        /// <returns>The user's answer or null if cancelled</returns>
+        Task<FollowupQuestionResult> ShowFollowupQuestionAsync(
+            string question,
+            List<QuestionOption> options,
+            bool allowCustomInput = false,
+            CancellationToken ct = default);
     }
 }

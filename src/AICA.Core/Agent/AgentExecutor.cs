@@ -49,10 +49,16 @@ namespace AICA.Core.Agent
         /// <summary>
         /// Execute a user request through the Agent loop
         /// </summary>
+        /// <param name="userRequest">The current user message</param>
+        /// <param name="context">Agent context for workspace operations</param>
+        /// <param name="uiContext">UI context for user interactions</param>
+        /// <param name="previousMessages">Previous conversation history (excluding system prompt)</param>
+        /// <param name="ct">Cancellation token</param>
         public async IAsyncEnumerable<AgentStep> ExecuteAsync(
             string userRequest,
             IAgentContext context,
             IUIContext uiContext,
+            List<ChatMessage> previousMessages = null,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             // Build system prompt with tool definitions
@@ -63,11 +69,27 @@ namespace AICA.Core.Agent
                 _customInstructions,
                 context?.SourceRoots);
 
-            var conversationHistory = new List<ChatMessage>
+            // Build conversation history: system prompt + previous messages
+            var conversationHistory = new List<ChatMessage>();
+
+            // Always start with system prompt
+            conversationHistory.Add(ChatMessage.System(systemPrompt));
+
+            // Add previous conversation history (if any)
+            // Note: previousMessages should already include the current user message
+            if (previousMessages != null && previousMessages.Count > 0)
             {
-                ChatMessage.System(systemPrompt),
-                ChatMessage.User(userRequest)
-            };
+                // Filter out old system prompts from previous messages
+                var filteredPrevious = previousMessages
+                    .Where(m => m.Role != ChatRole.System)
+                    .ToList();
+                conversationHistory.AddRange(filteredPrevious);
+            }
+            else
+            {
+                // If no previous messages, add the current user request
+                conversationHistory.Add(ChatMessage.User(userRequest));
+            }
 
             _taskState = new TaskState { MaxConsecutiveMistakes = 3 };
 
@@ -442,8 +464,8 @@ namespace AICA.Core.Agent
                         && result.Content != null && result.Content.StartsWith("TASK_COMPLETED:"))
                     {
                         _taskState.IsCompleted = true;
-                        var completionMessage = result.Content.Substring("TASK_COMPLETED:".Length);
-                        yield return AgentStep.Complete(completionMessage);
+                        // Pass the full serialized result to the UI layer for parsing
+                        yield return AgentStep.Complete(result.Content);
                         yield break;
                     }
 
@@ -741,6 +763,7 @@ namespace AICA.Core.Agent
             string userRequest,
             IAgentContext context,
             IUIContext uiContext,
+            List<ChatMessage> previousMessages = null,
             CancellationToken ct = default);
 
         void Abort();

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -53,7 +54,7 @@ namespace AICA.Core.Tools
             };
         }
 
-        public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
             if (!call.Arguments.TryGetValue("command", out var cmdObj) || cmdObj == null)
                 return ToolResult.Fail("Missing required parameter: command");
@@ -61,6 +62,22 @@ namespace AICA.Core.Tools
             var command = cmdObj.ToString().Trim();
             if (string.IsNullOrEmpty(command))
                 return ToolResult.Fail("Command cannot be empty");
+
+            // Detect common Unix commands on Windows and provide helpful error
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                var unixCommands = new[] { "head", "tail", "grep", "find", "cat", "ls", "rm", "cp", "mv", "chmod", "chown" };
+                var firstWord = command.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();
+
+                if (firstWord != null && unixCommands.Contains(firstWord))
+                {
+                    return ToolResult.Fail($"Unix command '{firstWord}' is not available on Windows. Please use the appropriate built-in tool instead:\n" +
+                        "- Use 'grep_search' instead of 'grep'\n" +
+                        "- Use 'find_by_name' instead of 'find'\n" +
+                        "- Use 'read_file' instead of 'cat', 'head', or 'tail'\n" +
+                        "- Use 'list_dir' instead of 'ls'");
+                }
+            }
 
             // Parse optional parameters
             var cwd = context.WorkingDirectory;

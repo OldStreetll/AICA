@@ -54,6 +54,9 @@
     <Compile Include="Options\SecurityOptions.cs" />
     <Compile Include="Agent\VSAgentContext.cs" />
     <Compile Include="Agent\VSUIContext.cs" />
+    <Compile Include="Dialogs\FollowupQuestionDialog.xaml.cs">
+      <DependentUpon>FollowupQuestionDialog.xaml</DependentUpon>
+    </Compile>
     <Compile Include="ToolWindows\ChatToolWindow.cs" />
     <Compile Include="ToolWindows\ChatToolWindowControl.xaml.cs">
       <DependentUpon>ChatToolWindowControl.xaml</DependentUpon>
@@ -97,11 +100,13 @@
     <Reference Include="PresentationFramework" />
     <Reference Include="System" />
     <Reference Include="System.Design" />
+    <Reference Include="System.Web" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Xaml" />
     <Reference Include="WindowsBase" />
   </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Community.VisualStudio.VSCT" Version="16.0.29.6" PrivateAssets="all" />
     <PackageReference Include="Community.VisualStudio.Toolkit.17" Version="17.0.533" ExcludeAssets="Runtime">
@@ -114,6 +119,10 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Page Include="Dialogs\FollowupQuestionDialog.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
     <Page Include="ToolWindows\ChatToolWindowControl.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>

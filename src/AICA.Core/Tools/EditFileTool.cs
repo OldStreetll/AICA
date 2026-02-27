@@ -51,7 +51,7 @@ namespace AICA.Core.Tools
             };
         }
 
-        public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
             // Validate required parameters
             if (!call.Arguments.TryGetValue("file_path", out var pathObj) || pathObj == null)

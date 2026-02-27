@@ -26,7 +26,7 @@ namespace AICA.Core.Agent
         /// <summary>
         /// Execute the tool with the given parameters
         /// </summary>
-        Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default);
+        Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default);
 
         /// <summary>
         /// Handle partial streaming updates (optional)

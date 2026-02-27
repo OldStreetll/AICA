@@ -59,7 +59,7 @@ namespace AICA.Core.Tools
             };
         }
 
-        public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, CancellationToken ct = default)
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
             if (!call.Arguments.TryGetValue("pattern", out var patternObj) || patternObj == null)
                 return ToolResult.Fail("Missing required parameter: pattern");
