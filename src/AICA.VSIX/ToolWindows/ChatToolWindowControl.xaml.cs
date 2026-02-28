@@ -205,6 +205,7 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new CondenseTool());
             _toolDispatcher.RegisterTool(new ListCodeDefinitionsTool());
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
+            _toolDispatcher.RegisterTool(new ListProjectsTool());
 
             // Initialize LLM client
             var clientOptions = new LLMClientOptions

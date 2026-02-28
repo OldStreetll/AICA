@@ -110,6 +110,7 @@ namespace AICA.Core.Prompt
 
             // Tool usage tips
             _builder.AppendLine("### Tool Usage Tips");
+            _builder.AppendLine("- `list_projects`: Use this to understand the solution structure. Shows all projects, their types, file counts, and filters. Call this when you need to know what projects exist or understand the project organization.");
             _builder.AppendLine("- `list_dir`: Use `recursive=true` when the user asks for 'full structure', 'complete tree', '完整结构', '目录树' etc. Set `max_depth` to control depth (default 3, max 10).");
             _builder.AppendLine("- `list_code_definition_names`: Use this to understand code structure (classes, methods, properties) without reading entire files. Ideal for project overview requests.");
             _builder.AppendLine("- `grep_search`: Prefer this over `read_file` when looking for specific patterns across multiple files.");

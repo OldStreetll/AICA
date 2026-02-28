@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using AICA.Core.Workspace;
 
 namespace AICA.Core.Agent
 {
@@ -85,6 +86,12 @@ namespace AICA.Core.Agent
         /// Returns the absolute path if found, null otherwise.
         /// </summary>
         string ResolveDirectoryPath(string requestedPath);
+
+        /// <summary>
+        /// Get all projects in the solution.
+        /// Returns a dictionary: project name → ProjectInfo.
+        /// </summary>
+        Dictionary<string, ProjectInfo> GetProjects();
     }
 
     /// <summary>

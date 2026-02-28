@@ -424,6 +424,11 @@ namespace AICA.Agent
             return _pathResolver?.ResolveDirectory(requestedPath);
         }
 
+        public Dictionary<string, ProjectInfo> GetProjects()
+        {
+            return _sourceIndex?.Projects ?? new Dictionary<string, ProjectInfo>();
+        }
+
         private string GetFullPath(string path)
         {
             if (string.IsNullOrEmpty(path) || path == "." || path == "./" || path == "/" || path == "\\")
