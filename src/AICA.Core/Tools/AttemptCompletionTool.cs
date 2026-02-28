@@ -13,7 +13,7 @@ namespace AICA.Core.Tools
     public class AttemptCompletionTool : IAgentTool
     {
         public string Name => "attempt_completion";
-        public string Description => "Signal that the task is complete and present the final result to the user. Use this when you have finished all work. Include a comprehensive summary of what was accomplished.";
+        public string Description => "REQUIRED: Signal task completion and present final results. You MUST call this tool when you finish ANY task (file creation, editing, analysis, etc.). Include a comprehensive summary of what was accomplished and optionally suggest a verification command.";
 
         public ToolDefinition GetDefinition()
         {

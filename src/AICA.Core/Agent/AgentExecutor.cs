@@ -384,8 +384,11 @@ namespace AICA.Core.Agent
                     }
 
                     conversationHistory.Add(ChatMessage.User(
-                        "You did not use any tools in your response. If the task is complete, please use the attempt_completion tool to present your result. Otherwise, continue using tools to complete the task."));
-                    System.Diagnostics.Debug.WriteLine($"[AICA] No tools, nudging (count={_taskState.ConsecutiveNoToolCount})");
+                        "You did not use any tools in your response. " +
+                        "If you have completed the task (created/edited files or finished the work), you MUST call the `attempt_completion` tool now. " +
+                        "If the task is not complete, continue using tools to finish it. " +
+                        "Do NOT just write a summary - call the appropriate tool."));
+                    System.Diagnostics.Debug.WriteLine($"[AICA] No tools, nudging to use attempt_completion (count={_taskState.ConsecutiveNoToolCount})");
                     continue;
                 }
 
@@ -404,16 +407,30 @@ namespace AICA.Core.Agent
                 {
                     // ── Duplicate tool call detection ──
                     // Skip tools that were already called with identical arguments
-                    // (exempt attempt_completion and condense which should always run)
+                    // (exempt attempt_completion, condense, and read_file after edit)
                     var toolSignature = GetToolCallSignature(toolCall);
+
+                    // Allow read_file to be called again if a file was edited since last read
+                    bool allowDuplicate = false;
+                    if (toolCall.Name == "read_file" && _taskState.DidEditFile)
+                    {
+                        // Check if this read_file is for a file that might have been edited
+                        allowDuplicate = true;
+                    }
+
                     if (toolCall.Name != "attempt_completion" && toolCall.Name != "condense"
+                        && !allowDuplicate
                         && !executedToolSignatures.Add(toolSignature))
                     {
                         System.Diagnostics.Debug.WriteLine($"[AICA] Skipping duplicate tool call: {toolCall.Name}");
                         _taskState.TotalToolCallCount++; // Count duplicates too for force-completion
                         var dupResult = ToolResult.Fail(
-                            $"Duplicate call: You already called {toolCall.Name} with the same arguments. " +
-                            "Use the previous result instead of calling again. If you need different information, change the parameters.");
+                            $"Duplicate call detected: You already called {toolCall.Name} with the same arguments earlier in this conversation.\n\n" +
+                            $"What to do:\n" +
+                            $"1. Use the previous result from your conversation history\n" +
+                            $"2. If you need updated information, add/change a parameter (e.g., different offset/limit for read_file)\n" +
+                            $"3. If the file was modified, the system will allow re-reading automatically\n\n" +
+                            $"This check prevents unnecessary duplicate operations and improves efficiency.");
                         yield return AgentStep.ToolStart(toolCall);
                         yield return AgentStep.WithToolResult(toolCall, dupResult);
                         conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, $"Error: {dupResult.Error}"));
@@ -500,6 +517,17 @@ namespace AICA.Core.Agent
                         resultContent = resultContent.Substring(0, 4000) + "\n... (truncated, total length: " + resultContent.Length + " chars)";
                     }
                     conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, resultContent));
+                }
+
+                // ── Check if task should be completed ──
+                // If files were edited/created but attempt_completion was not called, remind the AI
+                bool hadFileOperations = toolCalls.Any(tc => tc.Name == "write_to_file" || tc.Name == "edit");
+                bool hadAttemptCompletion = toolCalls.Any(tc => tc.Name == "attempt_completion");
+
+                if (hadFileOperations && !hadAttemptCompletion)
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] File operations detected but no attempt_completion. Will remind AI in next iteration.");
+                    // Don't add reminder immediately - let AI respond first, then check if it calls attempt_completion
                 }
 
                 // After tool execution, if the original response was truncated (finish_reason=length),

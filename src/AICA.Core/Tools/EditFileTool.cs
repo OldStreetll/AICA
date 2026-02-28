@@ -86,7 +86,22 @@ namespace AICA.Core.Tools
 
             // Check old_string exists
             if (!content.Contains(oldString))
-                return ToolResult.Fail($"old_string not found in file. Make sure the string matches exactly including whitespace.");
+            {
+                // Provide detailed debugging information
+                var preview = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
+                var oldPreview = oldString.Length > 200 ? oldString.Substring(0, 200) + "..." : oldString;
+
+                return ToolResult.Fail(
+                    $"old_string not found in file.\n\n" +
+                    $"Possible reasons:\n" +
+                    $"1. Whitespace mismatch (spaces vs tabs)\n" +
+                    $"2. Line ending mismatch (CRLF vs LF)\n" +
+                    $"3. File was modified after you read it\n" +
+                    $"4. The string you're looking for doesn't exist\n\n" +
+                    $"Searching for ({oldString.Length} chars):\n{oldPreview}\n\n" +
+                    $"File content preview ({content.Length} chars total):\n{preview}\n\n" +
+                    $"Suggestion: Use read_file to see the current file content, then try again with the exact string.");
+            }
 
             // Check uniqueness (unless replace_all)
             if (!replaceAll)

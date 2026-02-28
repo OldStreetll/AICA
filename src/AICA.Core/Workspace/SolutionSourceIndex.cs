@@ -47,6 +47,12 @@ namespace AICA.Core.Workspace
             = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// Project name → ProjectInfo (detailed project metadata)
+        /// </summary>
+        public Dictionary<string, ProjectInfo> Projects { get; }
+            = new Dictionary<string, ProjectInfo>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Total number of indexed source files.
         /// </summary>
         public int TotalFiles => AllIndexedPaths.Count;
@@ -86,13 +92,13 @@ namespace AICA.Core.Workspace
 
             try
             {
-                // Step 1: Parse .sln to find all project file paths
+                // Step 1: Parse .sln to find all project file paths and GUIDs
                 var projectPaths = ParseSolutionFile(slnPath);
 
-                // Step 2: For each project file, extract source file references
+                // Step 2: For each project file, extract source file references and create ProjectInfo
                 var allSourceFiles = new List<(string projectName, string filePath)>();
 
-                foreach (var (projName, projRelPath) in projectPaths)
+                foreach (var (projName, projRelPath, projGuid) in projectPaths)
                 {
                     var projAbsPath = Path.IsPathRooted(projRelPath)
                         ? projRelPath
@@ -103,14 +109,39 @@ namespace AICA.Core.Workspace
 
                     var ext = Path.GetExtension(projAbsPath).ToLowerInvariant();
                     List<string> files = null;
+                    Dictionary<string, List<string>> filters = null;
+
+                    // Create ProjectInfo
+                    var projectInfo = new ProjectInfo
+                    {
+                        Name = projName,
+                        ProjectFilePath = projAbsPath,
+                        ProjectType = ext.TrimStart('.'),
+                        ProjectDirectory = Path.GetDirectoryName(projAbsPath),
+                        ProjectGuid = projGuid
+                    };
 
                     if (ext == ".vcxproj")
+                    {
                         files = ParseVcxproj(projAbsPath);
+                        // Parse .filters file for C++ projects
+                        var filtersPath = projAbsPath + ".filters";
+                        if (File.Exists(filtersPath))
+                        {
+                            filters = ParseVcxprojFilters(filtersPath);
+                            projectInfo.Filters = filters;
+                        }
+                    }
                     else if (ext == ".csproj")
+                    {
                         files = ParseCsproj(projAbsPath);
+                    }
 
                     if (files != null && files.Count > 0)
                     {
+                        projectInfo.SourceFiles = files;
+                        index.Projects[projName] = projectInfo;
+
                         foreach (var f in files)
                         {
                             allSourceFiles.Add((projName, f));
@@ -301,15 +332,15 @@ namespace AICA.Core.Workspace
         #region Parsing
 
         /// <summary>
-        /// Parse a .sln file and extract project names and relative paths to .vcxproj/.csproj files.
+        /// Parse a .sln file and extract project names, relative paths, and GUIDs.
         /// </summary>
-        private static List<(string name, string path)> ParseSolutionFile(string slnPath)
+        private static List<(string name, string path, string guid)> ParseSolutionFile(string slnPath)
         {
-            var result = new List<(string, string)>();
+            var result = new List<(string, string, string)>();
 
             // Pattern: Project("{GUID}") = "Name", "RelativePath.vcxproj", "{GUID}"
             var projectPattern = new Regex(
-                @"Project\(""\{[^}]+\}""\)\s*=\s*""([^""]+)""\s*,\s*""([^""]+\.(?:vcxproj|csproj))""\s*,",
+                @"Project\(""\{[^}]+\}""\)\s*=\s*""([^""]+)""\s*,\s*""([^""]+\.(?:vcxproj|csproj))""\s*,\s*""\{([^}]+)\}""",
                 RegexOptions.IgnoreCase);
 
             var lines = File.ReadAllLines(slnPath);
@@ -320,7 +351,8 @@ namespace AICA.Core.Workspace
                 {
                     var projName = match.Groups[1].Value;
                     var projPath = match.Groups[2].Value;
-                    result.Add((projName, projPath));
+                    var projGuid = match.Groups[3].Value;
+                    result.Add((projName, projPath, projGuid));
                 }
             }
 
@@ -471,6 +503,98 @@ namespace AICA.Core.Workspace
             catch
             {
                 // Invalid path characters etc. — skip silently
+            }
+        }
+
+        /// <summary>
+        /// Parse a .vcxproj.filters file and extract filter structure.
+        /// Returns a dictionary: Filter path → List of file paths in that filter.
+        /// </summary>
+        private static Dictionary<string, List<string>> ParseVcxprojFilters(string filtersPath)
+        {
+            var filters = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var projDir = Path.GetDirectoryName(filtersPath.Replace(".filters", ""));
+
+            try
+            {
+                var doc = new XmlDocument();
+                doc.Load(filtersPath);
+
+                var nsMgr = new XmlNamespaceManager(doc.NameTable);
+                nsMgr.AddNamespace("ms", "http://schemas.microsoft.com/developer/msbuild/2003");
+
+                // Parse ClCompile elements with Filter
+                var compileNodes = doc.SelectNodes("//ms:ClCompile[@Include]", nsMgr);
+                if (compileNodes != null)
+                {
+                    foreach (XmlNode node in compileNodes)
+                    {
+                        var include = node.Attributes?["Include"]?.Value;
+                        var filterNode = node.SelectSingleNode("ms:Filter", nsMgr);
+                        var filterPath = filterNode?.InnerText ?? "No Filter";
+
+                        if (!string.IsNullOrEmpty(include))
+                        {
+                            var absPath = ResolveIncludePath(include, projDir);
+                            if (absPath != null)
+                            {
+                                if (!filters.ContainsKey(filterPath))
+                                    filters[filterPath] = new List<string>();
+                                filters[filterPath].Add(absPath);
+                            }
+                        }
+                    }
+                }
+
+                // Parse ClInclude elements with Filter
+                var includeNodes = doc.SelectNodes("//ms:ClInclude[@Include]", nsMgr);
+                if (includeNodes != null)
+                {
+                    foreach (XmlNode node in includeNodes)
+                    {
+                        var include = node.Attributes?["Include"]?.Value;
+                        var filterNode = node.SelectSingleNode("ms:Filter", nsMgr);
+                        var filterPath = filterNode?.InnerText ?? "No Filter";
+
+                        if (!string.IsNullOrEmpty(include))
+                        {
+                            var absPath = ResolveIncludePath(include, projDir);
+                            if (absPath != null)
+                            {
+                                if (!filters.ContainsKey(filterPath))
+                                    filters[filterPath] = new List<string>();
+                                filters[filterPath].Add(absPath);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Failed to parse filters {filtersPath}: {ex.Message}");
+            }
+
+            return filters;
+        }
+
+        /// <summary>
+        /// Resolve an Include path to absolute path, returns null if invalid
+        /// </summary>
+        private static string ResolveIncludePath(string includePath, string projectDir)
+        {
+            if (includePath.Contains("$(") || includePath.Contains("%("))
+                return null;
+
+            try
+            {
+                if (Path.IsPathRooted(includePath))
+                    return Path.GetFullPath(includePath);
+                else
+                    return Path.GetFullPath(Path.Combine(projectDir, includePath));
+            }
+            catch
+            {
+                return null;
             }
         }
 

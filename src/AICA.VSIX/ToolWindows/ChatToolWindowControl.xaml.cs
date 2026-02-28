@@ -277,9 +277,18 @@ namespace AICA.ToolWindows
                     var completionResult = CompletionResult.Deserialize(message.CompletionData);
                     if (completionResult != null)
                     {
-                        // Render as completion card
+                        // Render message with tool logs AND completion card
                         bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
                         bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
+
+                        // First, render the tool logs and any text content
+                        if (!string.IsNullOrEmpty(message.Content))
+                        {
+                            var contentHtml = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
+                            bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
+                        }
+
+                        // Then, render the completion card
                         bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
                         bodyBuilder.AppendLine("</div>");
                         continue;
@@ -501,8 +510,10 @@ namespace AICA.ToolWindows
                                 string finalContent;
                                 if (hasToolCalls)
                                 {
-                                    // Prefer responseBuilder (detailed LLM text from post-tool iterations)
-                                    // over step.Text (brief attempt_completion summary).
+                                    // Include tool output logs BEFORE the completion summary
+                                    var toolLogs = toolOutputBuilder.ToString();
+
+                                    // Get the completion summary
                                     var mainText = responseBuilder.ToString().Trim();
                                     var completionText = completionResult?.Summary?.Trim() ?? step.Text?.Trim() ?? "";
 
@@ -522,8 +533,9 @@ namespace AICA.ToolWindows
                                         textContent = "";
                                     }
 
-                                    finalContent = (!string.IsNullOrEmpty(textContent) ? textContent + "\n" : "")
-                                        + toolOutputBuilder.ToString();
+                                    // Build final content: tool logs + text content
+                                    // This ensures users can see what tools were called
+                                    finalContent = toolLogs + (!string.IsNullOrEmpty(textContent) ? "\n" + textContent : "");
                                 }
                                 else
                                 {
