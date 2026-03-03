@@ -35,9 +35,27 @@ namespace AICA.Options
         [DefaultValue(true)]
         public bool AllowCommandExecution { get; set; } = true;
 
+        [Category("Auto-Approval")]
+        [DisplayName("Auto-approve Read Operations")]
+        [Description("Automatically approve read-only operations (read_file, list_dir, grep_search)")]
+        [DefaultValue(true)]
+        public bool AutoApproveReadOperations { get; set; } = true;
+
+        [Category("Auto-Approval")]
+        [DisplayName("Auto-approve File Edits")]
+        [Description("Automatically approve file edit operations without confirmation")]
+        [DefaultValue(false)]
+        public bool AutoApproveFileEdits { get; set; } = false;
+
+        [Category("Auto-Approval")]
+        [DisplayName("Auto-approve File Creation")]
+        [Description("Automatically approve file creation operations without confirmation")]
+        [DefaultValue(false)]
+        public bool AutoApproveFileCreation { get; set; } = false;
+
         [Category("Command Execution")]
         [DisplayName("Auto-approve Safe Commands")]
-        [Description("Automatically approve commands marked as safe by the model")]
+        [Description("Automatically approve commands marked as safe (dotnet, npm, git, etc.)")]
         [DefaultValue(false)]
         public bool AutoApproveSafeCommands { get; set; } = false;
 

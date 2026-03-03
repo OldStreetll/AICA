@@ -1,5 +1,6 @@
 using Markdig;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -225,21 +226,11 @@ namespace AICA.ToolWindows
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 var dte = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(EnvDTE.DTE)) as DTE2;
-                
-                _agentContext = new VSAgentContext(
-                    dte,
-                    confirmationHandler: async (op, details, ct) =>
-                    {
-                        return await _uiContext.ShowConfirmationAsync(op, details, ct);
-                    });
 
-                // Check for path mismatch warning (project opened from non-original location)
-                if (!string.IsNullOrEmpty(_agentContext.PathMismatchWarning))
-                {
-                    WarningText.Text = _agentContext.PathMismatchWarning;
-                    WarningBanner.Visibility = Visibility.Visible;
-                }
+                // Create AgentContext first
+                _agentContext = new VSAgentContext(dte);
 
+                // Create UIContext with all handlers
                 _uiContext = new VSUIContext(
                     streamingContentUpdater: content =>
                     {
@@ -248,7 +239,30 @@ namespace AICA.ToolWindows
                             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                             RenderConversation(content);
                         });
+                    },
+                    confirmationHandler: async (title, message, ct) =>
+                    {
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+                        var result = VsShellUtilities.ShowMessageBox(
+                            ServiceProvider.GlobalProvider,
+                            message,
+                            title,
+                            OLEMSGICON.OLEMSGICON_QUERY,
+                            OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+                            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                        return result == 6; // IDYES = 6
+                    },
+                    diffPreviewHandler: async (filePath, originalContent, newContent, ct) =>
+                    {
+                        return await _agentContext.ShowDiffPreviewAsync(filePath, originalContent, newContent, ct);
                     });
+
+                // Check for path mismatch warning (project opened from non-original location)
+                if (!string.IsNullOrEmpty(_agentContext.PathMismatchWarning))
+                {
+                    WarningText.Text = _agentContext.PathMismatchWarning;
+                    WarningBanner.Visibility = Visibility.Visible;
+                }
             });
 
             // Initialize Agent executor with custom instructions and token budget from options
@@ -297,8 +311,18 @@ namespace AICA.ToolWindows
                 }
 
                 // Regular message rendering
-                var html = Markdig.Markdown.ToHtml(message.Content ?? string.Empty, _markdownPipeline);
-                bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{html}</div></div>");
+                // Check if content contains tool call HTML (starts with <div class="tool-call-container">)
+                if (message.Content != null && message.Content.Contains("<div class=\"tool-call-container\">"))
+                {
+                    // Content contains raw HTML, don't process through Markdown
+                    bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{message.Content}</div></div>");
+                }
+                else
+                {
+                    // Regular markdown content
+                    var html = Markdig.Markdown.ToHtml(message.Content ?? string.Empty, _markdownPipeline);
+                    bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{html}</div></div>");
+                }
             }
 
             if (!string.IsNullOrEmpty(streamingContent))
@@ -422,6 +446,8 @@ namespace AICA.ToolWindows
             var responseBuilder = new StringBuilder();
             var toolOutputBuilder = new StringBuilder();
             var hasToolCalls = false;
+            var toolCallCounter = 0;
+            var pendingToolCalls = new Dictionary<string, (ToolCall call, int id)>();
 
             // Add user message to history BEFORE executing agent
             // This ensures the next turn can see this message in previousMessages
@@ -462,7 +488,8 @@ namespace AICA.ToolWindows
                                 // when the first ToolStart arrives (see below).
                                 // For non-tool responses (knowledge questions, explanations),
                                 // the streaming text IS the actual answer.
-                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                // Tool output should always be at the top, followed by response text
+                                RenderConversation(toolOutputBuilder.ToString() + responseBuilder.ToString());
                                 break;
 
                             case AgentStepType.ToolStart:
@@ -479,10 +506,21 @@ namespace AICA.ToolWindows
                                 // Don't show attempt_completion in tool logs (its text becomes the main response)
                                 if (step.ToolCall.Name != "attempt_completion")
                                 {
-                                    toolOutputBuilder.AppendLine();
-                                    toolOutputBuilder.AppendLine($"🔧 **Calling tool:** `{step.ToolCall.Name}`");
+                                    var toolId = toolCallCounter++;
+                                    pendingToolCalls[step.ToolCall.Id] = (step.ToolCall, toolId);
+
+                                    // Generate enhanced tool call HTML (without result yet)
+                                    var toolHtml = BuildToolCallHtml(
+                                        step.ToolCall.Name,
+                                        step.ToolCall.Arguments,
+                                        null,
+                                        true,
+                                        toolId
+                                    );
+                                    toolOutputBuilder.AppendLine(toolHtml);
                                 }
-                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+                                // Tool output should always be at the top, followed by response text
+                                RenderConversation(toolOutputBuilder.ToString() + responseBuilder.ToString());
                                 break;
 
                             case AgentStepType.ToolResult:
@@ -491,11 +529,37 @@ namespace AICA.ToolWindows
                                 {
                                     break;
                                 }
-                                var status = step.Result.Success ? "✅" : "❌";
-                                var resultPreview = TruncateForDisplay(step.Result.Success ? step.Result.Content : step.Result.Error, 1000);
-                                toolOutputBuilder.AppendLine($"{status} **Result:** {resultPreview}");
-                                toolOutputBuilder.AppendLine();
-                                RenderConversation(responseBuilder.ToString() + toolOutputBuilder.ToString());
+
+                                // Update the tool call with result
+                                if (pendingToolCalls.TryGetValue(step.ToolCall.Id, out var toolInfo))
+                                {
+                                    var resultText = step.Result.Success ? step.Result.Content : step.Result.Error;
+
+                                    // Regenerate the tool call HTML with result
+                                    var toolHtml = BuildToolCallHtml(
+                                        toolInfo.call.Name,
+                                        toolInfo.call.Arguments,
+                                        resultText,
+                                        step.Result.Success,
+                                        toolInfo.id
+                                    );
+
+                                    // Replace the old tool call HTML with the updated one
+                                    var oldToolHtml = BuildToolCallHtml(
+                                        toolInfo.call.Name,
+                                        toolInfo.call.Arguments,
+                                        null,
+                                        true,
+                                        toolInfo.id
+                                    );
+
+                                    var currentOutput = toolOutputBuilder.ToString();
+                                    toolOutputBuilder.Clear();
+                                    toolOutputBuilder.Append(currentOutput.Replace(oldToolHtml, toolHtml));
+                                }
+
+                                // Tool output should always be at the top, followed by response text
+                                RenderConversation(toolOutputBuilder.ToString() + responseBuilder.ToString());
                                 break;
 
                             case AgentStepType.Complete:
@@ -634,6 +698,85 @@ namespace AICA.ToolWindows
             if (string.IsNullOrEmpty(text)) return "(empty)";
             if (text.Length <= maxLength) return text.Replace("\n", " ").Replace("\r", "");
             return text.Substring(0, maxLength).Replace("\n", " ").Replace("\r", "") + "...";
+        }
+
+        /// <summary>
+        /// Build enhanced HTML for tool call visualization
+        /// </summary>
+        private string BuildToolCallHtml(string toolName, Dictionary<string, object> arguments, string result, bool success, int toolCallId)
+        {
+            var html = new StringBuilder();
+            var toolIcon = GetToolIcon(toolName);
+
+            html.AppendLine($"<div class=\"tool-call-container\">");
+            html.AppendLine($"  <input type=\"checkbox\" id=\"tool-call-toggle-{toolCallId}\" class=\"tool-call-toggle\" />");
+            html.AppendLine($"  <label for=\"tool-call-toggle-{toolCallId}\" class=\"tool-call-header\">");
+            html.AppendLine($"    <span class=\"tool-call-icon\">{toolIcon}</span>");
+            html.AppendLine($"    <span class=\"tool-call-name\">{System.Web.HttpUtility.HtmlEncode(toolName)}</span>");
+            html.AppendLine($"    <span class=\"tool-call-expand\">▶</span>");
+            html.AppendLine($"  </label>");
+            html.AppendLine($"  <div class=\"tool-call-body\">");
+
+            // Parameters section
+            if (arguments != null && arguments.Count > 0)
+            {
+                html.AppendLine("    <div class=\"tool-call-params\">");
+                foreach (var arg in arguments.Take(5)) // Limit to 5 params for display
+                {
+                    var valueStr = arg.Value?.ToString() ?? "(null)";
+                    var displayValue = TruncateForDisplay(valueStr, 100);
+                    html.AppendLine("      <div class=\"tool-call-param\">");
+                    html.AppendLine($"        <span class=\"tool-call-param-name\">{System.Web.HttpUtility.HtmlEncode(arg.Key)}:</span>");
+                    html.AppendLine($"        <span class=\"tool-call-param-value\">{System.Web.HttpUtility.HtmlEncode(displayValue)}</span>");
+                    html.AppendLine("      </div>");
+                }
+                if (arguments.Count > 5)
+                {
+                    html.AppendLine($"      <div class=\"tool-call-param\" style=\"color: #9ca3af; font-size: 11px;\">... and {arguments.Count - 5} more parameters</div>");
+                }
+                html.AppendLine("    </div>");
+            }
+
+            // Result section
+            if (!string.IsNullOrEmpty(result))
+            {
+                var resultClass = success ? "success" : "error";
+                var resultIcon = success ? "✅" : "❌";
+                var resultLabel = success ? "Result" : "Error";
+
+                html.AppendLine($"    <div class=\"tool-call-result {(success ? "" : "error")}\">");
+                html.AppendLine($"      <div class=\"tool-call-result-header {resultClass}\">");
+                html.AppendLine($"        <span>{resultIcon}</span>");
+                html.AppendLine($"        <span>{resultLabel}</span>");
+                html.AppendLine("      </div>");
+                html.AppendLine($"      <div class=\"tool-call-result-content\">{System.Web.HttpUtility.HtmlEncode(TruncateForDisplay(result, 500))}</div>");
+                html.AppendLine("    </div>");
+            }
+
+            html.AppendLine("  </div>");
+            html.AppendLine("</div>");
+
+            return html.ToString();
+        }
+
+        /// <summary>
+        /// Get icon for tool based on tool name
+        /// </summary>
+        private string GetToolIcon(string toolName)
+        {
+            if (string.IsNullOrEmpty(toolName)) return "🔧";
+
+            var lowerName = toolName.ToLowerInvariant();
+            if (lowerName.Contains("read") || lowerName.Contains("list")) return "📖";
+            if (lowerName.Contains("write") || lowerName.Contains("create")) return "✏️";
+            if (lowerName.Contains("edit") || lowerName.Contains("modify")) return "📝";
+            if (lowerName.Contains("delete") || lowerName.Contains("remove")) return "🗑️";
+            if (lowerName.Contains("search") || lowerName.Contains("find") || lowerName.Contains("grep")) return "🔍";
+            if (lowerName.Contains("command") || lowerName.Contains("run") || lowerName.Contains("execute")) return "⚡";
+            if (lowerName.Contains("git")) return "🔀";
+            if (lowerName.Contains("project")) return "📁";
+
+            return "🔧";
         }
 
         private bool ContainsToolIntentLanguage(string text)
@@ -809,6 +952,124 @@ namespace AICA.ToolWindows
         a {{ color: #4aa3ff; text-decoration: none; }}
         a:hover {{ text-decoration: underline; }}
         h1, h2, h3, h4, h5, h6 {{ margin-top: 1.4em; margin-bottom: 0.6em; }}
+
+        /* Tool Call Visualization Styles */
+        .tool-call-container {{
+            margin: 8px 0;
+            border-left: 3px solid #4aa3ff;
+            background: rgba(74, 163, 255, 0.08);
+            border-radius: 4px;
+            overflow: hidden;
+        }}
+        .tool-call-toggle {{
+            display: none;
+        }}
+        .tool-call-header {{
+            padding: 8px 12px;
+            background: rgba(74, 163, 255, 0.12);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #4aa3ff;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .tool-call-header:hover {{
+            background: rgba(74, 163, 255, 0.18);
+        }}
+        .tool-call-icon {{
+            font-size: 14px;
+        }}
+        .tool-call-name {{
+            font-family: Consolas, monospace;
+            font-size: 12px;
+        }}
+        .tool-call-expand {{
+            margin-left: auto;
+            font-size: 10px;
+            transition: transform 0.2s;
+        }}
+        .tool-call-toggle:checked ~ .tool-call-header .tool-call-expand {{
+            transform: rotate(90deg);
+        }}
+        .tool-call-body {{
+            padding: 10px 12px;
+            display: none;
+        }}
+        .tool-call-toggle:checked ~ .tool-call-body {{
+            display: block;
+        }}
+        .tool-call-params {{
+            margin-bottom: 10px;
+        }}
+        .tool-call-param {{
+            margin: 4px 0;
+            font-size: 12px;
+        }}
+        .tool-call-param-name {{
+            color: #9ca3af;
+            font-weight: 500;
+        }}
+        .tool-call-param-value {{
+            color: #d4d4d4;
+            font-family: Consolas, monospace;
+            background: rgba(255,255,255,0.05);
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 6px;
+        }}
+        .tool-call-result {{
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            border-left: 3px solid #4caf50;
+        }}
+        .tool-call-result.error {{
+            border-left-color: #f44336;
+        }}
+        .tool-call-result-header {{
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .tool-call-result-header.success {{
+            color: #81c784;
+        }}
+        .tool-call-result-header.error {{
+            color: #e57373;
+        }}
+        .tool-call-result-content {{
+            font-size: 12px;
+            font-family: Consolas, monospace;
+            color: #d4d4d4;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 300px;
+            overflow-y: auto;
+        }}
+        @media (prefers-color-scheme: light) {{
+            .tool-call-container {{
+                background: rgba(74, 163, 255, 0.05);
+            }}
+            .tool-call-header {{
+                background: rgba(74, 163, 255, 0.1);
+            }}
+            .tool-call-header:hover {{
+                background: rgba(74, 163, 255, 0.15);
+            }}
+            .tool-call-param-value {{
+                background: rgba(0,0,0,0.05);
+            }}
+            .tool-call-result {{
+                background: rgba(0,0,0,0.03);
+            }}
+        }}
     </style>
     <script>
         function provideFeedback(messageId, feedback) {{
@@ -831,6 +1092,23 @@ namespace AICA.ToolWindows
 
             // Notify host via navigation (will be intercepted)
             window.location.href = 'aica://feedback?messageId=' + messageId + '&feedback=' + currentFeedback;
+        }}
+
+        function toggleToolCall(toolCallId) {{
+            var body = document.getElementById('tool-call-body-' + toolCallId);
+            var expand = document.getElementById('tool-call-expand-' + toolCallId);
+
+            if (body && expand) {{
+                if (body.classList.contains('expanded')) {{
+                    body.classList.remove('expanded');
+                    expand.classList.remove('expanded');
+                }} else {{
+                    body.classList.add('expanded');
+                    expand.classList.add('expanded');
+                }}
+            }} else {{
+                console.error('Tool call elements not found for ID: ' + toolCallId);
+            }}
         }}
     </script>
 </head>

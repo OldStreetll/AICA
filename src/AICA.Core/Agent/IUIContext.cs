@@ -37,7 +37,7 @@ namespace AICA.Core.Agent
         /// <summary>
         /// Show diff preview for file changes
         /// </summary>
-        Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
+        Task<DiffPreviewResult> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
 
         /// <summary>
         /// Show a followup question with multiple choice options and optional custom input
@@ -52,5 +52,24 @@ namespace AICA.Core.Agent
             List<QuestionOption> options,
             bool allowCustomInput = false,
             CancellationToken ct = default);
+    }
+
+    /// <summary>
+    /// Result of showing a diff preview dialog
+    /// </summary>
+    public class DiffPreviewResult
+    {
+        /// <summary>
+        /// Whether the user confirmed the changes
+        /// </summary>
+        public bool Confirmed { get; set; }
+
+        /// <summary>
+        /// The final content after user edits (may differ from original newContent)
+        /// </summary>
+        public string FinalContent { get; set; }
+
+        public static DiffPreviewResult Approved(string finalContent) => new DiffPreviewResult { Confirmed = true, FinalContent = finalContent };
+        public static DiffPreviewResult Cancelled() => new DiffPreviewResult { Confirmed = false, FinalContent = null };
     }
 }

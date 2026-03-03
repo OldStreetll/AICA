@@ -23,6 +23,7 @@ namespace AICA.Agent
         private TaskPlan _currentPlan;
         private readonly Func<string, string, CancellationToken, Task<bool>> _confirmationHandler;
         private SafetyGuard _safetyGuard;
+        private AutoApproveManager _autoApproveManager;
         private SolutionSourceIndex _sourceIndex;
         private PathResolver _pathResolver;
 
@@ -208,6 +209,16 @@ namespace AICA.Agent
                         .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                         .Select(p => p.Trim()).ToArray()
                 });
+
+                // Initialize AutoApproveManager
+                _autoApproveManager = new AutoApproveManager(new AutoApproveOptions
+                {
+                    AutoApproveFileRead = secOptions.AutoApproveReadOperations,
+                    AutoApproveFileCreate = secOptions.AutoApproveFileCreation,
+                    AutoApproveFileEdit = secOptions.AutoApproveFileEdits,
+                    AutoApproveFileDelete = false, // Always require confirmation for deletion
+                    AutoApproveSafeCommands = secOptions.AutoApproveSafeCommands
+                });
             }
             catch
             {
@@ -334,6 +345,13 @@ namespace AICA.Agent
 
         public async Task<bool> RequestConfirmationAsync(string operation, string details, CancellationToken ct = default)
         {
+            // Check if operation should be auto-approved
+            if (_autoApproveManager != null && _autoApproveManager.ShouldAutoApprove(operation, details))
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Auto-approved operation: {operation}");
+                return true;
+            }
+
             if (_confirmationHandler != null)
             {
                 return await _confirmationHandler(operation, details, ct);
@@ -344,74 +362,61 @@ namespace AICA.Agent
             return readOnlyOps.Any(op => operation.IndexOf(op, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        public async Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
+        public async Task<DiffPreviewResult> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
         {
+            System.Diagnostics.Debug.WriteLine($"[AICA] ShowDiffPreviewAsync called for: {filePath}");
+
+            // Check if edit operation should be auto-approved
+            if (_autoApproveManager != null && _autoApproveManager.ShouldAutoApprove("edit", filePath))
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Auto-approved edit operation: {filePath}");
+                return DiffPreviewResult.Approved(newContent);
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[AICA] Not auto-approved, showing DiffEditorDialog");
+
             try
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
 
-                // Create temp files for diff comparison
-                var ext = Path.GetExtension(filePath);
-                var tempDir = Path.Combine(Path.GetTempPath(), "AICA_Diff");
-                if (!Directory.Exists(tempDir))
-                    Directory.CreateDirectory(tempDir);
+                System.Diagnostics.Debug.WriteLine($"[AICA] Creating DiffEditorDialog");
 
-                var originalFile = Path.Combine(tempDir, $"original{ext}");
-                var modifiedFile = Path.Combine(tempDir, $"modified{ext}");
+                // Use custom diff editor dialog
+                var dialog = new AICA.VSIX.Dialogs.DiffEditorDialog(filePath, originalContent, newContent);
 
-                File.WriteAllText(originalFile, originalContent ?? "");
-                File.WriteAllText(modifiedFile, newContent ?? "");
+                System.Diagnostics.Debug.WriteLine($"[AICA] Showing DiffEditorDialog");
+                var result = dialog.ShowDialog();
 
-                // Try to use VS built-in diff viewer
-                var diffSvc = await AsyncServiceProvider.GlobalProvider
-                    .GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsDifferenceService))
-                    as Microsoft.VisualStudio.Shell.Interop.IVsDifferenceService;
+                System.Diagnostics.Debug.WriteLine($"[AICA] DiffEditorDialog result: {result}");
 
-                if (diffSvc != null)
+                if (result == true)
                 {
-                    var fileName = Path.GetFileName(filePath);
-                    var frame = diffSvc.OpenComparisonWindow2(
-                        originalFile,
-                        modifiedFile,
-                        $"AICA Diff: {fileName}",   // caption
-                        $"Review changes to {fileName}", // tooltip
-                        $"Original: {fileName}",     // leftLabel
-                        $"Modified: {fileName}",     // rightLabel
-                        $"Changes to {fileName}",    // inlineLabel
-                        null,                        // roles
-                        0);                          // grfDiffOptions
-
-                    // Ask user to confirm after viewing the diff
-                    var result = Microsoft.VisualStudio.Shell.VsShellUtilities.ShowMessageBox(
-                        ServiceProvider.GlobalProvider,
-                        $"Apply the changes shown in the diff to {fileName}?",
-                        "AICA - Confirm Changes",
-                        Microsoft.VisualStudio.Shell.Interop.OLEMSGICON.OLEMSGICON_QUERY,
-                        Microsoft.VisualStudio.Shell.Interop.OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
-                        Microsoft.VisualStudio.Shell.Interop.OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
-
-                    // Close diff window after decision
-                    try { frame?.CloseFrame((uint)Microsoft.VisualStudio.Shell.Interop.__FRAMECLOSE.FRAMECLOSE_NoSave); }
-                    catch { }
-
-                    // Clean up temp files
-                    try { File.Delete(originalFile); File.Delete(modifiedFile); } catch { }
-
-                    return result == 6; // IDYES
+                    // User clicked "Apply Changes"
+                    // Return the edited content (which may have been modified by the user)
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Returning edited content");
+                    return DiffPreviewResult.Approved(dialog.ModifiedContent);
+                }
+                else
+                {
+                    // User clicked "Cancel"
+                    return DiffPreviewResult.Cancelled();
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AICA] Diff preview failed: {ex.Message}");
-            }
+                System.Diagnostics.Debug.WriteLine($"[AICA] Diff editor dialog failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AICA] Stack trace: {ex.StackTrace}");
 
-            // Fallback: simple confirmation dialog
-            return await RequestConfirmationAsync(
-                "Edit File",
-                $"Apply changes to {Path.GetFileName(filePath)}?\n\n" +
-                $"Original: {(originalContent?.Split('\n').Length ?? 0)} lines\n" +
-                $"Modified: {(newContent?.Split('\n').Length ?? 0)} lines",
-                ct);
+                // Fallback: simple confirmation dialog
+                var confirmed = await RequestConfirmationAsync(
+                    "Edit File",
+                    $"Apply changes to {Path.GetFileName(filePath)}?\n\n" +
+                    $"Original: {(originalContent?.Split('\n').Length ?? 0)} lines\n" +
+                    $"Modified: {(newContent?.Split('\n').Length ?? 0)} lines",
+                    ct);
+
+                return confirmed ? DiffPreviewResult.Approved(newContent) : DiffPreviewResult.Cancelled();
+            }
         }
 
         public string ResolveFilePath(string requestedPath)

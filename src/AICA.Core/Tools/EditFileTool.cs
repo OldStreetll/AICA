@@ -87,20 +87,33 @@ namespace AICA.Core.Tools
             // Check old_string exists
             if (!content.Contains(oldString))
             {
-                // Provide detailed debugging information
+                // Provide detailed debugging information with visible whitespace
                 var preview = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
                 var oldPreview = oldString.Length > 200 ? oldString.Substring(0, 200) + "..." : oldString;
 
+                // Show whitespace characters explicitly
+                var oldStringVisible = oldString
+                    .Replace("\r", "\\r")
+                    .Replace("\n", "\\n")
+                    .Replace("\t", "\\t")
+                    .Replace(" ", "·");
+
+                var contentVisible = preview
+                    .Replace("\r", "\\r")
+                    .Replace("\n", "\\n")
+                    .Replace("\t", "\\t")
+                    .Replace(" ", "·");
+
                 return ToolResult.Fail(
                     $"old_string not found in file.\n\n" +
-                    $"Possible reasons:\n" +
-                    $"1. Whitespace mismatch (spaces vs tabs)\n" +
-                    $"2. Line ending mismatch (CRLF vs LF)\n" +
-                    $"3. File was modified after you read it\n" +
-                    $"4. The string you're looking for doesn't exist\n\n" +
-                    $"Searching for ({oldString.Length} chars):\n{oldPreview}\n\n" +
-                    $"File content preview ({content.Length} chars total):\n{preview}\n\n" +
-                    $"Suggestion: Use read_file to see the current file content, then try again with the exact string.");
+                    $"CRITICAL: The string you're searching for does NOT exist in the file.\n\n" +
+                    $"What you're searching for ({oldString.Length} chars, whitespace shown as ·\\n\\r\\t):\n{oldStringVisible}\n\n" +
+                    $"Actual file content ({content.Length} chars total, whitespace shown as ·\\n\\r\\t):\n{contentVisible}\n\n" +
+                    $"Common issues:\n" +
+                    $"1. Missing empty lines (\\n\\n)\n" +
+                    $"2. Missing trailing spaces (shown as ·)\n" +
+                    $"3. Wrong line endings (\\r\\n vs \\n)\n\n" +
+                    $"SOLUTION: Use read_file to see the EXACT content, then copy the EXACT string including ALL whitespace.");
             }
 
             // Check uniqueness (unless replace_all)
@@ -119,21 +132,38 @@ namespace AICA.Core.Tools
                 return ToolResult.Fail("old_string and new_string are identical. This is a no-op.");
 
             // Apply the edit
-            var newContent = replaceAll 
+            var newContent = replaceAll
                 ? content.Replace(oldString, newString)
                 : ReplaceFirst(content, oldString, newString);
 
             // Show diff preview and request confirmation
-            var confirmed = await context.ShowDiffPreviewAsync(path, content, newContent, ct);
+            var result = await uiContext.ShowDiffPreviewAsync(path, content, newContent, ct);
 
-            if (!confirmed)
+            if (!result.Confirmed)
                 return ToolResult.Fail("Operation cancelled by user");
 
-            // Write the edited content
-            await context.WriteFileAsync(path, newContent, ct);
+            // Write the edited content (use the final content from the dialog, which may have been modified by the user)
+            await context.WriteFileAsync(path, result.FinalContent, ct);
 
-            var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
-            return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
+            // Check if user modified the content in the dialog
+            bool wasModifiedByUser = result.FinalContent != newContent;
+
+            if (wasModifiedByUser)
+            {
+                // Calculate actual changes
+                var originalLines = content.Split('\n').Length;
+                var finalLines = result.FinalContent.Split('\n').Length;
+                var lineDiff = finalLines - originalLines;
+                var diffText = lineDiff > 0 ? $"+{lineDiff}" : lineDiff < 0 ? $"{lineDiff}" : "0";
+
+                // Include the actual final content in the result so AI can see what was actually applied
+                return ToolResult.Ok($"⚠️ USER MANUALLY EDITED THE FILE - YOUR SUGGESTION WAS NOT USED ⚠️\n\nFile: {path}\nOriginal: {originalLines} lines → User's version: {finalLines} lines ({diffText})\n\n📄 ACTUAL FILE CONTENT (as saved by user):\n{result.FinalContent}\n\n⚠️ CRITICAL: You MUST read and analyze the actual content above. Do NOT describe your original suggestion. Describe what the user actually saved.");
+            }
+            else
+            {
+                var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
+                return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
+            }
         }
 
         private string ReplaceFirst(string text, string oldValue, string newValue)

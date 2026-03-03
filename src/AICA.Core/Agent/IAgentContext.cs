@@ -57,9 +57,9 @@ namespace AICA.Core.Agent
 
         /// <summary>
         /// Show diff preview for file changes and ask user to confirm.
-        /// Returns true if user accepts the changes.
+        /// Returns a result containing confirmation status and final content.
         /// </summary>
-        Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
+        Task<DiffPreviewResult> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
 
         /// <summary>
         /// If non-null, contains a warning message indicating that the project

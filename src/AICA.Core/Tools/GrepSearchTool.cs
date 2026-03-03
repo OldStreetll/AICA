@@ -112,15 +112,32 @@ namespace AICA.Core.Tools
 
             // Resolve full path (supports source roots)
             string fullPath;
+            List<string> searchPaths = new List<string>();
+
             if (string.IsNullOrEmpty(searchPath) || searchPath == "." || searchPath == "./")
-                fullPath = context.WorkingDirectory;
+            {
+                // Default search: include working directory AND all source roots
+                searchPaths.Add(context.WorkingDirectory);
+
+                // Add source roots if available
+                if (context.SourceRoots != null && context.SourceRoots.Count > 0)
+                {
+                    searchPaths.AddRange(context.SourceRoots);
+                }
+
+                fullPath = context.WorkingDirectory; // For compatibility
+            }
             else if (Path.IsPathRooted(searchPath))
+            {
                 fullPath = searchPath;
+                searchPaths.Add(fullPath);
+            }
             else
             {
                 // Try resolving via source roots first
                 var resolved = context.ResolveDirectoryPath(searchPath);
                 fullPath = resolved ?? Path.Combine(context.WorkingDirectory, searchPath);
+                searchPaths.Add(fullPath);
             }
 
             if (!context.IsPathAccessible(searchPath))
@@ -154,64 +171,68 @@ namespace AICA.Core.Tools
 
                 try
                 {
-                    IEnumerable<string> files;
-                    if (File.Exists(fullPath))
-                    {
-                        files = new[] { fullPath };
-                    }
-                    else if (Directory.Exists(fullPath))
-                    {
-                        files = GetSearchFiles(fullPath, includePattern);
-                    }
-                    else
-                    {
-                        return ToolResult.Fail($"Path not found: {searchPath}");
-                    }
-
-                    foreach (var file in files)
+                    // Search in all paths (working directory + source roots)
+                    foreach (var searchDir in searchPaths)
                     {
                         if (ct.IsCancellationRequested) break;
                         if (matchCount >= maxResults) break;
-                        if (IsExcludedFile(file)) continue;
 
-                        filesSearched++;
-
-                        try
+                        IEnumerable<string> files;
+                        if (File.Exists(searchDir))
                         {
-                            // Skip files larger than 1MB to avoid reading huge generated files
-                            var fileInfo = new FileInfo(file);
-                            if (fileInfo.Length > 1024 * 1024)
-                            {
-                                continue;
-                            }
+                            files = new[] { searchDir };
+                        }
+                        else if (Directory.Exists(searchDir))
+                        {
+                            files = GetSearchFiles(searchDir, includePattern);
+                        }
+                        else
+                        {
+                            continue; // Skip non-existent paths
+                        }
 
-                            var lines = File.ReadAllLines(file);
-                            bool fileHasMatch = false;
+                        foreach (var file in files)
+                        {
+                            if (ct.IsCancellationRequested) break;
+                            if (matchCount >= maxResults) break;
+                            if (IsExcludedFile(file)) continue;
 
-                            for (int i = 0; i < lines.Length; i++)
+                            filesSearched++;
+
+                            try
                             {
-                                if (matchCount >= maxResults) break;
-                                if (regex.IsMatch(lines[i]))
+                                // Skip files larger than 1MB to avoid reading huge generated files
+                                var fileInfo = new FileInfo(file);
+                                if (fileInfo.Length > 1024 * 1024)
                                 {
-                                    if (!fileHasMatch)
-                                    {
-                                        var relativePath = GetRelativePath(context.WorkingDirectory, file);
-                                        results.AppendLine($"\n{relativePath}:");
-                                        filesMatched++;
-                                        fileHasMatch = true;
-                                    }
+                                    continue;
+                                }
 
-                                    var lineContent = lines[i].Length > 200 
-                                        ? lines[i].Substring(0, 200) + "..." 
-                                        : lines[i];
-                                    results.AppendLine($"  {i + 1}: {lineContent}");
-                                    matchCount++;
+                                var lines = File.ReadAllLines(file);
+                                bool fileHasMatch = false;
+
+                                for (int i = 0; i < lines.Length; i++)
+                                {
+                                    if (matchCount >= maxResults) break;
+                                    if (regex.IsMatch(lines[i]))
+                                    {
+                                        if (!fileHasMatch)
+                                        {
+                                            var relativePath = GetRelativePath(context.WorkingDirectory, file);
+                                            results.AppendLine($"\n{relativePath}:");
+                                            fileHasMatch = true;
+                                            filesMatched++;
+                                        }
+
+                                        results.AppendLine($"  {i + 1}: {lines[i].Trim()}");
+                                        matchCount++;
+                                    }
                                 }
                             }
-                        }
-                        catch
-                        {
-                            // Skip files that can't be read (binary, locked, etc.)
+                            catch
+                            {
+                                // Skip files we can't read
+                            }
                         }
                     }
                 }

@@ -137,10 +137,10 @@ namespace AICA.Core.Workspace
                         files = ParseCsproj(projAbsPath);
                     }
 
+                    // Always add project to the index, even if it has no source files
                     if (files != null && files.Count > 0)
                     {
                         projectInfo.SourceFiles = files;
-                        index.Projects[projName] = projectInfo;
 
                         foreach (var f in files)
                         {
@@ -149,6 +149,13 @@ namespace AICA.Core.Workspace
                                 break;
                         }
                     }
+                    else
+                    {
+                        // Empty project - still add it to the index
+                        projectInfo.SourceFiles = new List<string>();
+                    }
+
+                    index.Projects[projName] = projectInfo;
 
                     if (allSourceFiles.Count >= MaxIndexedFiles)
                         break;

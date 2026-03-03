@@ -13,7 +13,7 @@ namespace AICA.Core.Tools
     public class ListProjectsTool : IAgentTool
     {
         public string Name => "list_projects";
-        public string Description => "List all projects in the solution or get details about a specific project. Shows project structure, file counts, and filters.";
+        public string Description => "List all projects in the Visual Studio solution (.sln file). This tool parses .vcxproj/.csproj files to show project metadata, types, file counts, filters, and dependencies. Use this when the user asks about 'projects', 'solution structure', '项目', '解决方案' or wants to understand what projects exist in the solution. DO NOT use list_dir for this purpose.";
 
         public ToolDefinition GetDefinition()
         {
@@ -45,17 +45,6 @@ namespace AICA.Core.Tools
 
         public Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
-            // Get source roots (which contains project information)
-            var sourceRoots = context.SourceRoots;
-            if (sourceRoots == null || sourceRoots.Count == 0)
-            {
-                return Task.FromResult(ToolResult.Ok("No solution loaded or no projects found in the solution."));
-            }
-
-            // Try to get project information from context
-            // We need to access the SolutionSourceIndex through the context
-            // For now, we'll need to add a method to IAgentContext to expose project info
-
             // Parse parameters
             string projectName = null;
             if (call.Arguments.TryGetValue("project_name", out var projNameObj) && projNameObj != null)

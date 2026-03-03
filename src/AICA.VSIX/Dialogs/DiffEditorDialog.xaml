@@ -1,0 +1,78 @@
+<Window x:Class="AICA.VSIX.Dialogs.DiffEditorDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+        Title="Confirm Changes"
+        Height="600" Width="1000"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
+        Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <TextBlock x:Name="FilePathText" FontWeight="Bold" FontSize="14"
+                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+            <TextBlock x:Name="ChangesSummaryText" Margin="0,5,0,0"
+                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+        </StackPanel>
+
+        <!-- Diff View with Side-by-Side Editing -->
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Original Content (Left) -->
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="Original" FontWeight="Bold" Margin="0,0,0,5"
+                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+                <RichTextBox x:Name="OriginalRichTextBox"
+                             IsReadOnly="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas" FontSize="12"
+                             Background="{DynamicResource {x:Static vsshell:VsBrushes.ComboBoxBackgroundKey}}"
+                             BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ComboBoxBorderKey}}"
+                             ScrollViewer.ScrollChanged="OriginalRichTextBox_ScrollChanged">
+                    <FlowDocument PagePadding="5,5,5,5" />
+                </RichTextBox>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch"
+                          Background="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarBorderKey}}" />
+
+            <!-- Modified Content (Right) - Editable -->
+            <DockPanel Grid.Column="2">
+                <TextBlock DockPanel.Dock="Top" Text="Modified (Editable)" FontWeight="Bold" Margin="0,0,0,5"
+                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+                <RichTextBox x:Name="ModifiedRichTextBox"
+                             IsReadOnly="False"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas" FontSize="12"
+                             Background="{DynamicResource {x:Static vsshell:VsBrushes.ComboBoxBackgroundKey}}"
+                             BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ComboBoxBorderKey}}"
+                             ScrollViewer.ScrollChanged="ModifiedRichTextBox_ScrollChanged"
+                             TextChanged="ModifiedRichTextBox_TextChanged">
+                    <FlowDocument PagePadding="5,5,5,5" />
+                </RichTextBox>
+            </DockPanel>
+        </Grid>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="ApplyButton" Content="Apply Changes" Width="120" Height="30" Margin="0,0,10,0"
+                    Click="ApplyButton_Click" IsDefault="True" />
+            <Button x:Name="CancelButton" Content="Cancel" Width="80" Height="30"
+                    Click="CancelButton_Click" IsCancel="True" />
+        </StackPanel>
+    </Grid>
+</Window>

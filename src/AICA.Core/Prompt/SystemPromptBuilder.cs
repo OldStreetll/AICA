@@ -87,6 +87,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- ALWAYS use the function calling API to invoke tools. NEVER output tool calls as text, XML, or JSON in your response.");
             _builder.AppendLine("- **CRITICAL: Do NOT generate answers or descriptions BEFORE calling tools. Call the tool FIRST, then describe the results AFTER you receive the tool output.** For example, if the user asks to list a directory, call `list_dir` immediately — do NOT write out the directory contents from imagination.");
             _builder.AppendLine("- **CRITICAL: After calling tools, ONLY describe the results of THOSE tools in relation to the CURRENT user request. Do NOT continue discussing or analyzing previous tasks.** For example, if the user previously asked about code optimization but now asks to read a file, ONLY summarize the file contents - do NOT provide optimization suggestions.");
+            _builder.AppendLine("- **CRITICAL: When the user asks about 'projects' or 'solution' (e.g., '列出项目', 'list projects', '解决方案中的项目'), ALWAYS call `list_projects` tool. NEVER use `list_dir` to answer questions about Visual Studio projects.**");
             _builder.AppendLine("- Call tools directly when you know what to do. Do not ask for permission for read-only operations.");
             _builder.AppendLine();
             _builder.AppendLine("### MANDATORY: Task Completion");
@@ -106,13 +107,22 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- Keep your text output minimal before tool calls. A brief one-line plan is acceptable, but never write the expected results before receiving actual tool output.");
             _builder.AppendLine("- For casual conversation or greetings (e.g. \"你好\", \"hello\"), respond naturally in text WITHOUT calling any tools. Only use tools when the user has a specific task or question about code/files.");
             _builder.AppendLine("- For general programming knowledge questions (e.g. \"explain SOLID principles\", \"what is dependency injection\"), respond with **detailed, complete text content** using full Markdown formatting — headers (#, ##), code blocks (```csharp), bullet lists, bold text, etc. Do NOT summarize or give meta-descriptions like 'I have explained X'. Instead, write out the actual explanation with real code examples.");
+            _builder.AppendLine("- **CRITICAL: Decision Transparency** - When you make choices or decisions during tool execution, ALWAYS explain them clearly:");
+            _builder.AppendLine("  - If you find multiple matching files (e.g., multiple README.md files), explicitly state: 'I found X files, I chose to read [specific file] because [reason]'");
+            _builder.AppendLine("  - If you skip certain results or limit output, explain why: 'I'm showing the first 5 results because [reason]'");
+            _builder.AppendLine("  - If you make assumptions about user intent, state them: 'I assumed you wanted [X] because [reason]'");
+            _builder.AppendLine("  - If tool results are ambiguous or incomplete, acknowledge it: 'The search found partial matches, here's what I found...'");
+            _builder.AppendLine("- **CRITICAL: Multi-file Handling** - When dealing with multiple files:");
+            _builder.AppendLine("  - If `find_by_name` returns multiple files and you only read one, explain: 'Found X files, reading [specific one] because it's most likely what you need'");
+            _builder.AppendLine("  - If user's request is ambiguous (e.g., 'read README.md' when multiple exist), clarify your choice");
+            _builder.AppendLine("  - Offer to read other files if relevant: 'I read the root README.md. Would you like me to read any of the other X README files?'");
             _builder.AppendLine();
 
             // Tool usage tips
             _builder.AppendLine("### Tool Usage Tips");
-            _builder.AppendLine("- `list_projects`: Use this to understand the solution structure. Shows all projects, their types, file counts, and filters. Call this when you need to know what projects exist or understand the project organization.");
-            _builder.AppendLine("- `list_dir`: Use `recursive=true` when the user asks for 'full structure', 'complete tree', '完整结构', '目录树' etc. Set `max_depth` to control depth (default 3, max 10).");
-            _builder.AppendLine("- `list_code_definition_names`: Use this to understand code structure (classes, methods, properties) without reading entire files. Ideal for project overview requests.");
+            _builder.AppendLine("- `list_projects`: **ALWAYS use this when the user asks about projects or solution structure.** Trigger keywords: 'projects', 'solution', '项目', '解决方案', 'list projects', '列出项目'. This tool parses .vcxproj/.csproj files and shows project metadata, types, file counts, filters, and dependencies. DO NOT use `list_dir` for project queries.");
+            _builder.AppendLine("- `list_dir`: Use for file system directory listings. Use `recursive=true` when the user asks for 'full structure', 'complete tree', '完整结构', '目录树' etc. Set `max_depth` to control depth (default 3, max 10). DO NOT use this for project/solution queries.");
+            _builder.AppendLine("- `list_code_definition_names`: Use this to understand code structure (classes, methods, properties) without reading entire files. Ideal for code structure overview requests.");
             _builder.AppendLine("- `grep_search`: Prefer this over `read_file` when looking for specific patterns across multiple files.");
             _builder.AppendLine("- `edit`: Always `read_file` first. The `old_string` must exactly match file content and be unique.");
             _builder.AppendLine();
@@ -174,6 +184,15 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- If a file is not found, check the parent directory listing to see what IS available before searching elsewhere.");
             _builder.AppendLine("- **ALWAYS use `grep_search` and `find_by_name` for searching files. NEVER use `run_command` with grep/find/head/tail.**");
             _builder.AppendLine("- The built-in search tools are cross-platform and work reliably on both Windows and Unix systems.");
+            _builder.AppendLine("- **CRITICAL: When searching for code with special characters** (e.g., function signatures with `()`, `::`, `&`, `*`):");
+            _builder.AppendLine("  - Use `fixed_strings=true` to treat the query as a literal string, not regex");
+            _builder.AppendLine("  - Or simplify the search pattern (e.g., search for 'Geometry::mirror' instead of the full signature)");
+            _builder.AppendLine("  - If searching for C++ code, try multiple patterns: class name, function name, or key parts of the signature");
+            _builder.AppendLine("- **CRITICAL: If grep_search returns 'No matches found':**");
+            _builder.AppendLine("  - Verify the working directory is correct (check with list_dir)");
+            _builder.AppendLine("  - Try a simpler search pattern (e.g., just the function name without parameters)");
+            _builder.AppendLine("  - Try searching in a specific subdirectory using the `path` parameter");
+            _builder.AppendLine("  - Consider that the file might be in an excluded directory (Debug, Release, bin, obj)");
             _builder.AppendLine();
 
             // Safety rules

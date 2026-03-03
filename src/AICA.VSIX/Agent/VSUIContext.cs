@@ -16,13 +16,13 @@ namespace AICA.Agent
     {
         private readonly Action<string> _streamingContentUpdater;
         private readonly Func<string, string, CancellationToken, Task<bool>> _confirmationHandler;
-        private readonly Func<string, string, string, CancellationToken, Task<bool>> _diffPreviewHandler;
+        private readonly Func<string, string, string, CancellationToken, Task<DiffPreviewResult>> _diffPreviewHandler;
         private IVsThreadedWaitDialog2 _waitDialog;
 
         public VSUIContext(
             Action<string> streamingContentUpdater = null,
             Func<string, string, CancellationToken, Task<bool>> confirmationHandler = null,
-            Func<string, string, string, CancellationToken, Task<bool>> diffPreviewHandler = null)
+            Func<string, string, string, CancellationToken, Task<DiffPreviewResult>> diffPreviewHandler = null)
         {
             _streamingContentUpdater = streamingContentUpdater;
             _confirmationHandler = confirmationHandler;
@@ -122,19 +122,27 @@ namespace AICA.Agent
             return result == 6; // IDYES = 6
         }
 
-        public async Task<bool> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
+        public async Task<DiffPreviewResult> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
         {
+            System.Diagnostics.Debug.WriteLine($"[AICA] VSUIContext.ShowDiffPreviewAsync called for: {filePath}");
+            System.Diagnostics.Debug.WriteLine($"[AICA] _diffPreviewHandler is null: {_diffPreviewHandler == null}");
+
             if (_diffPreviewHandler != null)
             {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Calling _diffPreviewHandler");
                 return await _diffPreviewHandler(filePath, originalContent, newContent, ct);
             }
 
+            System.Diagnostics.Debug.WriteLine($"[AICA] No _diffPreviewHandler, using default confirmation dialog");
+
             // Default: show confirmation dialog with summary
             var changesSummary = GetChangesSummary(originalContent, newContent);
-            return await ShowConfirmationAsync(
+            var confirmed = await ShowConfirmationAsync(
                 $"Confirm changes to {System.IO.Path.GetFileName(filePath)}",
                 changesSummary,
                 ct);
+
+            return confirmed ? DiffPreviewResult.Approved(newContent) : DiffPreviewResult.Cancelled();
         }
 
         private string GetChangesSummary(string original, string modified)
