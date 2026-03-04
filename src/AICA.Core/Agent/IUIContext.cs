@@ -72,4 +72,18 @@ namespace AICA.Core.Agent
         public static DiffPreviewResult Approved(string finalContent) => new DiffPreviewResult { Confirmed = true, FinalContent = finalContent };
         public static DiffPreviewResult Cancelled() => new DiffPreviewResult { Confirmed = false, FinalContent = null };
     }
+
+    /// <summary>
+    /// Result of showing diff and applying changes
+    /// </summary>
+    public class DiffApplyResult
+    {
+        /// <summary>
+        /// Whether the changes were applied
+        /// </summary>
+        public bool Applied { get; set; }
+
+        public static DiffApplyResult Success() => new DiffApplyResult { Applied = true };
+        public static DiffApplyResult Cancelled() => new DiffApplyResult { Applied = false };
+    }
 }

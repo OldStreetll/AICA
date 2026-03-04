@@ -194,7 +194,7 @@ namespace AICA.Core.Security
         public bool AutoApproveFileDelete { get; set; } = false;
 
         /// <summary>
-        /// Auto-approve safe commands (dotnet, npm, git, etc.)
+        /// Auto-approve safe commands (dir, git, dotnet, npm, etc.)
         /// </summary>
         public bool AutoApproveSafeCommands { get; set; } = false;
 

@@ -62,6 +62,17 @@ namespace AICA.Core.Agent
         Task<DiffPreviewResult> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
 
         /// <summary>
+        /// Show diff view and let user apply changes.
+        /// Returns a result indicating whether changes were applied.
+        /// </summary>
+        Task<DiffApplyResult> ShowDiffAndApplyAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default);
+
+        /// <summary>
+        /// Open a file in the editor
+        /// </summary>
+        Task OpenFileInEditorAsync(string filePath, CancellationToken ct = default);
+
+        /// <summary>
         /// If non-null, contains a warning message indicating that the project
         /// was opened from a different location than where it was originally built.
         /// The UI should display this to the user.

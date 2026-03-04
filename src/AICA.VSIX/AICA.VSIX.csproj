@@ -60,6 +60,9 @@
     <Compile Include="Dialogs\DiffEditorDialog.xaml.cs">
       <DependentUpon>DiffEditorDialog.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Dialogs\NonModalConfirmDialog.xaml.cs">
+      <DependentUpon>NonModalConfirmDialog.xaml</DependentUpon>
+    </Compile>
     <Compile Include="ToolWindows\ChatToolWindow.cs" />
     <Compile Include="ToolWindows\ChatToolWindowControl.xaml.cs">
       <DependentUpon>ChatToolWindowControl.xaml</DependentUpon>
@@ -127,6 +130,10 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="Dialogs\DiffEditorDialog.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="Dialogs\NonModalConfirmDialog.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

@@ -43,6 +43,7 @@ namespace AICA.ToolWindows
 
             _markdownPipeline = new MarkdownPipelineBuilder()
                 .UseAdvancedExtensions()
+                .UseSoftlineBreakAsHardlineBreak()
                 .Build();
 
             ChatBrowser.LoadCompleted += ChatBrowser_LoadCompleted;
@@ -227,8 +228,38 @@ namespace AICA.ToolWindows
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 var dte = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(EnvDTE.DTE)) as DTE2;
 
-                // Create AgentContext first
-                _agentContext = new VSAgentContext(dte);
+                // Create AgentContext first with confirmation handler
+                _agentContext = new VSAgentContext(
+                    dte,
+                    workingDirectory: null,
+                    confirmationHandler: async (title, message, ct) =>
+                    {
+                        try
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] AgentContext confirmationHandler called: title={title}");
+                            System.Diagnostics.Debug.WriteLine($"[AICA] AgentContext confirmationHandler message: {message}");
+
+                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Switched to main thread");
+
+                            var result = VsShellUtilities.ShowMessageBox(
+                                ServiceProvider.GlobalProvider,
+                                message,
+                                title,
+                                OLEMSGICON.OLEMSGICON_QUERY,
+                                OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+                                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+
+                            System.Diagnostics.Debug.WriteLine($"[AICA] MessageBox result: {result}");
+                            return result == 6; // IDYES = 6
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] AgentContext confirmationHandler exception: {ex.Message}");
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Stack trace: {ex.StackTrace}");
+                            return false;
+                        }
+                    });
 
                 // Create UIContext with all handlers
                 _uiContext = new VSUIContext(
@@ -242,15 +273,31 @@ namespace AICA.ToolWindows
                     },
                     confirmationHandler: async (title, message, ct) =>
                     {
-                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-                        var result = VsShellUtilities.ShowMessageBox(
-                            ServiceProvider.GlobalProvider,
-                            message,
-                            title,
-                            OLEMSGICON.OLEMSGICON_QUERY,
-                            OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
-                            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
-                        return result == 6; // IDYES = 6
+                        try
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] confirmationHandler called: title={title}");
+                            System.Diagnostics.Debug.WriteLine($"[AICA] confirmationHandler message: {message}");
+
+                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Switched to main thread");
+
+                            var result = VsShellUtilities.ShowMessageBox(
+                                ServiceProvider.GlobalProvider,
+                                message,
+                                title,
+                                OLEMSGICON.OLEMSGICON_QUERY,
+                                OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+                                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+
+                            System.Diagnostics.Debug.WriteLine($"[AICA] MessageBox result: {result}");
+                            return result == 6; // IDYES = 6
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] confirmationHandler exception: {ex.Message}");
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Stack trace: {ex.StackTrace}");
+                            return false;
+                        }
                     },
                     diffPreviewHandler: async (filePath, originalContent, newContent, ct) =>
                     {

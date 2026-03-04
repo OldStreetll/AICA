@@ -434,6 +434,125 @@ namespace AICA.Agent
             return _sourceIndex?.Projects ?? new Dictionary<string, ProjectInfo>();
         }
 
+        public async Task OpenFileInEditorAsync(string filePath, CancellationToken ct = default)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+            try
+            {
+                var fullPath = GetFullPath(filePath);
+
+                if (!File.Exists(fullPath))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] OpenFileInEditorAsync: File not found: {fullPath}");
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[AICA] Opening file in editor: {fullPath}");
+
+                // Open the file in VS editor
+                if (_dte?.ItemOperations != null)
+                {
+                    _dte.ItemOperations.OpenFile(fullPath, EnvDTE.Constants.vsViewKindTextView);
+                    System.Diagnostics.Debug.WriteLine($"[AICA] File opened successfully");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] OpenFileInEditorAsync error: {ex.Message}");
+            }
+        }
+
+        public async Task<DiffApplyResult> ShowDiffAndApplyAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+            try
+            {
+                var fullPath = GetFullPath(filePath);
+                System.Diagnostics.Debug.WriteLine($"[AICA] ShowDiffAndApplyAsync called for: {fullPath}");
+
+                // Create a temporary file for the new content
+                var tempFile = Path.Combine(Path.GetTempPath(), $"{Path.GetFileName(fullPath)}.new");
+                File.WriteAllText(tempFile, newContent);
+                System.Diagnostics.Debug.WriteLine($"[AICA] Created temp file: {tempFile}");
+
+                // Save original content to a backup file
+                var backupFile = fullPath + ".backup";
+                File.WriteAllText(backupFile, originalContent);
+
+                // Use VS diff command to show the comparison
+                if (_dte != null)
+                {
+                    // Use Tools.DiffFiles command to open diff view
+                    _dte.ExecuteCommand("Tools.DiffFiles", $"\"{fullPath}\" \"{tempFile}\"");
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Diff view opened");
+                }
+
+                // Show status bar message (non-blocking)
+                var statusBar = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsStatusbar))
+                    as Microsoft.VisualStudio.Shell.Interop.IVsStatusbar;
+
+                if (statusBar != null)
+                {
+                    statusBar.SetText($"Review changes in diff view. Click 'Apply Changes' when ready.");
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Status bar message shown");
+                }
+
+                // Wait for user to review and confirm using non-modal dialog
+                await Task.Delay(2000, ct); // Give user time to see the diff
+
+                // Use non-modal confirmation dialog
+                bool confirmed = false;
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+                var dialog = new AICA.VSIX.Dialogs.NonModalConfirmDialog(
+                    $"文件对比视图已打开：{Path.GetFileName(fullPath)}\n\n" +
+                    $"操作步骤：\n" +
+                    $"1. 在右侧的diff视图中查看AI建议的修改\n" +
+                    $"2. 您可以直接在右侧面板中编辑内容（添加、删除或修改）\n" +
+                    $"3. 编辑完成后，按 Ctrl+S 保存右侧面板的内容\n" +
+                    $"4. 点击下方的\"是\"按钮，将右侧面板的内容应用到原文件\n" +
+                    $"5. 如果不想应用修改，点击\"否\"按钮取消\n\n" +
+                    $"注意：\n" +
+                    $"- 此窗口不会阻塞VS操作，您可以自由编辑\n" +
+                    $"- 必须先保存右侧面板（Ctrl+S），再点击\"是\"按钮\n" +
+                    $"- 点击\"是\"后，右侧面板的内容将覆盖原文件");
+
+                confirmed = await dialog.ShowDialogAsync();
+                System.Diagnostics.Debug.WriteLine($"[AICA] User confirmation: {confirmed}");
+
+                if (!confirmed)
+                {
+                    // Clean up temp files
+                    try { File.Delete(tempFile); } catch { }
+                    try { File.Delete(backupFile); } catch { }
+                    System.Diagnostics.Debug.WriteLine($"[AICA] User cancelled");
+                    return DiffApplyResult.Cancelled();
+                }
+
+                // Read the content from the temp file (user may have edited it in the diff view)
+                var finalContent = File.ReadAllText(tempFile);
+
+                // Apply the changes to the original file
+                File.WriteAllText(fullPath, finalContent);
+                System.Diagnostics.Debug.WriteLine($"[AICA] Changes applied to file");
+
+                // Clean up temp files
+                try { File.Delete(tempFile); } catch { }
+                try { File.Delete(backupFile); } catch { }
+
+                System.Diagnostics.Debug.WriteLine($"[AICA] Changes applied successfully");
+                return DiffApplyResult.Success();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] ShowDiffAndApplyAsync error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AICA] Stack trace: {ex.StackTrace}");
+                return DiffApplyResult.Cancelled();
+            }
+        }
+
         private string GetFullPath(string path)
         {
             if (string.IsNullOrEmpty(path) || path == "." || path == "./" || path == "/" || path == "\\")

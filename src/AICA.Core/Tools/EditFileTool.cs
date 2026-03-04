@@ -11,7 +11,7 @@ namespace AICA.Core.Tools
     public class EditFileTool : IAgentTool
     {
         public string Name => "edit";
-        public string Description => "Make a precise edit to an existing file by replacing a unique string with new content.";
+        public string Description => "Make a precise edit to an existing file by replacing a unique string with new content, or completely replace the file content.";
 
         public ToolDefinition GetDefinition()
         {
@@ -44,9 +44,15 @@ namespace AICA.Core.Tools
                             Type = "boolean",
                             Description = "If true, replace all occurrences. Default is false.",
                             Default = false
+                        },
+                        ["full_replace"] = new ToolParameterProperty
+                        {
+                            Type = "boolean",
+                            Description = "If true, replace the entire file content with new_string. When using this mode, old_string is ignored and can be set to any value (e.g., empty string). This is useful for completely rewriting a file. Default is false.",
+                            Default = false
                         }
                     },
-                    Required = new[] { "file_path", "old_string", "new_string" }
+                    Required = new[] { "file_path", "new_string" }
                 }
             };
         }
@@ -57,20 +63,31 @@ namespace AICA.Core.Tools
             if (!call.Arguments.TryGetValue("file_path", out var pathObj) || pathObj == null)
                 return ToolResult.Fail("Missing required parameter: file_path");
 
-            if (!call.Arguments.TryGetValue("old_string", out var oldObj) || oldObj == null)
-                return ToolResult.Fail("Missing required parameter: old_string");
-
             if (!call.Arguments.TryGetValue("new_string", out var newObj) || newObj == null)
                 return ToolResult.Fail("Missing required parameter: new_string");
 
             var path = pathObj.ToString();
-            var oldString = oldObj.ToString();
             var newString = newObj.ToString();
             var replaceAll = false;
+            var fullReplace = false;
 
             if (call.Arguments.TryGetValue("replace_all", out var replaceAllObj) && replaceAllObj != null)
             {
                 bool.TryParse(replaceAllObj.ToString(), out replaceAll);
+            }
+
+            if (call.Arguments.TryGetValue("full_replace", out var fullReplaceObj) && fullReplaceObj != null)
+            {
+                bool.TryParse(fullReplaceObj.ToString(), out fullReplace);
+            }
+
+            // For non-full_replace mode, old_string is required
+            string oldString = null;
+            if (!fullReplace)
+            {
+                if (!call.Arguments.TryGetValue("old_string", out var oldObj) || oldObj == null)
+                    return ToolResult.Fail("Missing required parameter: old_string (not required when full_replace=true)");
+                oldString = oldObj.ToString();
             }
 
             // Validate path access
@@ -84,85 +101,104 @@ namespace AICA.Core.Tools
             // Read current content
             var content = await context.ReadFileAsync(path, ct);
 
-            // Check old_string exists
-            if (!content.Contains(oldString))
+            string newContent;
+
+            if (fullReplace)
             {
-                // Provide detailed debugging information with visible whitespace
-                var preview = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
-                var oldPreview = oldString.Length > 200 ? oldString.Substring(0, 200) + "..." : oldString;
-
-                // Show whitespace characters explicitly
-                var oldStringVisible = oldString
-                    .Replace("\r", "\\r")
-                    .Replace("\n", "\\n")
-                    .Replace("\t", "\\t")
-                    .Replace(" ", "·");
-
-                var contentVisible = preview
-                    .Replace("\r", "\\r")
-                    .Replace("\n", "\\n")
-                    .Replace("\t", "\\t")
-                    .Replace(" ", "·");
-
-                return ToolResult.Fail(
-                    $"old_string not found in file.\n\n" +
-                    $"CRITICAL: The string you're searching for does NOT exist in the file.\n\n" +
-                    $"What you're searching for ({oldString.Length} chars, whitespace shown as ·\\n\\r\\t):\n{oldStringVisible}\n\n" +
-                    $"Actual file content ({content.Length} chars total, whitespace shown as ·\\n\\r\\t):\n{contentVisible}\n\n" +
-                    $"Common issues:\n" +
-                    $"1. Missing empty lines (\\n\\n)\n" +
-                    $"2. Missing trailing spaces (shown as ·)\n" +
-                    $"3. Wrong line endings (\\r\\n vs \\n)\n\n" +
-                    $"SOLUTION: Use read_file to see the EXACT content, then copy the EXACT string including ALL whitespace.");
+                // Full replace mode: replace entire file content
+                newContent = newString;
             }
-
-            // Check uniqueness (unless replace_all)
-            if (!replaceAll)
+            else
             {
-                var firstIndex = content.IndexOf(oldString);
-                var lastIndex = content.LastIndexOf(oldString);
-                if (firstIndex != lastIndex)
+                // Normal edit mode: require old_string matching
+
+                // Check old_string exists
+                if (!content.Contains(oldString))
                 {
-                    return ToolResult.Fail("old_string is not unique in the file. Provide more context to make it unique, or use replace_all=true.");
+                    // Provide detailed debugging information with visible whitespace
+                    var preview = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
+                    var oldPreview = oldString.Length > 200 ? oldString.Substring(0, 200) + "..." : oldString;
+
+                    // Show whitespace characters explicitly
+                    var oldStringVisible = oldString
+                        .Replace("\r", "\\r")
+                        .Replace("\n", "\\n")
+                        .Replace("\t", "\\t")
+                        .Replace(" ", "·");
+
+                    var contentVisible = preview
+                        .Replace("\r", "\\r")
+                        .Replace("\n", "\\n")
+                        .Replace("\t", "\\t")
+                        .Replace(" ", "·");
+
+                    return ToolResult.Fail(
+                        $"old_string not found in file.\n\n" +
+                        $"CRITICAL: The string you're searching for does NOT exist in the file.\n\n" +
+                        $"What you're searching for ({oldString.Length} chars, whitespace shown as ·\\n\\r\\t):\n{oldStringVisible}\n\n" +
+                        $"Actual file content ({content.Length} chars total, whitespace shown as ·\\n\\r\\t):\n{contentVisible}\n\n" +
+                        $"Common issues:\n" +
+                        $"1. Missing empty lines (\\n\\n)\n" +
+                        $"2. Missing trailing spaces (shown as ·)\n" +
+                        $"3. Wrong line endings (\\r\\n vs \\n)\n\n" +
+                        $"SOLUTION: Use read_file to see the EXACT content, then copy the EXACT string including ALL whitespace.");
                 }
+
+                // Check uniqueness (unless replace_all)
+                if (!replaceAll)
+                {
+                    var firstIndex = content.IndexOf(oldString);
+                    var lastIndex = content.LastIndexOf(oldString);
+                    if (firstIndex != lastIndex)
+                    {
+                        return ToolResult.Fail("old_string is not unique in the file. Provide more context to make it unique, or use replace_all=true.");
+                    }
+                }
+
+                // Check if old_string equals new_string
+                if (oldString == newString)
+                    return ToolResult.Fail("old_string and new_string are identical. This is a no-op.");
+
+                // Apply the edit
+                newContent = replaceAll
+                    ? content.Replace(oldString, newString)
+                    : ReplaceFirst(content, oldString, newString);
             }
 
-            // Check if old_string equals new_string
-            if (oldString == newString)
-                return ToolResult.Fail("old_string and new_string are identical. This is a no-op.");
+            // Show diff and let user apply changes
+            var result = await context.ShowDiffAndApplyAsync(path, content, newContent, ct);
 
-            // Apply the edit
-            var newContent = replaceAll
-                ? content.Replace(oldString, newString)
-                : ReplaceFirst(content, oldString, newString);
+            if (!result.Applied)
+                return ToolResult.Fail("Operation cancelled by user or diff view was closed without applying changes.");
 
-            // Show diff preview and request confirmation
-            var result = await uiContext.ShowDiffPreviewAsync(path, content, newContent, ct);
+            // Read the actual saved content (user may have modified it in the diff view)
+            var finalContent = await context.ReadFileAsync(path, ct);
 
-            if (!result.Confirmed)
-                return ToolResult.Fail("Operation cancelled by user");
-
-            // Write the edited content (use the final content from the dialog, which may have been modified by the user)
-            await context.WriteFileAsync(path, result.FinalContent, ct);
-
-            // Check if user modified the content in the dialog
-            bool wasModifiedByUser = result.FinalContent != newContent;
+            // Check if user modified the content
+            bool wasModifiedByUser = finalContent != newContent;
 
             if (wasModifiedByUser)
             {
                 // Calculate actual changes
                 var originalLines = content.Split('\n').Length;
-                var finalLines = result.FinalContent.Split('\n').Length;
+                var finalLines = finalContent.Split('\n').Length;
                 var lineDiff = finalLines - originalLines;
                 var diffText = lineDiff > 0 ? $"+{lineDiff}" : lineDiff < 0 ? $"{lineDiff}" : "0";
 
                 // Include the actual final content in the result so AI can see what was actually applied
-                return ToolResult.Ok($"⚠️ USER MANUALLY EDITED THE FILE - YOUR SUGGESTION WAS NOT USED ⚠️\n\nFile: {path}\nOriginal: {originalLines} lines → User's version: {finalLines} lines ({diffText})\n\n📄 ACTUAL FILE CONTENT (as saved by user):\n{result.FinalContent}\n\n⚠️ CRITICAL: You MUST read and analyze the actual content above. Do NOT describe your original suggestion. Describe what the user actually saved.");
+                return ToolResult.Ok($"⚠️ USER MANUALLY EDITED THE FILE - YOUR SUGGESTION WAS NOT USED ⚠️\n\nFile: {path}\nOriginal: {originalLines} lines → User's version: {finalLines} lines ({diffText})\n\n📄 ACTUAL FILE CONTENT (as saved by user):\n{finalContent}\n\n⚠️ CRITICAL: You MUST read and analyze the actual content above. Do NOT describe your original suggestion. Describe what the user actually saved.");
             }
             else
             {
-                var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
-                return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
+                if (fullReplace)
+                {
+                    return ToolResult.Ok($"File content completely replaced: {path}");
+                }
+                else
+                {
+                    var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
+                    return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
+                }
             }
         }
 
