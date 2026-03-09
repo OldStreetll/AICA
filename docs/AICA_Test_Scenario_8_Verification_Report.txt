@@ -1,0 +1,188 @@
+# AICA 测试场景八验证报告 - 上下文管理与会话测试
+
+## 测试信息
+- **测试日期**: 2026-03-09
+- **测试场景**: 场景八 - 上下文保持能力测试
+- **使用模型**: MiniMax-M2.5
+
+---
+
+## 用户测试指令
+
+```
+测试 AICA 的上下文保持能力。按以下顺序执行：
+1. 首先读取 src/AICA.Core/Agent/AgentExecutor.cs 的前 50 行
+2. 基于刚才看到的内容，告诉我 AgentExecutor 的主要职责是什么（不要重新读取文件）
+3. 然后列出该文件中定义的所有方法名（可以使用代码定义工具）
+4. 最后告诉我前 50 行中是否提到了 "maxIterations" 或类似的迭代限制
+```
+
+---
+
+## AICA 工具调用序列
+
+### 工具调用统计
+- `read_file`: 1次（前50行）
+- `list_code_definition_names`: 1次
+- `attempt_completion`: 1次
+- **总计**: 3次
+
+### 调用链分析
+1. ✅ `read_file` - 读取AgentExecutor.cs前50行（offset=0, limit=50）
+2. ✅ `list_code_definition_names` - 列出文件中所有代码定义
+3. ✅ `attempt_completion` - 汇总回答
+
+**关键行为**: AICA严格遵守了"不要重新读取文件"的指令，子任务2完全基于上下文记忆回答。
+
+---
+
+## 逐项验证
+
+### 子任务1：读取前50行
+
+**AICA行为**: 使用read_file读取AgentExecutor.cs前50行
+**验证**: ✅ 正确执行，使用了offset/limit参数
+
+---
+
+### 子任务2：基于上下文描述AgentExecutor主要职责（不重新读取）
+
+**AICA描述**:
+- 核心Agent循环执行器，管理与LLM的对话循环
+- 调度工具执行（通过ToolDispatcher）
+- 维护任务状态（TaskState）
+- 控制迭代次数和Token预算
+
+**实际代码验证（前50行）**:
+```
+行16: /// Core Agent executor that manages the Agent loop
+行20: private readonly ILLMClient _llmClient;           → 管理LLM对话 ✅
+行21: private readonly ToolDispatcher _toolDispatcher;   → 调度工具执行 ✅
+行26: private TaskState _taskState;                      → 维护任务状态 ✅
+行23: private readonly int _maxIterations;               → 控制迭代次数 ✅
+行24: private readonly int _maxTokenBudget;              → 控制Token预算 ✅
+```
+
+**验证结果**: ✅ 100%准确，完全基于上下文记忆，未重新读取文件
+
+---
+
+### 子任务3：列出文件中定义的所有方法名
+
+**AICA列出的方法分类**:
+
+| 类型 | AICA列出的方法 |
+|------|---------------|
+| 公共方法 | ExecuteAsync, Abort |
+| 私有方法 | AugmentToolCallParameters, TryParseTextToolCalls |
+| 静态工具方法 | RemoveTextToolCallSyntax, IsModificationRequest, IsAlreadyCompliantConclusion, ClassifyToolFailure, DetectModificationConflict, DetectToolExecutionClaim, SanitizeParameterValue, IsTransientException, GetToolCallSignature, IsLikelyConversational |
+| 工厂方法 | TextChunk, ToolStart, WithToolResult, Complete, WithError |
+
+**实际代码验证**:
+
+AgentExecutor类的方法:
+- 行57: `public async IAsyncEnumerable<AgentStep> ExecuteAsync(...)` ✅
+- 行719: `private void AugmentToolCallParameters(...)` ✅
+- 行750: `private List<ToolCall> TryParseTextToolCalls(...)` ✅
+- 行930: `private static string RemoveTextToolCallSyntax(...)` ✅
+- 行955: `private static bool IsModificationRequest(...)` ✅
+- 行981: `private static bool IsAlreadyCompliantConclusion(...)` ✅
+- 行1005: `private static ToolFailureKind ClassifyToolFailure(...)` ✅
+- 行1062: `private static bool DetectModificationConflict(...)` ✅
+- 行1088: `private static bool DetectToolExecutionClaim(...)` ✅
+- 行1136: `private static string SanitizeParameterValue(...)` ✅
+- 行1164: `public void Abort()` ✅
+- 行1172: `private static bool IsTransientException(...)` ✅
+- 行1183: `private static string GetToolCallSignature(...)` ✅
+- 行1215: `private static bool IsLikelyConversational(...)` ✅
+
+AgentStep类的工厂方法（定义在同一文件行1268-1281）:
+- 行1276: `public static AgentStep TextChunk(...)` ✅
+- 行1277: `public static AgentStep ToolStart(...)` ✅
+- 行1278: `public static AgentStep WithToolResult(...)` ✅
+- 行1279: `public static AgentStep Complete(...)` ✅
+- 行1280: `public static AgentStep WithError(...)` ✅
+
+**注意**: TextChunk/ToolStart/WithToolResult/Complete/WithError 实际上是AgentStep类的静态工厂方法，不是AgentExecutor类的方法。AICA将它们归类为"工厂方法"，虽然分类上有细微偏差（它们属于AgentStep类而非AgentExecutor类），但由于它们定义在同一文件中，且list_code_definition_names工具会列出文件中所有定义，这个归类是可以理解的。
+
+**验证结果**: ✅ 方法列表完整准确，分类基本正确
+
+---
+
+### 子任务4：前50行中是否提到maxIterations
+
+**AICA描述**:
+- 第23行：`private readonly int _maxIterations;`
+- 第37行：构造函数参数 `int maxIterations = 50`
+- 第44行：赋值 `_maxIterations = maxIterations;`
+
+**实际代码验证**:
+- 行23: `private readonly int _maxIterations;` ✅ 正确
+- 行37: `int maxIterations = 50,` ✅ 正确
+- 行44: `_maxIterations = maxIterations;` ✅ 正确
+
+**验证结果**: ✅ 100%准确，行号全部正确
+
+---
+
+## 上下文保持能力评估
+
+### 测试设计分析
+
+本场景专门测试AICA的上下文保持能力，核心考察点：
+
+| 考察点 | 结果 | 说明 |
+|--------|------|------|
+| 遵守"不重新读取"指令 | ✅ | 子任务2完全基于记忆回答，未调用read_file |
+| 上下文记忆准确性 | ✅ | 对前50行内容的回忆100%准确 |
+| 行号记忆准确性 | ✅ | 三个行号（23、37、44）全部正确 |
+| 跨步骤信息关联 | ✅ | 能将前50行内容与后续方法列表关联 |
+| 指令顺序遵守 | ✅ | 严格按1→2→3→4顺序执行 |
+
+### 工具调用效率
+
+仅3次工具调用完成全部4个子任务，效率极高：
+- read_file: 1次（子任务1）
+- list_code_definition_names: 1次（子任务3）
+- attempt_completion: 1次（汇总）
+- 子任务2和4完全基于上下文记忆，无需额外工具调用
+
+---
+
+## 综合评分
+
+### 评分维度
+
+| 维度 | 得分 | 满分 | 说明 |
+|------|------|------|------|
+| 指令遵守 | 10 | 10 | 严格遵守"不重新读取"指令 |
+| 上下文记忆准确性 | 10 | 10 | 职责描述和行号引用100%准确 |
+| 方法列表完整性 | 9 | 10 | 完整列出所有方法，AgentStep工厂方法归类有细微偏差 |
+| 行号准确性 | 10 | 10 | 三个行号全部正确 |
+| 工具调用效率 | 10 | 10 | 仅3次调用完成4个子任务 |
+| 输出结构与可读性 | 10 | 10 | 分类清晰，表格化展示 |
+
+### 总分：59/60（98分）
+
+**评级**: ✅ **优秀**
+
+---
+
+## 验证要点检查
+
+- [X] 是否正确读取了前50行（使用offset/limit）
+- [X] 是否基于上下文记忆回答职责问题（未重新读取）
+- [X] 方法列表是否完整准确
+- [X] maxIterations相关信息是否正确（行号、默认值）
+- [X] 是否严格按指令顺序执行
+
+---
+
+## 结论
+
+AICA在上下文保持能力测试中表现优秀：
+1. ✅ 严格遵守"不重新读取"指令，展现良好的指令理解能力
+2. ✅ 上下文记忆100%准确，行号引用全部正确
+3. ✅ 方法列表完整，分类合理
+4. ✅ 工具调用效率极高（3次完成4个子任务）
+5. ⚠️ AgentStep工厂方法归类有细微偏差（属于AgentStep类而非AgentExecutor类）

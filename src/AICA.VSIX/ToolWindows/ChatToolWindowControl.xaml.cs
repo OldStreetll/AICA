@@ -735,7 +735,30 @@ namespace AICA.ToolWindows
                                 break;
 
                             case AgentStepType.Error:
-                                AppendMessage("assistant", $"❌ Agent Error: {step.ErrorMessage}");
+                                // Preserve any tool logs and text accumulated before the error
+                                var errorToolLogs = hasToolCalls ? toolOutputBuilder.ToString() : null;
+                                var errorContent = responseBuilder.ToString().Trim();
+                                var errorMessage = $"❌ Agent Error: {step.ErrorMessage}";
+
+                                if (!string.IsNullOrWhiteSpace(errorToolLogs) || !string.IsNullOrWhiteSpace(errorContent))
+                                {
+                                    // Append the error message after any existing content
+                                    var combinedContent = string.IsNullOrWhiteSpace(errorContent)
+                                        ? errorMessage
+                                        : errorContent + "\n\n---\n" + errorMessage;
+
+                                    _conversation.Add(new ConversationMessage
+                                    {
+                                        Role = "assistant",
+                                        Content = combinedContent,
+                                        ToolLogsHtml = errorToolLogs
+                                    });
+                                    RenderConversation();
+                                }
+                                else
+                                {
+                                    AppendMessage("assistant", errorMessage);
+                                }
                                 break;
                         }
                     }));

@@ -92,6 +92,9 @@ namespace AICA.Core.Prompt
             _builder.AppendLine();
             _builder.AppendLine("### MANDATORY: Task Completion");
             _builder.AppendLine("- **YOU MUST CALL `attempt_completion` AFTER EVERY TASK.** This is NOT optional.");
+            _builder.AppendLine("- **IMPORTANT: You have full autonomy to decide when a task is complete.** There are no artificial limits on tool calls or iterations.");
+            _builder.AppendLine("- **Call `attempt_completion` as soon as you have gathered sufficient information to answer the user's question completely.**");
+            _builder.AppendLine("- **Do NOT over-explore.** If you already have a good answer, call `attempt_completion` promptly. Quality over quantity.");
             _builder.AppendLine("- **DO NOT mention internal tool decisions to the user.** Never write text like 'I should call attempt_completion', 'I will call a tool now', '我应该调用 attempt_completion', or similar meta-reasoning. Only present user-facing results.");
             _builder.AppendLine("- Tasks that require `attempt_completion`:");
             _builder.AppendLine("  - Creating any file (write_to_file)");
@@ -105,6 +108,24 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("  - `result`: A comprehensive summary of what was accomplished");
             _builder.AppendLine("  - `command`: (Optional) A command to verify or test the result (e.g., 'dotnet build', 'make', 'g++ -o program main.cpp')");
             _builder.AppendLine("- **If you forget to call `attempt_completion`, the user will not see the completion card and will think the task is incomplete.**");
+            _builder.AppendLine();
+            _builder.AppendLine("### CRITICAL: Handling Instruction Conflicts");
+            _builder.AppendLine("- **When you discover that the user's instruction conflicts with the actual situation:**");
+            _builder.AppendLine("  - Example: User asks to modify FileA and FileB, but you discover they are already in the desired state");
+            _builder.AppendLine("  - Example: User asks to fix a bug, but you find the bug doesn't exist or is already fixed");
+            _builder.AppendLine("  - Example: User asks to implement feature X, but you find it's already implemented");
+            _builder.AppendLine("  - Example: User asks 'Refactor ReadFileTool and WriteFileTool to use ToolResult.Fail()', but you find they already use ToolResult.Fail()");
+            _builder.AppendLine("- **DO NOT proceed with modifications without user confirmation. Instead:**");
+            _builder.AppendLine("  1. Clearly report your findings: 'I found that FileA and FileB already use the desired pattern'");
+            _builder.AppendLine("  2. **MANDATORY: Use `ask_followup_question` to ask the user what they want to do:**");
+            _builder.AppendLine("     - Provide clear options (e.g., 'Keep as is', 'Modify anyway', 'Check other files')");
+            _builder.AppendLine("     - Explain the current state and why you're asking");
+            _builder.AppendLine("  3. Wait for user response before proceeding");
+            _builder.AppendLine("- **CRITICAL: You MUST NOT directly call `attempt_completion` or end the task with a text-only response when this conflict occurs.**");
+            _builder.AppendLine("- **CRITICAL: Calling `ask_followup_question` is NOT optional in conflict scenarios - it is REQUIRED.**");
+            _builder.AppendLine("- **DO NOT make assumptions and modify different files than requested without asking first.**");
+            _builder.AppendLine("- **DO NOT say 'I'll modify FileC instead' without user permission.**");
+            _builder.AppendLine("- **Respect user's explicit instructions unless there's a clear technical reason not to (e.g., safety, file doesn't exist).**");
             _builder.AppendLine();
             _builder.AppendLine("### Other Tool Rules");
             _builder.AppendLine("- Keep your text output minimal before tool calls. A brief one-line plan is acceptable, but never write the expected results before receiving actual tool output.");
@@ -128,6 +149,8 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- `list_code_definition_names`: Use this to understand code structure (classes, methods, properties) without reading entire files. Ideal for code structure overview requests.");
             _builder.AppendLine("- `grep_search`: Prefer this over `read_file` when looking for specific patterns across multiple files.");
             _builder.AppendLine("- `read_file`: Supports reading large files in chunks using `offset` and `limit` parameters. **CRITICAL: If you read a file with offset/limit and the content appears truncated, continue reading by calling read_file again with the next offset until you have the complete content needed for your task.** Do NOT tell the user 'the file was truncated' and stop - keep reading until you have enough information.");
+            _builder.AppendLine("  - **IMPORTANT: When using offset/limit, the tool returns content with line numbers (e.g., '   123: code here'). Use these line numbers when referencing code locations in your analysis.**");
+            _builder.AppendLine("  - **When reporting code locations, always use the actual line numbers shown in the tool output, NOT calculated offsets.**");
             _builder.AppendLine("- `edit`: Always `read_file` first. The `old_string` must exactly match file content and be unique.");
             _builder.AppendLine();
 
@@ -136,6 +159,11 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- ALWAYS read a file with `read_file` before editing it.");
             _builder.AppendLine("- Use `edit` for precise, targeted changes. The `old_string` must exactly match the file content (including whitespace and indentation) and must be unique in the file.");
             _builder.AppendLine("- **CRITICAL: If an edit preview/diff is rejected by the user (for example, they click 'No' or cancel the apply step), accept that decision. Do NOT retry the same edit automatically. Instead, explain that the edit was not applied, analyze the current file state, and continue based on the unchanged file unless the user explicitly asks you to try again.**");
+            _builder.AppendLine("- **CRITICAL: When a tool call fails or is rejected, first analyze the latest tool error before acting. Do NOT mechanically repeat the same call. Prefer adjusting parameters, re-reading the relevant file, switching to a different tool, or using `ask_followup_question` if user input is needed. Only stop when you genuinely cannot continue.**");
+            _builder.AppendLine("- **CRITICAL: Treat recoverable tool feedback (for example: exact-match edit failures, duplicate-call warnings, or user-cancelled followup questions) as signals to self-correct, not as reasons to immediately give up.**");
+            _builder.AppendLine("- **CRITICAL: If multiple attempts fail in a row, summarize the failure pattern to yourself through your next action: change strategy, avoid repeating the same path, and ask the user a focused question when the next step depends on their choice.**");
+            _builder.AppendLine("- **CRITICAL: Reaching several failures in a row does NOT mean you should stop immediately. Use the latest failure reason to recover first. Only end the task after you have genuinely tried a different path and still cannot proceed.**");
+            _builder.AppendLine("- **CRITICAL: When the system warns that several blocking failures happened consecutively, your next move must be a recovery action, not a repeated call.** Prefer: (1) re-read or inspect fresh context, (2) change parameters, (3) switch tools, or (4) call `ask_followup_question` when the user must choose.");
             _builder.AppendLine("- **CRITICAL: When using `edit`, copy the exact text from the `read_file` output.** Pay attention to:");
             _builder.AppendLine("  - Indentation (spaces vs tabs)");
             _builder.AppendLine("  - Line endings");

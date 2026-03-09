@@ -66,14 +66,10 @@ namespace AICA.Core.Tools
                 return ToolResult.Fail("Missing required parameter: options");
 
             // Parse options array
-            List<QuestionOption> options;
-            try
+            (List<QuestionOption> options, string error) = ParseOptions(optionsObj);
+            if (error != null)
             {
-                options = ParseOptions(optionsObj);
-            }
-            catch (Exception ex)
-            {
-                return ToolResult.Fail($"Failed to parse options: {ex.Message}");
+                return ToolResult.Fail(error);
             }
 
             if (options == null || options.Count == 0)
@@ -122,7 +118,7 @@ namespace AICA.Core.Tools
             return Task.CompletedTask;
         }
 
-        private List<QuestionOption> ParseOptions(object optionsObj)
+        private (List<QuestionOption> Options, string Error) ParseOptions(object optionsObj)
         {
             var options = new List<QuestionOption>();
 
@@ -130,7 +126,7 @@ namespace AICA.Core.Tools
             if (optionsObj is JsonElement jsonElement)
             {
                 if (jsonElement.ValueKind != JsonValueKind.Array)
-                    throw new ArgumentException("Options must be an array");
+                    return (null, "Options must be an array");
 
                 foreach (var item in jsonElement.EnumerateArray())
                 {
@@ -182,10 +178,10 @@ namespace AICA.Core.Tools
             }
             else
             {
-                throw new ArgumentException("Options must be an array");
+                return (null, "Options must be an array");
             }
 
-            return options;
+            return (options, null);
         }
     }
 }

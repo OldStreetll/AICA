@@ -34,7 +34,7 @@ namespace AICA.Core.Agent
             ILLMClient llmClient,
             ToolDispatcher toolDispatcher,
             ILogger<AgentExecutor> logger = null,
-            int maxIterations = 25,
+            int maxIterations = 50,
             int maxTokenBudget = 32000,
             string customInstructions = null)
         {
@@ -91,7 +91,11 @@ namespace AICA.Core.Agent
                 conversationHistory.Add(ChatMessage.User(userRequest));
             }
 
-            _taskState = new TaskState { MaxConsecutiveMistakes = 3 };
+            _taskState = new TaskState
+            {
+                MaxConsecutiveMistakes = 3,
+                MaxRecoveryPrompts = 2
+            };
 
             // Track tool call signatures to detect duplicates
             var executedToolSignatures = new HashSet<string>(StringComparer.Ordinal);
@@ -113,41 +117,47 @@ namespace AICA.Core.Agent
                         conversationHistory, conversationBudget);
                 }
 
-                // ── Force-completion: when enough tools have been called, remove tools to force text-only summary ──
+                // ── Safety boundaries: only intervene in truly dangerous situations ──
                 int currentTokens = conversationHistory.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
                 double tokenUsageRatio = (double)currentTokens / conversationBudget;
-                // Primary trigger: absolute tool call count >=8 (most reliable)
-                // Backup triggers: iteration>=6 with tools used, token usage, near max iterations
-                bool forceCompletion = _taskState.HasEverUsedTools &&
-                    (_taskState.TotalToolCallCount >= 8 ||
-                     _taskState.Iteration >= 6 ||
-                     tokenUsageRatio > 0.60 ||
-                     _taskState.Iteration >= _maxIterations - 2);
-                System.Diagnostics.Debug.WriteLine($"[AICA] forceCompletion check: TotalToolCalls={_taskState.TotalToolCallCount}, Iteration={_taskState.Iteration}, tokenRatio={tokenUsageRatio:F2}, result={forceCompletion}");
+
+                // Only force completion in extreme edge cases
+                bool forceCompletion = false;
+
+                // Edge case 1: Approaching absolute iteration limit (last 2 iterations)
+                if (_taskState.Iteration >= _maxIterations - 2)
+                {
+                    forceCompletion = true;
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Safety boundary: approaching max iterations ({_taskState.Iteration}/{_maxIterations})");
+                }
+
+                // Edge case 2: Context window critically full (>90%)
+                if (tokenUsageRatio > 0.90)
+                {
+                    forceCompletion = true;
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Safety boundary: context window critically full ({tokenUsageRatio:P0})");
+                }
 
                 if (forceCompletion)
                 {
-                    string reason = _taskState.TotalToolCallCount >= 10
-                        ? $"{_taskState.TotalToolCallCount} tool calls executed"
-                        : tokenUsageRatio > 0.65
-                            ? $"context window {tokenUsageRatio:P0} full"
-                            : $"iteration {_taskState.Iteration}/{_maxIterations}";
-                    System.Diagnostics.Debug.WriteLine($"[AICA] Force-completion triggered: {reason}");
+                    string reason = _taskState.Iteration >= _maxIterations - 2
+                        ? $"approaching iteration limit ({_taskState.Iteration}/{_maxIterations})"
+                        : $"context window critically full ({tokenUsageRatio:P0})";
+
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Safety boundary triggered: {reason}");
 
                     bool alreadySummarizing = conversationHistory.Any(m =>
                         m.Role == LLM.ChatRole.System && m.Content != null &&
-                        m.Content.Contains("[SUMMARIZE]"));
+                        m.Content.Contains("[SAFETY_BOUNDARY]"));
 
                     if (!alreadySummarizing)
                     {
-                        // Visible diagnostic so user can confirm force-completion is active
-                        yield return AgentStep.TextChunk($"\n\nℹ️ *正在整理分析结果 ({reason})...*\n\n");
+                        yield return AgentStep.TextChunk($"\n\n⚠️ *Safety boundary triggered ({reason}), completing task...*\n\n");
 
                         conversationHistory.Add(ChatMessage.System(
-                            $"[SUMMARIZE] Resources are running low ({reason}). " +
-                            "You MUST now generate a comprehensive final answer based on ALL the information " +
-                            "you have gathered so far. Synthesize your findings into a clear, well-structured response. " +
-                            "Do NOT call any more tools."));
+                            $"[SAFETY_BOUNDARY] You are approaching system limits ({reason}). " +
+                            "You MUST call `attempt_completion` NOW to summarize your findings. " +
+                            "Provide a comprehensive summary based on ALL information gathered so far."));
                     }
                 }
 
@@ -180,8 +190,10 @@ namespace AICA.Core.Agent
 
                     try
                     {
-                        // When forceCompletion is active, pass null tools to prevent LLM from making tool calls
-                        var effectiveTools = forceCompletion ? null : toolDefinitions;
+                        // When forceCompletion is active, keep only attempt_completion tool to allow proper task termination
+                        var effectiveTools = forceCompletion
+                            ? toolDefinitions.Where(t => t.Name == "attempt_completion").ToList()
+                            : toolDefinitions;
                         await foreach (var chunk in _llmClient.StreamChatAsync(conversationHistory, effectiveTools, ct).ConfigureAwait(false))
                         {
                             if (chunk.Type == LLMChunkType.Text)
@@ -437,6 +449,26 @@ namespace AICA.Core.Agent
                         continue;
                     }
 
+                    // ── Conflict detection: modification request but already compliant ──
+                    if (DetectModificationConflict(userRequest, assistantResponse, conversationHistory, _taskState))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Detected modification conflict - user requested modification but code is already compliant");
+
+                        conversationHistory.Add(ChatMessage.User(
+                            "⚠️ CRITICAL: You discovered that the requested files are already in the desired state, " +
+                            "but the user explicitly asked you to modify them. This is a conflict scenario. " +
+                            "You MUST NOT directly complete the task or end with a text-only response. " +
+                            "Instead, you MUST call the `ask_followup_question` tool to ask the user what they want to do. " +
+                            "Provide clear options such as:\n" +
+                            "- 'Keep the current implementation as is'\n" +
+                            "- 'Modify the files anyway according to the original request'\n" +
+                            "- 'Check other related files for similar issues'\n" +
+                            "Explain your findings clearly and wait for the user's decision before proceeding."));
+
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Added conflict resolution constraint message");
+                        continue;
+                    }
+
                     // First iteration with no tools: genuine text response
                     // (knowledge questions, explanations, conversational replies)
                     if (_taskState.Iteration == 1)
@@ -465,6 +497,21 @@ namespace AICA.Core.Agent
                 // Tools were used, reset no-tool counter and mark that tools have been used
                 _taskState.ResetNoToolCount();
                 _taskState.HasEverUsedTools = true;
+
+                // ── Conflict detection: prevent direct completion when modification was requested but nothing needs changing ──
+                if (toolCalls.Any(tc => tc.Name == "attempt_completion") &&
+                    DetectModificationConflict(userRequest, assistantResponse, conversationHistory, _taskState))
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] Preventing direct attempt_completion because modification conflict requires ask_followup_question");
+
+                    conversationHistory.Add(ChatMessage.User(
+                        "⚠️ CRITICAL: You concluded that the requested files are already in the desired state, " +
+                        "but the user explicitly asked for a modification. This is a conflict scenario. " +
+                        "You MUST NOT call `attempt_completion` yet. Instead, you MUST call the `ask_followup_question` tool " +
+                        "to ask the user how to proceed. Provide clear options such as keeping the current implementation, " +
+                        "modifying anyway, or checking related files."));
+                    continue;
+                }
 
                 // ── Parameter augmentation ──
                 // Auto-add missing parameters when user intent is clear but LLM omitted them
@@ -531,16 +578,16 @@ namespace AICA.Core.Agent
                     // Track mistakes vs successes
                     if (result.Success)
                     {
-                        _taskState.ResetMistakeCount();
+                        _taskState.ResetFailureCounts();
                         // Track file edits
                         if (toolCall.Name == "edit" || toolCall.Name == "write_to_file")
                             _taskState.DidEditFile = true;
                     }
                     else
                     {
-                        if (_taskState.IncrementMistakeCount())
+                        if (_taskState.RecordToolFailure(ToolFailureKind.Blocking))
                         {
-                            System.Diagnostics.Debug.WriteLine($"[AICA] Consecutive mistake threshold reached ({_taskState.ConsecutiveMistakeCount})");
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Consecutive mistake threshold reached ({_taskState.ConsecutiveBlockingFailureCount})");
                         }
                     }
 
@@ -594,6 +641,34 @@ namespace AICA.Core.Agent
                         result.Content != null && result.Content.Contains("EDIT CANCELLED BY USER - NO CHANGES WERE APPLIED"))
                     {
                         _taskState.DidRejectTool = true;
+                        _taskState.UserCancellationCount++;
+                    }
+
+                    // Track other user-initiated cancellations
+                    if (!result.Success && result.Error != null &&
+                        (result.Error.Contains("cancelled by user") || result.Error.Contains("User cancelled")))
+                    {
+                        _taskState.UserCancellationCount++;
+                    }
+
+                    // If user has cancelled too many times, stop and ask what to do
+                    if (_taskState.UserCancellationCount >= TaskState.MaxUserCancellations)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] User cancelled {_taskState.UserCancellationCount} times, stopping to ask for guidance");
+
+                        conversationHistory.Add(ChatMessage.User(
+                            "⚠️ The user has cancelled or rejected multiple operations (" + _taskState.UserCancellationCount + " times). " +
+                            "This indicates they may not agree with your current approach. " +
+                            "You MUST immediately call the `ask_followup_question` tool to ask the user what they want to do next. " +
+                            "Summarize what you have accomplished so far and provide options such as:\n" +
+                            "- Continue with a different approach\n" +
+                            "- End the task and keep current progress\n" +
+                            "- Explain what specific changes they want\n" +
+                            "Do NOT continue with more tool calls until the user responds."));
+
+                        // Reset counter so if user chooses to continue, they get another window
+                        _taskState.UserCancellationCount = 0;
+                        break; // break out of tool execution loop, let the Agent respond
                     }
                 }
 
@@ -617,18 +692,47 @@ namespace AICA.Core.Agent
                 }
 
                 // Check if consecutive mistake threshold was reached this iteration
-                if (_taskState.ConsecutiveMistakeCount >= _taskState.MaxConsecutiveMistakes)
+                if (_taskState.ConsecutiveBlockingFailureCount >= _taskState.MaxConsecutiveMistakes)
                 {
-                    yield return AgentStep.WithError(
-                        $"The Agent has encountered {_taskState.ConsecutiveMistakeCount} consecutive errors. " +
-                        "This may indicate a problem with the current approach. Consider providing guidance.");
-                    yield break;
+                    if (_taskState.CanPromptRecovery())
+                    {
+                        // Try recovery: ask the Agent to use ask_followup_question instead of terminating
+                        _taskState.RecordRecoveryPrompt();
+                        _taskState.ResetBlockingFailuresForRecovery();
+
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Consecutive error threshold reached, injecting recovery prompt (attempt {_taskState.RecoveryPromptCount}/{_taskState.MaxRecoveryPrompts})");
+
+                        yield return AgentStep.TextChunk($"\n\n⚠️ *遇到连续错误，正在尝试恢复 ({_taskState.RecoveryPromptCount}/{_taskState.MaxRecoveryPrompts})...*\n\n");
+
+                        conversationHistory.Add(ChatMessage.User(
+                            "⚠️ You have encountered multiple consecutive errors with your current approach. " +
+                            "STOP trying the same approach. Instead, you MUST call the `ask_followup_question` tool " +
+                            "to ask the user for guidance. Summarize what you were trying to do, what errors occurred, " +
+                            "and provide options such as:\n" +
+                            "- Try a different approach\n" +
+                            "- Skip this step and move on\n" +
+                            "- End the task with current progress\n" +
+                            "Do NOT retry the failed operation. Call `ask_followup_question` now."));
+                        continue;
+                    }
+                    else
+                    {
+                        // Recovery attempts exhausted — terminate with stats
+                        yield return AgentStep.WithError(
+                            $"Agent 遇到 {_taskState.ConsecutiveBlockingFailureCount} 次连续错误，且恢复尝试已用尽。\n" +
+                            $"共执行了 {_taskState.TotalToolCallCount} 次工具调用。\n" +
+                            $"建议：请检查上方的工具执行日志，确认已完成的工作。如需继续，请发送新的指令。");
+                        yield break;
+                    }
                 }
             }
 
             if (_taskState.Iteration >= _maxIterations)
             {
-                yield return AgentStep.WithError($"Maximum iterations ({_maxIterations}) reached. The Agent may be stuck in a loop.");
+                yield return AgentStep.WithError(
+                    $"已达到最大迭代次数 ({_taskState.Iteration}/{_maxIterations})。\n" +
+                    $"共执行了 {_taskState.TotalToolCallCount} 次工具调用，发送了 {_taskState.ApiRequestCount} 次API请求。\n" +
+                    $"建议：请检查上方的工具执行日志，确认已完成的工作。如需继续，请发送新的指令。");
             }
         }
 
@@ -922,6 +1026,51 @@ namespace AICA.Core.Agent
                 (text.Contains("|") && text.Contains("---")); // Markdown table
 
             return hasExecutionClaim || hasStructuredOutput;
+        }
+
+        /// <summary>
+        /// Detect conflict where user requested a modification but the LLM concludes
+        /// the code is already in the desired state (no changes needed).
+        /// </summary>
+        private static bool DetectModificationConflict(
+            string userRequest,
+            string assistantResponse,
+            List<ChatMessage> conversationHistory,
+            TaskState taskState)
+        {
+            if (string.IsNullOrWhiteSpace(userRequest) || string.IsNullOrWhiteSpace(assistantResponse))
+                return false;
+
+            var lowerRequest = userRequest.ToLowerInvariant();
+            var lowerResponse = assistantResponse.ToLowerInvariant();
+
+            // Check if user explicitly requested a modification
+            var modificationKeywords = new[]
+            {
+                "修改", "更改", "改为", "替换", "重构", "重写", "添加", "删除", "移除",
+                "modify", "change", "replace", "refactor", "rewrite", "add", "remove", "delete",
+                "update", "fix", "改成", "换成", "调整", "优化"
+            };
+
+            bool userRequestedModification = modificationKeywords.Any(k => lowerRequest.Contains(k));
+            if (!userRequestedModification)
+                return false;
+
+            // Check if assistant response indicates no changes are needed
+            var alreadyCompliantPatterns = new[]
+            {
+                "already", "已经是", "已经符合", "无需修改", "不需要修改", "no changes needed",
+                "no modification needed", "already in the desired state", "already correct",
+                "already implemented", "已经实现", "代码已经", "当前代码已",
+                "no changes are necessary", "nothing to change"
+            };
+
+            bool responseIndicatesNoChange = alreadyCompliantPatterns.Any(p => lowerResponse.Contains(p));
+
+            // Also check if no file edits were made despite modification request
+            bool noEditsPerformed = !taskState.DidEditFile && !taskState.HasEverUsedTools;
+
+            return responseIndicatesNoChange || (noEditsPerformed && taskState.Iteration > 0);
         }
 
         /// <summary>

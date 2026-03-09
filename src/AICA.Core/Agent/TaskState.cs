@@ -1,6 +1,15 @@
 namespace AICA.Core.Agent
 {
     /// <summary>
+    /// Classification of tool failures for recovery handling.
+    /// </summary>
+    public enum ToolFailureKind
+    {
+        RecoverableFeedback,
+        Blocking
+    }
+
+    /// <summary>
     /// Tracks the state of an Agent task execution.
     /// Extracted from AgentExecutor for clarity and reuse.
     /// </summary>
@@ -16,8 +25,11 @@ namespace AICA.Core.Agent
         public string LastToolName { get; set; } = string.Empty;
 
         // Error tracking
-        public int ConsecutiveMistakeCount { get; set; }
+        public int ConsecutiveBlockingFailureCount { get; set; }
+        public int ConsecutiveRecoverableFailureCount { get; set; }
+        public int RecoveryPromptCount { get; set; }
         public int MaxConsecutiveMistakes { get; set; } = 3;
+        public int MaxRecoveryPrompts { get; set; } = 2;
 
         // Task control
         public bool Abort { get; set; }
@@ -31,22 +43,66 @@ namespace AICA.Core.Agent
         // noToolsUsed tracking
         public int ConsecutiveNoToolCount { get; set; }
 
+        // User cancellation/rejection tracking
+        public int UserCancellationCount { get; set; }
+        public const int MaxUserCancellations = 3;
+
         /// <summary>
-        /// Reset mistake counter (called when a tool executes successfully)
+        /// Reset failure counters after a successful step.
         /// </summary>
-        public void ResetMistakeCount()
+        public void ResetFailureCounts()
         {
-            ConsecutiveMistakeCount = 0;
+            ConsecutiveBlockingFailureCount = 0;
+            ConsecutiveRecoverableFailureCount = 0;
         }
 
         /// <summary>
-        /// Increment mistake counter and check threshold
+        /// Record a tool failure classification.
         /// </summary>
-        /// <returns>True if threshold exceeded</returns>
-        public bool IncrementMistakeCount()
+        /// <returns>True if blocking failure threshold reached.</returns>
+        public bool RecordToolFailure(ToolFailureKind kind)
         {
-            ConsecutiveMistakeCount++;
-            return ConsecutiveMistakeCount >= MaxConsecutiveMistakes;
+            if (kind == ToolFailureKind.Blocking)
+            {
+                ConsecutiveBlockingFailureCount++;
+                ConsecutiveRecoverableFailureCount = 0;
+                return ConsecutiveBlockingFailureCount >= MaxConsecutiveMistakes;
+            }
+
+            ConsecutiveRecoverableFailureCount++;
+            return false;
+        }
+
+        /// <summary>
+        /// Check whether blocking failures have reached the recovery threshold.
+        /// </summary>
+        public bool HasReachedBlockingFailureThreshold()
+        {
+            return ConsecutiveBlockingFailureCount >= MaxConsecutiveMistakes;
+        }
+
+        /// <summary>
+        /// Check whether a recovery prompt can still be injected before aborting.
+        /// </summary>
+        public bool CanPromptRecovery()
+        {
+            return RecoveryPromptCount < MaxRecoveryPrompts;
+        }
+
+        /// <summary>
+        /// Mark that a recovery prompt was injected.
+        /// </summary>
+        public void RecordRecoveryPrompt()
+        {
+            RecoveryPromptCount++;
+        }
+
+        /// <summary>
+        /// Reset blocking failure count after a recovery prompt so the model gets a fresh recovery window.
+        /// </summary>
+        public void ResetBlockingFailuresForRecovery()
+        {
+            ConsecutiveBlockingFailureCount = 0;
         }
 
         /// <summary>

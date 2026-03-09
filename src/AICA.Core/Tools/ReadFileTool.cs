@@ -103,7 +103,17 @@ namespace AICA.Core.Tools
                 if (startIndex >= lines.Length) return ToolResult.Ok("(empty - offset beyond file length)");
 
                 count = System.Math.Min(count, lines.Length - startIndex);
-                content = string.Join("\n", lines, startIndex, count);
+
+                // Add line numbers to help Agent reference code accurately
+                var numberedLines = new System.Text.StringBuilder();
+                numberedLines.AppendLine($"[Showing lines {startIndex + 1}-{startIndex + count} of {lines.Length}]");
+                numberedLines.AppendLine();
+                for (int i = 0; i < count; i++)
+                {
+                    var lineNumber = startIndex + i + 1;
+                    numberedLines.AppendLine($"{lineNumber,6}: {lines[startIndex + i]}");
+                }
+                content = numberedLines.ToString();
             }
 
             return ToolResult.Ok(content);

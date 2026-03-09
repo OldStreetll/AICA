@@ -87,6 +87,17 @@ namespace AICA.Core.Logging
                 logger.LogWarning("Tool {ToolName} failed. {Details}", toolName, details ?? "");
         }
 
+        public static void LogToolTiming(this ILogger logger, string toolName, long elapsedMilliseconds, bool success)
+        {
+            var status = success ? "completed" : "failed";
+            logger.LogInformation("Tool {ToolName} {Status} in {ElapsedMs}ms", toolName, status, elapsedMilliseconds);
+        }
+
+        public static void LogToolStart(this ILogger logger, string toolName, string arguments)
+        {
+            logger.LogDebug("Tool {ToolName} starting with arguments: {Arguments}", toolName, arguments);
+        }
+
         public static void LogAgentIteration(this ILogger logger, int iteration, string action)
         {
             logger.LogDebug("Agent iteration {Iteration}: {Action}", iteration, action);
