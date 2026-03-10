@@ -112,8 +112,12 @@ namespace AICA.Core.Tools
             {
                 // Normal edit mode: require old_string matching
 
+                // Normalize line endings to handle \r\n vs \n differences
+                var normalizedContent = NormalizeLineEndings(content);
+                var normalizedOldString = NormalizeLineEndings(oldString);
+
                 // Check old_string exists
-                if (!content.Contains(oldString))
+                if (!normalizedContent.Contains(normalizedOldString))
                 {
                     // Provide detailed debugging information with visible whitespace
                     var preview = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
@@ -147,8 +151,8 @@ namespace AICA.Core.Tools
                 // Check uniqueness (unless replace_all)
                 if (!replaceAll)
                 {
-                    var firstIndex = content.IndexOf(oldString);
-                    var lastIndex = content.LastIndexOf(oldString);
+                    var firstIndex = normalizedContent.IndexOf(normalizedOldString);
+                    var lastIndex = normalizedContent.LastIndexOf(normalizedOldString);
                     if (firstIndex != lastIndex)
                     {
                         return ToolResult.Fail("old_string is not unique in the file. Provide more context to make it unique, or use replace_all=true.");
@@ -161,8 +165,8 @@ namespace AICA.Core.Tools
 
                 // Apply the edit
                 newContent = replaceAll
-                    ? content.Replace(oldString, newString)
-                    : ReplaceFirst(content, oldString, newString);
+                    ? normalizedContent.Replace(normalizedOldString, newString)
+                    : ReplaceFirst(normalizedContent, normalizedOldString, newString);
             }
 
             // Show diff and let user apply changes
@@ -209,6 +213,18 @@ namespace AICA.Core.Tools
                     return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
                 }
             }
+        }
+
+        /// <summary>
+        /// Normalize line endings to Unix format (\n) to handle cross-platform differences
+        /// </summary>
+        private string NormalizeLineEndings(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return text;
+
+            // Convert all line endings to \n
+            return text.Replace("\r\n", "\n").Replace("\r", "\n");
         }
 
         private string ReplaceFirst(string text, string oldValue, string newValue)
