@@ -49,6 +49,8 @@ namespace AICA.Core.Agent
 
         // Context pressure tracking
         public bool HasCondenseHinted { get; set; }
+        public int CondenseHintIteration { get; set; }
+        public bool HasAutoCondensed { get; set; }
 
         /// <summary>
         /// Reset failure counters after a successful step.

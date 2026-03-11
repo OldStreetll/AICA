@@ -139,24 +139,65 @@ namespace AICA.Core.Agent
                 // ── Safety boundaries: only intervene in truly dangerous situations ──
                 double tokenUsageRatio = (double)currentTokens / Math.Max(1, conversationBudget);
 
-                // ── Proactive condense hint (70%-85% usage) ──
-                // Nudge the LLM to call condense before we hit the safety boundary
-                if (tokenUsageRatio > 0.70 && tokenUsageRatio <= 0.90 && !_taskState.HasCondenseHinted)
+                // ── Two-level proactive condense ──
+                // Level 1 (70%): hint the LLM to call condense
+                // Level 2 (80%+): if LLM ignored the hint, auto-condense from conversation history
+                // Note: auto-condense must run BEFORE safety boundary check so it gets a chance
+                //       even when token usage jumps from 70s% to 90%+ in a single iteration
+                if (tokenUsageRatio > 0.70 && !_taskState.HasAutoCondensed)
                 {
                     int compressibleMessages = conversationHistory
                         .Count(m => m.Role != ChatRole.System);
 
                     if (compressibleMessages >= 5)
                     {
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Token usage at {tokenUsageRatio:P0}, injecting condense hint");
+                        if (!_taskState.HasCondenseHinted)
+                        {
+                            // Level 1: hint
+                            System.Diagnostics.Debug.WriteLine(
+                                $"[AICA] Token usage at {tokenUsageRatio:P0}, injecting condense hint");
 
-                        conversationHistory.Add(ChatMessage.System(
-                            $"[CONTEXT_PRESSURE] Token usage is at {tokenUsageRatio:P0}. " +
-                            "You should call the `condense` tool to summarize previous work and free up context space. " +
-                            "Include all key findings, files read/modified, and current progress in your summary."));
+                            conversationHistory.Add(ChatMessage.System(
+                                $"[CONTEXT_PRESSURE] Token usage is at {tokenUsageRatio:P0}. " +
+                                "You should call the `condense` tool to summarize previous work and free up context space. " +
+                                "Include all key findings, files read/modified, and current progress in your summary."));
 
-                        _taskState.HasCondenseHinted = true;
+                            _taskState.HasCondenseHinted = true;
+                            _taskState.CondenseHintIteration = _taskState.Iteration;
+                        }
+                        else if (tokenUsageRatio > 0.80
+                                 && _taskState.Iteration > _taskState.CondenseHintIteration + 1)
+                        {
+                            // Level 2: LLM ignored the hint for at least 1 iteration, auto-condense
+                            System.Diagnostics.Debug.WriteLine(
+                                $"[AICA] Token usage at {tokenUsageRatio:P0}, LLM ignored condense hint, performing auto-condense");
+
+                            var summary = BuildAutoCondenseSummary(conversationHistory);
+
+                            LastCondenseSummary = summary;
+                            CondenseUpToMessageCount = conversationHistory.Count;
+
+                            var condensed = new List<ChatMessage>();
+                            if (conversationHistory.Count > 0)
+                                condensed.Add(conversationHistory[0]); // system prompt
+                            if (conversationHistory.Count > 1)
+                                condensed.Add(conversationHistory[1]); // first user request
+
+                            condensed.Add(ChatMessage.System(
+                                "[Conversation auto-condensed] The following is a summary of all previous work:\n" + summary));
+
+                            conversationHistory = condensed;
+                            _taskState.HasAutoCondensed = true;
+
+                            // Recalculate tokens after condense
+                            currentTokens = conversationHistory.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                            tokenUsageRatio = (double)currentTokens / Math.Max(1, conversationBudget);
+
+                            yield return AgentStep.TextChunk("\n\n📝 *Context window pressure detected, conversation auto-condensed.*\n\n");
+
+                            System.Diagnostics.Debug.WriteLine(
+                                $"[AICA] Auto-condense complete, token usage now {tokenUsageRatio:P0}");
+                        }
                     }
                 }
 
@@ -781,6 +822,121 @@ namespace AICA.Core.Agent
         }
 
         /// <summary>
+        /// Build a summary from conversation history for auto-condense.
+        /// Extracts key information without relying on LLM.
+        /// </summary>
+        private static string BuildAutoCondenseSummary(List<ChatMessage> conversationHistory)
+        {
+            var sb = new System.Text.StringBuilder();
+            var filesRead = new List<string>();
+            var filesModified = new List<string>();
+            var toolsUsed = new HashSet<string>();
+            var userRequests = new List<string>();
+            var keyFindings = new List<string>();
+
+            foreach (var msg in conversationHistory)
+            {
+                if (msg.Role == ChatRole.User && msg.Content != null
+                    && !msg.Content.StartsWith("[System") && !msg.Content.StartsWith("⚠️"))
+                {
+                    // Capture real user requests (truncate long ones)
+                    var text = msg.Content.Length > 200 ? msg.Content.Substring(0, 200) + "..." : msg.Content;
+                    userRequests.Add(text);
+                }
+                else if (msg.Role == ChatRole.Assistant && msg.ToolCalls != null)
+                {
+                    foreach (var tc in msg.ToolCalls)
+                    {
+                        toolsUsed.Add(tc.Function?.Name ?? "unknown");
+                    }
+                }
+                else if (msg.Role == ChatRole.Tool && msg.Content != null)
+                {
+                    // Extract file paths from tool results
+                    if (msg.Content.StartsWith("Error:"))
+                        continue; // skip failed results
+
+                    // Truncate long tool results for summary
+                    if (msg.Content.Length > 100)
+                    {
+                        keyFindings.Add(msg.Content.Substring(0, 100) + "...");
+                    }
+                }
+            }
+
+            // Also scan assistant text messages for file references
+            foreach (var msg in conversationHistory)
+            {
+                if (msg.Role != ChatRole.Assistant || msg.Content == null) continue;
+
+                // Extract read_file / write_to_file / edit references from assistant text
+                var content = msg.Content;
+                if (content.Contains("read_file") || content.Contains("读取"))
+                {
+                    // Try to find file paths mentioned
+                    var pathMatches = System.Text.RegularExpressions.Regex.Matches(
+                        content, @"[\w/\\]+\.(?:cs|ts|js|py|json|xml|md|txt|cpp|h|java|go)");
+                    foreach (System.Text.RegularExpressions.Match m in pathMatches)
+                        filesRead.Add(m.Value);
+                }
+                if (content.Contains("write_to_file") || content.Contains("edit") || content.Contains("修改"))
+                {
+                    var pathMatches = System.Text.RegularExpressions.Regex.Matches(
+                        content, @"[\w/\\]+\.(?:cs|ts|js|py|json|xml|md|txt|cpp|h|java|go)");
+                    foreach (System.Text.RegularExpressions.Match m in pathMatches)
+                        filesModified.Add(m.Value);
+                }
+            }
+
+            sb.AppendLine("## Auto-generated conversation summary");
+            sb.AppendLine();
+
+            if (userRequests.Count > 0)
+            {
+                sb.AppendLine("### User requests:");
+                foreach (var req in userRequests)
+                    sb.AppendLine($"- {req}");
+                sb.AppendLine();
+            }
+
+            if (toolsUsed.Count > 0)
+            {
+                sb.AppendLine($"### Tools used: {string.Join(", ", toolsUsed)}");
+                sb.AppendLine();
+            }
+
+            if (filesRead.Count > 0)
+            {
+                var unique = new HashSet<string>(filesRead, System.StringComparer.OrdinalIgnoreCase);
+                sb.AppendLine($"### Files read ({unique.Count}): {string.Join(", ", unique)}");
+                sb.AppendLine();
+            }
+
+            if (filesModified.Count > 0)
+            {
+                var unique = new HashSet<string>(filesModified, System.StringComparer.OrdinalIgnoreCase);
+                sb.AppendLine($"### Files modified ({unique.Count}): {string.Join(", ", unique)}");
+                sb.AppendLine();
+            }
+
+            if (keyFindings.Count > 0)
+            {
+                sb.AppendLine("### Key tool results (truncated):");
+                // Only keep last few findings to save space
+                var recent = keyFindings.Count > 5
+                    ? keyFindings.GetRange(keyFindings.Count - 5, 5)
+                    : keyFindings;
+                foreach (var finding in recent)
+                    sb.AppendLine($"- {finding}");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine($"### Progress: {conversationHistory.Count} messages processed, task in progress.");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Fallback parser for text-based tool calls that some models output.
         /// Supports formats like:
         ///   <function=tool_name> <parameter=key> value </tool_call>
@@ -1161,7 +1317,9 @@ namespace AICA.Core.Agent
         {
             if (ex is System.Net.Http.HttpRequestException) return true;
             if (ex is TaskCanceledException tce && tce.CancellationToken == default) return true; // timeout, not user cancel
+            if (ex is System.IO.IOException) return true;
             if (ex.InnerException is System.Net.Sockets.SocketException) return true;
+            if (ex.InnerException is System.IO.IOException) return true;
             return false;
         }
 

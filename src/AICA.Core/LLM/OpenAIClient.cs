@@ -134,15 +134,36 @@ namespace AICA.Core.LLM
             HttpResponseMessage response,
             [EnumeratorCancellation] CancellationToken ct)
         {
-            using var stream = await response.Content.ReadAsStreamAsync();
-            using var reader = new StreamReader(stream);
+            Stream stream;
+            try
+            {
+                stream = await response.Content.ReadAsStreamAsync();
+            }
+            catch (Exception ex) when (IsConnectionException(ex))
+            {
+                _logger?.LogError(ex, "Failed to read stream from LLM API");
+                throw new LLMException("Connection lost while reading LLM response: " + ex.Message, ex, isTransient: true);
+            }
+
+            using (stream)
+            using (var reader = new StreamReader(stream))
+            {
 
             var toolCallsBuilder = new Dictionary<int, ToolCallBuilder>();
             string currentContent = null;
 
             while (!reader.EndOfStream && !ct.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync();
+                string line;
+                try
+                {
+                    line = await reader.ReadLineAsync();
+                }
+                catch (Exception ex) when (IsConnectionException(ex))
+                {
+                    _logger?.LogError(ex, "Connection lost during LLM stream reading");
+                    throw new LLMException("Connection lost during LLM stream: " + ex.Message, ex, isTransient: true);
+                }
 
                 if (string.IsNullOrEmpty(line))
                     continue;
@@ -243,6 +264,7 @@ namespace AICA.Core.LLM
                     yield return LLMChunk.Finished(chunk.Choices[0].FinishReason);
                 }
             }
+            } // end using stream + reader
         }
 
         private async IAsyncEnumerable<LLMChunk> ProcessNonStreamResponseAsync(
@@ -380,6 +402,19 @@ namespace AICA.Core.LLM
         {
             _httpClient?.Dispose();
             _abortCts?.Dispose();
+        }
+
+        /// <summary>
+        /// Check if an exception indicates a connection-level failure (broken pipe, connection reset, etc.)
+        /// These are transient and worth retrying.
+        /// </summary>
+        private static bool IsConnectionException(Exception ex)
+        {
+            if (ex is System.IO.IOException) return true;
+            if (ex is System.Net.Sockets.SocketException) return true;
+            if (ex is System.Net.Http.HttpRequestException) return true;
+            if (ex.InnerException != null) return IsConnectionException(ex.InnerException);
+            return false;
         }
 
         private static Dictionary<string, object> ParseArguments(string json)
@@ -597,12 +632,17 @@ namespace AICA.Core.LLM
     public class LLMException : Exception
     {
         public int StatusCode { get; }
+        private readonly bool _forceTransient;
 
         public LLMException(string message) : base(message) { }
         public LLMException(string message, Exception inner) : base(message, inner) { }
         public LLMException(string message, int statusCode) : base(message)
         {
             StatusCode = statusCode;
+        }
+        public LLMException(string message, Exception inner, bool isTransient) : base(message, inner)
+        {
+            _forceTransient = isTransient;
         }
 
         /// <summary>
@@ -625,6 +665,7 @@ namespace AICA.Core.LLM
         /// Whether this error is transient and worth retrying (server errors, timeouts).
         /// </summary>
         public bool IsTransient =>
+            _forceTransient ||
             StatusCode == 429 || StatusCode == 500 || StatusCode == 502 ||
             StatusCode == 503 || StatusCode == 504;
     }
