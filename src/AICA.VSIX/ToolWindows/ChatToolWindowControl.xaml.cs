@@ -39,6 +39,7 @@ namespace AICA.ToolWindows
         private int _globalToolCallCounter = 0; // Global counter for unique tool call IDs across all conversation turns
         private DTE2 _dte; // Visual Studio DTE for project information
         private EnvDTE.SolutionEvents _solutionEvents; // Solution events for project switching detection
+        private bool _isPaused; // Track if user paused the current output
         private bool _isSidebarOpen = false; // Track sidebar state
         private List<ConversationViewModel> _allConversations = new List<ConversationViewModel>(); // Cache all conversations
         private string _lastProjectPath = null; // Track last project path to detect project switching
@@ -689,10 +690,18 @@ namespace AICA.ToolWindows
 
         private async void SendButton_Click(object sender, RoutedEventArgs e)
         {
+            if (_isSending)
+            {
+                // Pause mode: cancel the current output but preserve context
+                _isPaused = true;
+                _currentCts?.Cancel();
+                return;
+            }
+
             await SendMessageAsync();
         }
 
-        private async void InputTextBox_KeyDown(object sender, KeyEventArgs e)
+        private async void InputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
             {
@@ -709,8 +718,10 @@ namespace AICA.ToolWindows
             if (_isSending) return;
 
             _isSending = true;
+            _isPaused = false;
             InputTextBox.IsEnabled = false;
-            SendButton.IsEnabled = false;
+            SendButton.Content = "Pause";
+            SendButton.IsEnabled = true; // Keep enabled so user can click Pause
             _currentCts = new CancellationTokenSource();
 
             // Check if this is the first message (for title update)
@@ -756,7 +767,21 @@ namespace AICA.ToolWindows
             }
             catch (OperationCanceledException)
             {
-                AppendMessage("assistant", "🛑 Request cancelled.");
+                // _isPaused is handled inside ExecuteAgentModeAsync / ExecuteChatModeAsync
+                // If we reach here, it means the cancellation was not caught internally
+                if (!_isPaused)
+                {
+                    AppendMessage("assistant", "🛑 Request cancelled.");
+                }
+
+                // Save conversation even when paused, so the partial output is persisted
+                await SaveConversationAsync();
+
+                // Update conversation title if this is the first message
+                if (isFirstMessage)
+                {
+                    await UpdateConversationTitleAsync(userMessage);
+                }
             }
             catch (LLMException ex)
             {
@@ -769,10 +794,12 @@ namespace AICA.ToolWindows
             finally
             {
                 _isSending = false;
+                _isPaused = false;
                 _currentCts?.Dispose();
                 _currentCts = null;
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 InputTextBox.IsEnabled = true;
+                SendButton.Content = "Send";
                 SendButton.IsEnabled = true;
                 InputTextBox.Focus();
             }
@@ -900,185 +927,221 @@ namespace AICA.ToolWindows
                     .Where(m => m.Role != ChatRole.System)
                     .ToList();
 
-                await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, previousMessages, _currentCts.Token))
+                try
                 {
-                    // Marshal UI updates to the UI thread via Dispatcher.Invoke.
-                    // This blocks the background thread until the UI processes the update,
-                    // ensuring sequential rendering. The UI thread is free (awaiting Task.Run).
+                    await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, previousMessages, _currentCts.Token))
+                    {
+                        // Marshal UI updates to the UI thread via Dispatcher.Invoke.
+                        // This blocks the background thread until the UI processes the update,
+                        // ensuring sequential rendering. The UI thread is free (awaiting Task.Run).
+                        dispatcher.Invoke(new Action(() =>
+                        {
+                            switch (step.Type)
+                            {
+                                case AgentStepType.TextChunk:
+                                    responseBuilder.Append(step.Text);
+
+                                    // NEW: If we have a current tool block, append text to it
+                                    // Otherwise, append to the global response builder (for non-tool responses)
+                                    if (currentBlock != null)
+                                    {
+                                        currentBlock.TextAfter.Append(step.Text);
+                                    }
+
+                                    // Render with interleaved tool blocks and text
+                                    RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    break;
+
+                                case AgentStepType.ToolStart:
+                                    // When first tool arrives: discard any buffered pre-tool text
+                                    if (!hasToolCalls)
+                                    {
+                                        if (responseBuilder.Length > 100)
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"[AICA-UI] Discarding {responseBuilder.Length} chars of pre-tool text");
+                                        }
+                                        responseBuilder.Clear();
+                                    }
+                                    hasToolCalls = true;
+
+                                    // Don't show attempt_completion in tool logs (its text becomes the main response)
+                                    if (step.ToolCall.Name != "attempt_completion")
+                                    {
+                                        var toolId = _globalToolCallCounter++;
+                                        pendingToolCalls[step.ToolCall.Id] = (step.ToolCall, toolId);
+
+                                        // Generate enhanced tool call HTML (without result yet)
+                                        var toolHtml = BuildToolCallHtml(
+                                            step.ToolCall.Name,
+                                            step.ToolCall.Arguments,
+                                            null,
+                                            true,
+                                            toolId
+                                        );
+
+                                        // NEW: Create a new tool call block
+                                        currentBlock = new ToolCallBlock
+                                        {
+                                            ToolHtml = toolHtml,
+                                            ToolId = toolId,
+                                            ToolCallId = step.ToolCall.Id
+                                        };
+                                        toolCallBlocks.Add(currentBlock);
+                                    }
+
+                                    RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    break;
+
+                                case AgentStepType.ToolResult:
+                                    // Skip attempt_completion results in tool log (shown as main response)
+                                    if (step.ToolCall?.Name == "attempt_completion")
+                                    {
+                                        break;
+                                    }
+
+                                    // Update the tool call with result
+                                    if (pendingToolCalls.TryGetValue(step.ToolCall.Id, out var toolInfo))
+                                    {
+                                        var resultText = step.Result.Success ? step.Result.Content : step.Result.Error;
+
+                                        // Regenerate the tool call HTML with result
+                                        var toolHtml = BuildToolCallHtml(
+                                            toolInfo.call.Name,
+                                            toolInfo.call.Arguments,
+                                            resultText,
+                                            step.Result.Success,
+                                            toolInfo.id
+                                        );
+
+                                        // NEW: Find and update the corresponding block
+                                        var block = toolCallBlocks.FirstOrDefault(b => b.ToolCallId == step.ToolCall.Id);
+                                        if (block != null)
+                                        {
+                                            block.ToolHtml = toolHtml;
+                                        }
+                                    }
+
+                                    RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    break;
+
+                                case AgentStepType.Complete:
+                                    // Try to parse CompletionResult from step.Text
+                                    CompletionResult completionResult = null;
+                                    if (!string.IsNullOrEmpty(step.Text) && step.Text.StartsWith("TASK_COMPLETED:"))
+                                    {
+                                        completionResult = CompletionResult.Deserialize(step.Text);
+                                    }
+
+                                    // For completion responses, always trust the structured completion summary
+                                    // as the final user-facing answer. Streaming text before attempt_completion
+                                    // often contains internal tool-decision language and should not be persisted.
+                                    string finalContent = responseBuilder.ToString().Trim();
+
+                                    // NEW: Build final tool logs HTML from interleaved blocks
+                                    string finalToolLogs = null;
+                                    if (hasToolCalls && toolCallBlocks.Count > 0)
+                                    {
+                                        finalToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
+                                    }
+
+                                    if (!hasToolCalls && string.IsNullOrWhiteSpace(finalContent) && completionResult != null)
+                                    {
+                                        finalContent = completionResult.Summary;
+                                    }
+
+                                    // Diagnostic hint: only if no tools AND response has action-like language
+                                    // AND response is substantial (>200 chars to avoid false positives on greetings)
+                                    if (!hasToolCalls && responseBuilder.Length > 200 && ContainsToolIntentLanguage(responseBuilder.ToString()))
+                                    {
+                                        finalContent += "\n\n---\n⚠️ **提示**: AI 描述了要执行的操作但未实际调用工具。\n" +
+                                            "可能原因：\n" +
+                                            "1. LLM 服务器未启用 function calling（需要 `--enable-auto-tool-choice`）\n" +
+                                            "2. 模型不支持 OpenAI 格式的工具调用\n" +
+                                            "3. 在选项中检查 'Enable Tool Calling' 是否已启用";
+                                    }
+
+                                    if (!string.IsNullOrWhiteSpace(finalContent) || completionResult != null || !string.IsNullOrWhiteSpace(finalToolLogs))
+                                    {
+                                        var message = new ConversationMessage
+                                        {
+                                            Role = "assistant",
+                                            Content = finalContent,
+                                            ToolLogsHtml = finalToolLogs,
+                                            CompletionData = completionResult != null ? step.Text : null
+                                        };
+                                        _conversation.Add(message);
+                                        // Also add to LLM history for next turn's context
+                                        _llmHistory.Add(ChatMessage.Assistant(completionResult?.Summary ?? finalContent));
+                                    }
+                                    RenderConversation();
+                                    break;
+
+                                case AgentStepType.Error:
+                                    // Preserve any tool logs and text accumulated before the error
+                                    string errorToolLogs = null;
+                                    if (hasToolCalls && toolCallBlocks.Count > 0)
+                                    {
+                                        errorToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
+                                    }
+
+                                    var errorContent = responseBuilder.ToString().Trim();
+                                    var errorMessage = $"❌ Agent Error: {step.ErrorMessage}";
+
+                                    if (!string.IsNullOrWhiteSpace(errorToolLogs) || !string.IsNullOrWhiteSpace(errorContent))
+                                    {
+                                        // Append the error message after any existing content
+                                        var combinedContent = string.IsNullOrWhiteSpace(errorContent)
+                                            ? errorMessage
+                                            : errorContent + "\n\n---\n" + errorMessage;
+
+                                        _conversation.Add(new ConversationMessage
+                                        {
+                                            Role = "assistant",
+                                            Content = combinedContent,
+                                            ToolLogsHtml = errorToolLogs
+                                        });
+                                        RenderConversation();
+                                    }
+                                    else
+                                    {
+                                        AppendMessage("assistant", errorMessage);
+                                    }
+                                    break;
+                            }
+                        }));
+                    }
+                }
+                catch (OperationCanceledException) when (_isPaused)
+                {
+                    // User clicked Pause: preserve partial output in conversation and LLM history
                     dispatcher.Invoke(new Action(() =>
                     {
-                        switch (step.Type)
+                        var partialContent = responseBuilder.ToString().Trim();
+
+                        // Build tool logs if any were accumulated
+                        string partialToolLogs = null;
+                        if (hasToolCalls && toolCallBlocks.Count > 0)
                         {
-                            case AgentStepType.TextChunk:
-                                responseBuilder.Append(step.Text);
-
-                                // NEW: If we have a current tool block, append text to it
-                                // Otherwise, append to the global response builder (for non-tool responses)
-                                if (currentBlock != null)
-                                {
-                                    currentBlock.TextAfter.Append(step.Text);
-                                }
-
-                                // Render with interleaved tool blocks and text
-                                RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
-                                break;
-
-                            case AgentStepType.ToolStart:
-                                // When first tool arrives: discard any buffered pre-tool text
-                                if (!hasToolCalls)
-                                {
-                                    if (responseBuilder.Length > 100)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"[AICA-UI] Discarding {responseBuilder.Length} chars of pre-tool text");
-                                    }
-                                    responseBuilder.Clear();
-                                }
-                                hasToolCalls = true;
-
-                                // Don't show attempt_completion in tool logs (its text becomes the main response)
-                                if (step.ToolCall.Name != "attempt_completion")
-                                {
-                                    var toolId = _globalToolCallCounter++;
-                                    pendingToolCalls[step.ToolCall.Id] = (step.ToolCall, toolId);
-
-                                    // Generate enhanced tool call HTML (without result yet)
-                                    var toolHtml = BuildToolCallHtml(
-                                        step.ToolCall.Name,
-                                        step.ToolCall.Arguments,
-                                        null,
-                                        true,
-                                        toolId
-                                    );
-
-                                    // NEW: Create a new tool call block
-                                    currentBlock = new ToolCallBlock
-                                    {
-                                        ToolHtml = toolHtml,
-                                        ToolId = toolId,
-                                        ToolCallId = step.ToolCall.Id
-                                    };
-                                    toolCallBlocks.Add(currentBlock);
-                                }
-
-                                RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
-                                break;
-
-                            case AgentStepType.ToolResult:
-                                // Skip attempt_completion results in tool log (shown as main response)
-                                if (step.ToolCall?.Name == "attempt_completion")
-                                {
-                                    break;
-                                }
-
-                                // Update the tool call with result
-                                if (pendingToolCalls.TryGetValue(step.ToolCall.Id, out var toolInfo))
-                                {
-                                    var resultText = step.Result.Success ? step.Result.Content : step.Result.Error;
-
-                                    // Regenerate the tool call HTML with result
-                                    var toolHtml = BuildToolCallHtml(
-                                        toolInfo.call.Name,
-                                        toolInfo.call.Arguments,
-                                        resultText,
-                                        step.Result.Success,
-                                        toolInfo.id
-                                    );
-
-                                    // NEW: Find and update the corresponding block
-                                    var block = toolCallBlocks.FirstOrDefault(b => b.ToolCallId == step.ToolCall.Id);
-                                    if (block != null)
-                                    {
-                                        block.ToolHtml = toolHtml;
-                                    }
-                                }
-
-                                RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
-                                break;
-
-                            case AgentStepType.Complete:
-                                // Try to parse CompletionResult from step.Text
-                                CompletionResult completionResult = null;
-                                if (!string.IsNullOrEmpty(step.Text) && step.Text.StartsWith("TASK_COMPLETED:"))
-                                {
-                                    completionResult = CompletionResult.Deserialize(step.Text);
-                                }
-
-                                // For completion responses, always trust the structured completion summary
-                                // as the final user-facing answer. Streaming text before attempt_completion
-                                // often contains internal tool-decision language and should not be persisted.
-                                string finalContent = responseBuilder.ToString().Trim();
-
-                                // NEW: Build final tool logs HTML from interleaved blocks
-                                string finalToolLogs = null;
-                                if (hasToolCalls && toolCallBlocks.Count > 0)
-                                {
-                                    finalToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
-                                }
-
-                                if (!hasToolCalls && string.IsNullOrWhiteSpace(finalContent) && completionResult != null)
-                                {
-                                    finalContent = completionResult.Summary;
-                                }
-
-                                // Diagnostic hint: only if no tools AND response has action-like language
-                                // AND response is substantial (>200 chars to avoid false positives on greetings)
-                                if (!hasToolCalls && responseBuilder.Length > 200 && ContainsToolIntentLanguage(responseBuilder.ToString()))
-                                {
-                                    finalContent += "\n\n---\n⚠️ **提示**: AI 描述了要执行的操作但未实际调用工具。\n" +
-                                        "可能原因：\n" +
-                                        "1. LLM 服务器未启用 function calling（需要 `--enable-auto-tool-choice`）\n" +
-                                        "2. 模型不支持 OpenAI 格式的工具调用\n" +
-                                        "3. 在选项中检查 'Enable Tool Calling' 是否已启用";
-                                }
-
-                                if (!string.IsNullOrWhiteSpace(finalContent) || completionResult != null || !string.IsNullOrWhiteSpace(finalToolLogs))
-                                {
-                                    var message = new ConversationMessage
-                                    {
-                                        Role = "assistant",
-                                        Content = finalContent,
-                                        ToolLogsHtml = finalToolLogs,
-                                        CompletionData = completionResult != null ? step.Text : null
-                                    };
-                                    _conversation.Add(message);
-                                    // Also add to LLM history for next turn's context
-                                    _llmHistory.Add(ChatMessage.Assistant(completionResult?.Summary ?? finalContent));
-                                }
-                                RenderConversation();
-                                break;
-
-                            case AgentStepType.Error:
-                                // Preserve any tool logs and text accumulated before the error
-                                string errorToolLogs = null;
-                                if (hasToolCalls && toolCallBlocks.Count > 0)
-                                {
-                                    errorToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
-                                }
-
-                                var errorContent = responseBuilder.ToString().Trim();
-                                var errorMessage = $"❌ Agent Error: {step.ErrorMessage}";
-
-                                if (!string.IsNullOrWhiteSpace(errorToolLogs) || !string.IsNullOrWhiteSpace(errorContent))
-                                {
-                                    // Append the error message after any existing content
-                                    var combinedContent = string.IsNullOrWhiteSpace(errorContent)
-                                        ? errorMessage
-                                        : errorContent + "\n\n---\n" + errorMessage;
-
-                                    _conversation.Add(new ConversationMessage
-                                    {
-                                        Role = "assistant",
-                                        Content = combinedContent,
-                                        ToolLogsHtml = errorToolLogs
-                                    });
-                                    RenderConversation();
-                                }
-                                else
-                                {
-                                    AppendMessage("assistant", errorMessage);
-                                }
-                                break;
+                            partialToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
                         }
+
+                        // Append pause indicator
+                        var pausedContent = string.IsNullOrWhiteSpace(partialContent)
+                            ? "⏸️ *输出已暂停*"
+                            : partialContent + "\n\n---\n⏸️ *输出已暂停*";
+
+                        // Add to conversation for UI display
+                        _conversation.Add(new ConversationMessage
+                        {
+                            Role = "assistant",
+                            Content = pausedContent,
+                            ToolLogsHtml = partialToolLogs
+                        });
+
+                        // Add to LLM history so the paused content is preserved in context
+                        _llmHistory.Add(ChatMessage.Assistant(pausedContent));
+
+                        RenderConversation();
                     }));
                 }
             });
@@ -1099,6 +1162,7 @@ namespace AICA.ToolWindows
 
             var responseBuilder = new StringBuilder();
             var dispatcher = this.Dispatcher;
+            bool wasPaused = false;
 
             // Show immediate feedback while waiting for LLM's first token (TTFT)
             RenderConversation("💭 *思考中...*");
@@ -1106,32 +1170,55 @@ namespace AICA.ToolWindows
             // Run LLM streaming on background thread, dispatch UI updates via Dispatcher.Invoke
             await System.Threading.Tasks.Task.Run(async () =>
             {
-                await foreach (var chunk in _llmClient.StreamChatAsync(_llmHistory, null, _currentCts.Token))
+                try
                 {
-                    if (chunk.Type == LLMChunkType.Text && !string.IsNullOrEmpty(chunk.Text))
+                    await foreach (var chunk in _llmClient.StreamChatAsync(_llmHistory, null, _currentCts.Token))
                     {
-                        responseBuilder.Append(chunk.Text);
-                        var content = responseBuilder.ToString();
-                        dispatcher.Invoke(new Action(() => RenderConversation(content)));
+                        if (chunk.Type == LLMChunkType.Text && !string.IsNullOrEmpty(chunk.Text))
+                        {
+                            responseBuilder.Append(chunk.Text);
+                            var content = responseBuilder.ToString();
+                            dispatcher.Invoke(new Action(() => RenderConversation(content)));
+                        }
+                        else if (chunk.Type == LLMChunkType.Done)
+                        {
+                            break;
+                        }
                     }
-                    else if (chunk.Type == LLMChunkType.Done)
-                    {
-                        break;
-                    }
+                }
+                catch (OperationCanceledException) when (_isPaused)
+                {
+                    wasPaused = true;
                 }
             });
 
-            var finalResponse = responseBuilder.ToString();
-            if (!string.IsNullOrEmpty(finalResponse))
+            if (wasPaused)
             {
-                _llmHistory.Add(ChatMessage.Assistant(finalResponse));
-                _conversation.Add(new ConversationMessage { Role = "assistant", Content = finalResponse });
+                // User clicked Pause: preserve partial output in conversation and LLM history
+                var partialContent = responseBuilder.ToString().Trim();
+                var pausedContent = string.IsNullOrWhiteSpace(partialContent)
+                    ? "⏸️ *输出已暂停*"
+                    : partialContent + "\n\n---\n⏸️ *输出已暂停*";
+
+                _llmHistory.Add(ChatMessage.Assistant(pausedContent));
+                _conversation.Add(new ConversationMessage { Role = "assistant", Content = pausedContent });
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 RenderConversation();
             }
             else
             {
-                AppendMessage("assistant", "⚠️ No response received from the LLM.");
+                var finalResponse = responseBuilder.ToString();
+                if (!string.IsNullOrEmpty(finalResponse))
+                {
+                    _llmHistory.Add(ChatMessage.Assistant(finalResponse));
+                    _conversation.Add(new ConversationMessage { Role = "assistant", Content = finalResponse });
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    RenderConversation();
+                }
+                else
+                {
+                    AppendMessage("assistant", "⚠️ No response received from the LLM.");
+                }
             }
         }
 
