@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using AICA.Core.Context;
 using AICA.Core.LLM;
 using AICA.Core.Prompt;
+using AICA.Core.Rules;
 using Microsoft.Extensions.Logging;
 
 namespace AICA.Core.Agent
@@ -75,11 +76,32 @@ namespace AICA.Core.Agent
         {
             // Build system prompt with tool definitions
             var toolDefinitions = _toolDispatcher.GetToolDefinitions();
-            var systemPrompt = SystemPromptBuilder.GetDefaultPrompt(
-                context?.WorkingDirectory ?? Environment.CurrentDirectory,
-                toolDefinitions,
-                _customInstructions,
-                context?.SourceRoots);
+            var builder = new SystemPromptBuilder()
+                .AddTools(toolDefinitions)
+                .AddToolDescriptions()
+                .AddRules()
+                .AddWorkspaceContext(
+                    context?.WorkingDirectory ?? Environment.CurrentDirectory,
+                    context?.SourceRoots);
+
+            // Load and integrate rules from files
+            if (context?.WorkingDirectory != null)
+            {
+                var ruleContext = new RuleContext(context.WorkingDirectory)
+                {
+                    CandidatePaths = ExtractPathCandidates(userRequest)
+                };
+
+                await builder.AddRulesFromFilesAsync(
+                    context.WorkingDirectory,
+                    ruleContext,
+                    ct);
+            }
+
+            // Add custom instructions
+            builder.AddCustomInstructions(_customInstructions);
+
+            var systemPrompt = builder.Build();
 
             // Build conversation history: system prompt + previous messages
             var conversationHistory = new List<ChatMessage>();
@@ -1390,6 +1412,18 @@ namespace AICA.Core.Agent
 
             // Short message without task keywords → likely conversational
             return true;
+        }
+
+        /// <summary>
+        /// Extract potential file paths from user request for rule context.
+        /// </summary>
+        private List<string> ExtractPathCandidates(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return new List<string>();
+
+            var pathMatcher = new AICA.Core.Rules.Parsers.PathMatcher();
+            return pathMatcher.ExtractPathCandidates(text);
         }
     }
 

@@ -50,6 +50,7 @@
     <Compile Include="Commands\ExplainCodeCommand.cs" />
     <Compile Include="Commands\RefactorCommand.cs" />
     <Compile Include="Commands\GenerateTestCommand.cs" />
+    <Compile Include="Events\SolutionEventListener.cs" />
     <Compile Include="Options\GeneralOptions.cs" />
     <Compile Include="Options\SecurityOptions.cs" />
     <Compile Include="Agent\VSAgentContext.cs" />

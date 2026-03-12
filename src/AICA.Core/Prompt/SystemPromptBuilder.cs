@@ -2,8 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using AICA.Core.Agent;
 using AICA.Core.Context;
+using AICA.Core.Rules;
+using AICA.Core.Rules.Models;
+using Microsoft.Extensions.Logging;
 
 namespace AICA.Core.Prompt
 {
@@ -309,6 +314,59 @@ namespace AICA.Core.Prompt
                 _builder.AppendLine(instructions);
                 _builder.AppendLine();
             }
+            return this;
+        }
+
+        /// <summary>
+        /// Load and integrate rules from files (.aica-rules directory).
+        /// Rules are evaluated based on context and added to the system prompt.
+        /// </summary>
+        public async Task<SystemPromptBuilder> AddRulesFromFilesAsync(
+            string workspacePath,
+            RuleContext context = null,
+            CancellationToken ct = default)
+        {
+            try
+            {
+                var ruleLoader = new RuleLoader();
+                var ruleEvaluator = new RuleEvaluator();
+
+                // Load all available rules
+                var allRules = await ruleLoader.LoadAllRulesAsync(workspacePath, ct);
+
+                if (allRules.Count == 0)
+                {
+                    return this;
+                }
+
+                // Evaluate rules based on context
+                var activatedRules = context != null
+                    ? ruleEvaluator.EvaluateRules(allRules, context)
+                    : allRules; // If no context, activate all rules
+
+                if (activatedRules.Count == 0)
+                {
+                    return this;
+                }
+
+                // Add activated rules to system prompt
+                _builder.AppendLine("## Project Rules");
+                _builder.AppendLine();
+
+                foreach (var rule in activatedRules)
+                {
+                    if (!string.IsNullOrWhiteSpace(rule.Content))
+                    {
+                        _builder.AppendLine(rule.Content);
+                        _builder.AppendLine();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fail-open: continue without rules if loading fails
+            }
+
             return this;
         }
 
