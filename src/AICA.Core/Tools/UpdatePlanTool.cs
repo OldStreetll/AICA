@@ -134,6 +134,23 @@ namespace AICA.Core.Tools
             return Task.CompletedTask;
         }
 
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.Interaction,
+                RequiresConfirmation = false,
+                RequiresApproval = false,
+                TimeoutSeconds = 10,
+                Tags = new[] { "plan", "progress", "tracking" },
+                IsModifying = false,
+                RequiresNetwork = false,
+                IsExperimental = false
+            };
+        }
+
         private class PlanStepInput
         {
             public string Step { get; set; }

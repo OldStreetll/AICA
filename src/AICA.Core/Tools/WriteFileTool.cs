@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +13,21 @@ namespace AICA.Core.Tools
     {
         public string Name => "write_to_file";
         public string Description => "Create a NEW file with content. IMPORTANT: Only use this for files that don't exist yet. For existing files, use the 'edit' tool instead. This will fail if the file already exists.";
+
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.FileWrite,
+                RequiresConfirmation = true,
+                RequiresApproval = false,
+                TimeoutSeconds = 15,
+                IsModifying = true,
+                Tags = new[] { "file", "write", "create" }
+            };
+        }
 
         public ToolDefinition GetDefinition()
         {
@@ -42,44 +58,47 @@ namespace AICA.Core.Tools
 
         public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
-            if (!call.Arguments.TryGetValue("path", out var pathObj) || pathObj == null)
+            try
             {
-                return ToolResult.Fail("Missing required parameter: path");
-            }
+                // Validate required parameters
+                var path = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "path");
+                var content = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "content");
 
-            if (!call.Arguments.TryGetValue("content", out var contentObj) || contentObj == null)
+                if (!context.IsPathAccessible(path))
+                {
+                    return ToolErrorHandler.HandleError(ToolErrorHandler.AccessDenied(path));
+                }
+
+                // Check if file already exists
+                if (await context.FileExistsAsync(path, ct))
+                {
+                    return ToolResult.Fail($"File already exists: {path}. Use 'edit' tool to modify existing files.");
+                }
+
+                // Request confirmation
+                var confirmed = await context.RequestConfirmationAsync(
+                    "Create File",
+                    $"Create new file: {path}\n\nContent preview:\n{content.Substring(0, System.Math.Min(500, content.Length))}...",
+                    ct);
+
+                if (!confirmed)
+                {
+                    return ToolResult.Fail("Operation cancelled by user");
+                }
+
+                await context.WriteFileAsync(path, content, ct);
+
+                return ToolResult.Ok($"File created: {path}");
+            }
+            catch (ToolParameterException ex)
             {
-                return ToolResult.Fail("Missing required parameter: content");
+                return ToolErrorHandler.HandleError(ToolErrorHandler.ParameterError(ex.Message));
             }
-
-            var path = pathObj.ToString();
-            var content = contentObj.ToString();
-
-            if (!context.IsPathAccessible(path))
+            catch (Exception ex)
             {
-                return ToolResult.Fail($"Access denied: {path}");
+                var error = ToolErrorHandler.ClassifyException(ex, "write_to_file");
+                return ToolErrorHandler.HandleError(error);
             }
-
-            // Check if file already exists
-            if (await context.FileExistsAsync(path, ct))
-            {
-                return ToolResult.Fail($"File already exists: {path}. Use 'edit' tool to modify existing files.");
-            }
-
-            // Request confirmation
-            var confirmed = await context.RequestConfirmationAsync(
-                "Create File",
-                $"Create new file: {path}\n\nContent preview:\n{content.Substring(0, System.Math.Min(500, content.Length))}...",
-                ct);
-
-            if (!confirmed)
-            {
-                return ToolResult.Fail("Operation cancelled by user");
-            }
-
-            await context.WriteFileAsync(path, content, ct);
-
-            return ToolResult.Ok($"File created: {path}");
         }
 
         public Task HandlePartialAsync(ToolCall call, IUIContext ui, CancellationToken ct = default)

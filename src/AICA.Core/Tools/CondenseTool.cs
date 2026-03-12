@@ -55,5 +55,22 @@ namespace AICA.Core.Tools
         {
             return Task.CompletedTask;
         }
+
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.Interaction,
+                RequiresConfirmation = false,
+                RequiresApproval = false,
+                TimeoutSeconds = 10,
+                Tags = new[] { "condense", "summary", "history" },
+                IsModifying = false,
+                RequiresNetwork = false,
+                IsExperimental = false
+            };
+        }
     }
 }

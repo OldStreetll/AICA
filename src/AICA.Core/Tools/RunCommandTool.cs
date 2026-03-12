@@ -22,6 +22,22 @@ namespace AICA.Core.Tools
         /// </summary>
         public Func<string, CommandSafetyInfo> CommandSafetyChecker { get; set; }
 
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.Command,
+                RequiresConfirmation = true,
+                RequiresApproval = false,
+                TimeoutSeconds = 60,
+                IsModifying = false,
+                RequiresNetwork = false,
+                Tags = new[] { "command", "shell", "execute" }
+            };
+        }
+
         public ToolDefinition GetDefinition()
         {
             return new ToolDefinition
@@ -56,112 +72,99 @@ namespace AICA.Core.Tools
 
         public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
-            if (!call.Arguments.TryGetValue("command", out var cmdObj) || cmdObj == null)
-                return ToolResult.Fail("Missing required parameter: command");
-
-            var command = cmdObj.ToString().Trim();
-            if (string.IsNullOrEmpty(command))
-                return ToolResult.Fail("Command cannot be empty");
-
-            // Detect common Unix commands on Windows and provide helpful error
-            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
-            {
-                var unixCommands = new[] { "head", "tail", "grep", "find", "cat", "ls", "rm", "cp", "mv", "chmod", "chown" };
-                var firstWord = command.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();
-
-                if (firstWord != null && unixCommands.Contains(firstWord))
-                {
-                    return ToolResult.Fail($"Unix command '{firstWord}' is not available on Windows. Please use the appropriate built-in tool instead:\n" +
-                        "- Use 'grep_search' instead of 'grep'\n" +
-                        "- Use 'find_by_name' instead of 'find'\n" +
-                        "- Use 'read_file' instead of 'cat', 'head', or 'tail'\n" +
-                        "- Use 'list_dir' instead of 'ls'");
-                }
-            }
-
-            // Parse optional parameters
-            var cwd = context.WorkingDirectory;
-            if (call.Arguments.TryGetValue("cwd", out var cwdObj) && cwdObj != null)
-            {
-                var cwdPath = cwdObj.ToString();
-                if (!string.IsNullOrWhiteSpace(cwdPath))
-                {
-                    if (System.IO.Path.IsPathRooted(cwdPath))
-                        cwd = cwdPath;
-                    else
-                        cwd = System.IO.Path.Combine(context.WorkingDirectory, cwdPath);
-                }
-            }
-
-            int timeoutSeconds = 30;
-            if (call.Arguments.TryGetValue("timeout_seconds", out var timeoutObj) && timeoutObj != null)
-                int.TryParse(timeoutObj.ToString(), out timeoutSeconds);
-
-            // Safety check via injected checker
-            if (CommandSafetyChecker != null)
-            {
-                var safety = CommandSafetyChecker(command);
-                if (safety.IsDenied)
-                    return ToolResult.Fail($"Command denied: {safety.Reason}");
-            }
-
-            // Request user confirmation
-            var confirmed = await context.RequestConfirmationAsync(
-                "Run Command",
-                $"Execute command:\n```\n{command}\n```\nIn directory: {cwd}",
-                ct);
-
-            if (!confirmed)
-                return ToolResult.Fail("Command execution cancelled by user.");
-
-            // Execute the command
             try
             {
+                // Validate required parameters
+                var command = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "command");
+                ToolParameterValidator.ValidateNotEmpty(command, "command");
+
+                // Detect common Unix commands on Windows and provide helpful error
+                if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                {
+                    var unixCommands = new[] { "head", "tail", "grep", "find", "cat", "ls", "rm", "cp", "mv", "chmod", "chown" };
+                    var firstWord = command.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();
+
+                    if (firstWord != null && unixCommands.Contains(firstWord))
+                    {
+                        return ToolResult.Fail($"Unix command '{firstWord}' is not available on Windows. Please use the appropriate built-in tool instead:\n" +
+                            "- Use 'grep_search' instead of 'grep'\n" +
+                            "- Use 'find_by_name' instead of 'find'\n" +
+                            "- Use 'read_file' instead of 'cat', 'head', or 'tail'\n" +
+                            "- Use 'list_dir' instead of 'ls'");
+                    }
+                }
+
+                // Parse optional parameters
+                var cwd = context.WorkingDirectory;
+                var cwdParam = ToolParameterValidator.GetOptionalParameter<string>(call.Arguments, "cwd");
+                if (!string.IsNullOrWhiteSpace(cwdParam))
+                {
+                    if (System.IO.Path.IsPathRooted(cwdParam))
+                        cwd = cwdParam;
+                    else
+                        cwd = System.IO.Path.Combine(context.WorkingDirectory, cwdParam);
+                }
+
+                var timeoutSeconds = ToolParameterValidator.GetOptionalParameter<int>(call.Arguments, "timeout_seconds", 30);
+                ToolParameterValidator.ValidateRange(timeoutSeconds, 1, 300, "timeout_seconds");
+
+                // Safety check via injected checker
+                if (CommandSafetyChecker != null)
+                {
+                    var safety = CommandSafetyChecker(command);
+                    if (safety.IsDenied)
+                        return ToolResult.Fail($"Command denied: {safety.Reason}");
+                }
+
+                // Request user confirmation
+                var confirmed = await context.RequestConfirmationAsync(
+                    "Run Command",
+                    $"Execute command:\n```\n{command}\n```\nIn directory: {cwd}",
+                    ct);
+
+                if (!confirmed)
+                    return ToolResult.Fail("Command execution cancelled by user.");
+
+                // Execute the command
                 var result = await ExecuteCommandAsync(command, cwd, timeoutSeconds, ct);
                 return result;
             }
+            catch (ToolParameterException ex)
+            {
+                return ToolErrorHandler.HandleError(ToolErrorHandler.ParameterError(ex.Message));
+            }
             catch (OperationCanceledException)
             {
-                return ToolResult.Fail("Command execution was cancelled.");
+                return ToolErrorHandler.HandleError(ToolErrorHandler.Cancelled("run_command"));
             }
             catch (Exception ex)
             {
-                return ToolResult.Fail($"Command execution failed: {ex.Message}");
+                var error = ToolErrorHandler.ClassifyException(ex, "run_command");
+                return ToolErrorHandler.HandleError(error);
             }
         }
 
         private async Task<ToolResult> ExecuteCommandAsync(string command, string workingDirectory, int timeoutSeconds, CancellationToken ct)
         {
-            // Determine shell and arguments based on OS
-            string shell, shellArgs;
-            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            // Parse command safely to prevent injection
+            var (executable, arguments) = ParseCommandSafely(command);
+
+            if (string.IsNullOrEmpty(executable))
             {
-                shell = "cmd.exe";
-                shellArgs = $"/c {command}";
-            }
-            else
-            {
-                shell = "/bin/bash";
-                shellArgs = $"-c \"{command.Replace("\"", "\\\"")}\"";
+                return ToolResult.Fail("Invalid command: executable not found");
             }
 
             var startInfo = new ProcessStartInfo
             {
-                FileName = shell,
-                Arguments = shellArgs,
+                FileName = executable,
+                Arguments = arguments,
                 WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                // On Windows, cmd.exe pipes output in OEM codepage (e.g. CP936 for Chinese)
-                // On other platforms, use UTF-8
-                StandardOutputEncoding = Environment.OSVersion.Platform == PlatformID.Win32NT
-                    ? Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
-                    : Encoding.UTF8,
-                StandardErrorEncoding = Environment.OSVersion.Platform == PlatformID.Win32NT
-                    ? Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
-                    : Encoding.UTF8
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
             };
 
             var stdoutBuilder = new StringBuilder();
@@ -230,6 +233,115 @@ namespace AICA.Core.Tools
         public Task HandlePartialAsync(ToolCall call, IUIContext ui, CancellationToken ct = default)
         {
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Safely parse command to prevent injection attacks
+        /// </summary>
+        private (string executable, string arguments) ParseCommandSafely(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return (null, null);
+
+            command = command.Trim();
+
+            // Split command into executable and arguments
+            var parts = SplitCommandLine(command);
+            if (parts.Length == 0)
+                return (null, null);
+
+            var executable = parts[0];
+            var arguments = parts.Length > 1 ? string.Join(" ", parts.Skip(1).Select(EscapeArgument)) : "";
+
+            // Validate executable name (no path traversal, no shell metacharacters)
+            if (!IsValidExecutableName(executable))
+                return (null, null);
+
+            return (executable, arguments);
+        }
+
+        /// <summary>
+        /// Split command line respecting quotes
+        /// </summary>
+        private string[] SplitCommandLine(string commandLine)
+        {
+            var result = new List<string>();
+            var current = new StringBuilder();
+            bool inQuotes = false;
+            bool escapeNext = false;
+
+            for (int i = 0; i < commandLine.Length; i++)
+            {
+                char c = commandLine[i];
+
+                if (escapeNext)
+                {
+                    current.Append(c);
+                    escapeNext = false;
+                }
+                else if (c == '\\')
+                {
+                    escapeNext = true;
+                }
+                else if (c == '"')
+                {
+                    inQuotes = !inQuotes;
+                }
+                else if (char.IsWhiteSpace(c) && !inQuotes)
+                {
+                    if (current.Length > 0)
+                    {
+                        result.Add(current.ToString());
+                        current.Clear();
+                    }
+                }
+                else
+                {
+                    current.Append(c);
+                }
+            }
+
+            if (current.Length > 0)
+                result.Add(current.ToString());
+
+            return result.ToArray();
+        }
+
+        /// <summary>
+        /// Validate executable name to prevent injection
+        /// </summary>
+        private bool IsValidExecutableName(string executable)
+        {
+            if (string.IsNullOrWhiteSpace(executable))
+                return false;
+
+            // Prevent path traversal
+            if (executable.Contains("..") || executable.Contains("/") || executable.Contains("\\"))
+                return false;
+
+            // Prevent shell metacharacters
+            var dangerousChars = new[] { '|', '&', ';', '>', '<', '`', '$', '(', ')', '{', '}', '[', ']', '*', '?' };
+            if (executable.Any(c => dangerousChars.Contains(c)))
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Properly escape command line arguments
+        /// </summary>
+        private string EscapeArgument(string argument)
+        {
+            if (string.IsNullOrEmpty(argument))
+                return "\"\"";
+
+            // If argument contains spaces or special characters, quote it
+            if (argument.Any(c => char.IsWhiteSpace(c) || c == '"'))
+            {
+                return "\"" + argument.Replace("\"", "\\\"") + "\"";
+            }
+
+            return argument;
         }
     }
 

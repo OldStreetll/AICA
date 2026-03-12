@@ -237,5 +237,22 @@ namespace AICA.Core.Tools
         {
             return Task.CompletedTask;
         }
+
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.DirectoryOps,
+                RequiresConfirmation = false,
+                RequiresApproval = false,
+                TimeoutSeconds = 30,
+                Tags = new[] { "directory", "list", "files", "tree" },
+                IsModifying = false,
+                RequiresNetwork = false,
+                IsExperimental = false
+            };
+        }
     }
 }

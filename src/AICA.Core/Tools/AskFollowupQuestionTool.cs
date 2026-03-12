@@ -118,6 +118,23 @@ namespace AICA.Core.Tools
             return Task.CompletedTask;
         }
 
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.Interaction,
+                RequiresConfirmation = false,
+                RequiresApproval = true,
+                TimeoutSeconds = null,
+                Tags = new[] { "interaction", "question", "user", "input" },
+                IsModifying = false,
+                RequiresNetwork = false,
+                IsExperimental = false
+            };
+        }
+
         private (List<QuestionOption> Options, string Error) ParseOptions(object optionsObj)
         {
             var options = new List<QuestionOption>();

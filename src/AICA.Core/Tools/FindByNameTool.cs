@@ -283,6 +283,23 @@ namespace AICA.Core.Tools
             return Task.CompletedTask;
         }
 
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.Search,
+                RequiresConfirmation = false,
+                RequiresApproval = false,
+                TimeoutSeconds = 60,
+                Tags = new[] { "search", "find", "file", "directory" },
+                IsModifying = false,
+                RequiresNetwork = false,
+                IsExperimental = false
+            };
+        }
+
         private class FindResult
         {
             public string FullPath { get; set; }

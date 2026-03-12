@@ -585,5 +585,22 @@ namespace AICA.Core.Tools
         {
             return Task.CompletedTask;
         }
+
+        public ToolMetadata GetMetadata()
+        {
+            return new ToolMetadata
+            {
+                Name = Name,
+                Description = Description,
+                Category = ToolCategory.Analysis,
+                RequiresConfirmation = false,
+                RequiresApproval = false,
+                TimeoutSeconds = 60,
+                Tags = new[] { "analysis", "code", "definitions", "structure" },
+                IsModifying = false,
+                RequiresNetwork = false,
+                IsExperimental = false
+            };
+        }
     }
 }

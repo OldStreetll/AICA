@@ -24,6 +24,11 @@ namespace AICA.Core.Agent
         ToolDefinition GetDefinition();
 
         /// <summary>
+        /// Get metadata about this tool (category, requirements, timeout, etc.)
+        /// </summary>
+        ToolMetadata GetMetadata();
+
+        /// <summary>
         /// Execute the tool with the given parameters
         /// </summary>
         Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default);

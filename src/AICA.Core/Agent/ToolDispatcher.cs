@@ -13,11 +13,13 @@ namespace AICA.Core.Agent
     public class ToolDispatcher
     {
         private readonly Dictionary<string, IAgentTool> _tools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        private readonly ToolExecutionPipeline _pipeline;
         private readonly ILogger<ToolDispatcher> _logger;
 
         public ToolDispatcher(ILogger<ToolDispatcher> logger = null)
         {
             _logger = logger;
+            _pipeline = new ToolExecutionPipeline();
         }
 
         /// <summary>
@@ -31,6 +33,16 @@ namespace AICA.Core.Agent
         }
 
         /// <summary>
+        /// Register middleware in the execution pipeline
+        /// </summary>
+        public void UseMiddleware(IToolExecutionMiddleware middleware)
+        {
+            if (middleware == null) throw new ArgumentNullException(nameof(middleware));
+            _pipeline.Use(middleware);
+            _logger?.LogDebug("Registered middleware: {MiddlewareType}", middleware.GetType().Name);
+        }
+
+        /// <summary>
         /// Get all tool definitions for LLM
         /// </summary>
         public IEnumerable<ToolDefinition> GetToolDefinitions()
@@ -39,7 +51,7 @@ namespace AICA.Core.Agent
         }
 
         /// <summary>
-        /// Execute a tool call
+        /// Execute a tool call through the pipeline
         /// </summary>
         public async Task<ToolResult> ExecuteAsync(
             ToolCall call,
@@ -58,7 +70,7 @@ namespace AICA.Core.Agent
             try
             {
                 _logger?.LogDebug("Executing tool: {ToolName}", call.Name);
-                var result = await tool.ExecuteAsync(call, context, uiContext, ct).ConfigureAwait(false);
+                var result = await _pipeline.ExecuteAsync(call, tool, context, uiContext, ct).ConfigureAwait(false);
                 _logger?.LogDebug("Tool {ToolName} completed: Success={Success}", call.Name, result.Success);
                 return result;
             }
@@ -103,5 +115,19 @@ namespace AICA.Core.Agent
         /// Get registered tool names
         /// </summary>
         public IEnumerable<string> GetToolNames() => _tools.Keys;
+
+        /// <summary>
+        /// Get a tool by name
+        /// </summary>
+        public IAgentTool GetTool(string name)
+        {
+            _tools.TryGetValue(name, out var tool);
+            return tool;
+        }
+
+        /// <summary>
+        /// Get the execution pipeline (for advanced middleware configuration)
+        /// </summary>
+        public ToolExecutionPipeline Pipeline => _pipeline;
     }
 }
