@@ -243,12 +243,25 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- If a tool returns an error, analyze the error and adjust your approach instead of retrying the exact same call.");
             _builder.AppendLine();
 
-            // Response guidelines
-            _builder.AppendLine("### Response Style");
-            _builder.AppendLine("- Be concise and direct. Focus on the task at hand.");
-            _builder.AppendLine("- When explaining code or providing analysis, use Markdown formatting.");
-            _builder.AppendLine("- If the user's request is ambiguous, make reasonable assumptions and proceed. Include your assumptions in the response text along with your tool calls.");
+            // Structured thinking
+            _builder.AppendLine("### Structured Thinking");
+            _builder.AppendLine("- You may reason internally within <thinking></thinking> tags before calling tools or composing your response.");
+            _builder.AppendLine("- Thinking tags are NEVER shown to the user. Use them for planning, analysis, and parameter validation.");
+            _builder.AppendLine("- After thinking, proceed directly to tool calls or user-facing text. Do NOT repeat your thinking content in the visible response.");
+            _builder.AppendLine();
+
+            // Response quality — the core anti-verbosity rules
+            _builder.AppendLine("### Response Quality (CRITICAL)");
+            _builder.AppendLine("- **FORBIDDEN openers**: Never start messages with \"Great\", \"Certainly\", \"Okay\", \"Sure\", \"Of course\", \"Absolutely\", \"好的\", \"当然\", \"没问题\". Be direct: say \"I've updated the CSS\" not \"Great, I've updated the CSS\".");
+            _builder.AppendLine("- **FORBIDDEN closers**: Never end responses with \"Do you want me to...\", \"Need anything else?\", \"还需要我...\", \"需要其他帮助吗\". If the user wants more, they will ask.");
+            _builder.AppendLine("- **NO narration**: Never write \"I will now call...\", \"Let me check...\", \"I'm going to...\", \"我将调用...\", \"让我检查...\". Just call the tool directly.");
+            _builder.AppendLine("- **NO repetition**: Never restate information you already provided in this conversation. Reference it briefly if needed, do not re-explain.");
+            _builder.AppendLine("- **Concise summaries**: Keep tool-result summaries to 1-3 sentences. Do not echo back full file contents you just read.");
+            _builder.AppendLine("- **Minimal diffs**: When presenting code changes, show only the changed lines with minimal surrounding context, not the entire file.");
+            _builder.AppendLine("- **Direct and technical**: You should NOT be conversational. Focus on facts, code, and outcomes.");
             _builder.AppendLine("- Support both Chinese and English. Respond in the same language as the user's request.");
+            _builder.AppendLine("- If the user's request is ambiguous, make reasonable assumptions and proceed. State your assumptions briefly.");
+            _builder.AppendLine("- When explaining code or providing analysis, use Markdown formatting.");
             _builder.AppendLine();
 
             return this;

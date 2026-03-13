@@ -29,7 +29,7 @@ namespace AICA.Core.Tools
                         ["result"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "A comprehensive summary of what was accomplished, including all changes made"
+                            Description = "A concise summary (1-5 sentences) of what was accomplished. Focus on outcomes, not process. Do not repeat information already shown to the user."
                         },
                         ["command"] = new ToolParameterProperty
                         {

@@ -817,6 +817,19 @@ namespace AICA.ToolWindows
         }
 
         /// <summary>
+        /// Represents one iteration of the agent loop for structured rendering:
+        /// [thinking + action] → [tool call] → [conclusion text]
+        /// </summary>
+        private class IterationBlock
+        {
+            public string ThinkingContent { get; set; }
+            public string ActionText { get; set; }
+            public ToolCallBlock ToolBlock { get; set; }
+            public StringBuilder ConclusionText { get; set; } = new StringBuilder();
+            public int IterationId { get; set; }
+        }
+
+        /// <summary>
         /// Update conversation title based on first user message
         /// </summary>
         private async System.Threading.Tasks.Task UpdateConversationTitleAsync(string firstMessage)
@@ -900,12 +913,16 @@ namespace AICA.ToolWindows
             var hasToolCalls = false;
             var pendingToolCalls = new Dictionary<string, (ToolCall call, int id)>();
 
-            // NEW: Track tool call blocks in order, each with its associated text
+            // Track tool call blocks in order, each with its associated text
             var toolCallBlocks = new List<ToolCallBlock>();
-            ToolCallBlock currentBlock = null; // Current block being built
+            ToolCallBlock currentBlock = null;
+
+            // Track iteration blocks for structured rendering
+            var iterationBlocks = new List<IterationBlock>();
+            IterationBlock currentIteration = null;
+            int iterationCounter = 0;
 
             // Add user message to history BEFORE executing agent
-            // This ensures the next turn can see this message in previousMessages
             _llmHistory.Add(ChatMessage.User(userMessage));
 
             // Show immediate feedback while waiting for LLM's first token (TTFT)
@@ -914,15 +931,8 @@ namespace AICA.ToolWindows
             // Capture the WPF dispatcher so we can marshal UI updates from background thread
             var dispatcher = this.Dispatcher;
 
-            // Run the entire agent loop on a background thread to prevent UI deadlocks.
-            // The IAsyncEnumerable pattern causes MoveNextAsync() to resume the generator
-            // on the caller's thread. If the caller is the UI thread, all awaits in the
-            // generator chain (AgentExecutor -> OpenAIClient -> HttpClient) capture the UI
-            // sync context, causing deadlocks when tool execution tries to post back.
             await System.Threading.Tasks.Task.Run(async () =>
             {
-                // Pass previous conversation history to Agent (excluding current user message which is already in history)
-                // We pass all messages except the system prompt (which will be regenerated)
                 var previousMessages = _llmHistory
                     .Where(m => m.Role != ChatRole.System)
                     .ToList();
@@ -931,25 +941,56 @@ namespace AICA.ToolWindows
                 {
                     await foreach (var step in _agentExecutor.ExecuteAsync(userMessage, _agentContext, _uiContext, previousMessages, _currentCts.Token))
                     {
-                        // Marshal UI updates to the UI thread via Dispatcher.Invoke.
-                        // This blocks the background thread until the UI processes the update,
-                        // ensuring sequential rendering. The UI thread is free (awaiting Task.Run).
                         dispatcher.Invoke(new Action(() =>
                         {
                             switch (step.Type)
                             {
+                                case AgentStepType.ThinkingChunk:
+                                    // Start a new iteration block for thinking content
+                                    currentIteration = new IterationBlock
+                                    {
+                                        ThinkingContent = step.Text,
+                                        IterationId = iterationCounter++
+                                    };
+                                    iterationBlocks.Add(currentIteration);
+                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    break;
+
+                                case AgentStepType.ActionStart:
+                                    // Associate action with current iteration block
+                                    if (currentIteration != null)
+                                    {
+                                        currentIteration.ActionText = step.Text;
+                                    }
+                                    else
+                                    {
+                                        // No thinking preceded this action, create a new iteration block
+                                        currentIteration = new IterationBlock
+                                        {
+                                            ActionText = step.Text,
+                                            IterationId = iterationCounter++
+                                        };
+                                        iterationBlocks.Add(currentIteration);
+                                    }
+                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    break;
+
                                 case AgentStepType.TextChunk:
                                     responseBuilder.Append(step.Text);
 
-                                    // NEW: If we have a current tool block, append text to it
-                                    // Otherwise, append to the global response builder (for non-tool responses)
+                                    // Append text as conclusion to current iteration block
+                                    if (currentIteration != null)
+                                    {
+                                        currentIteration.ConclusionText.Append(step.Text);
+                                    }
+
+                                    // Also track in tool call blocks for backward compatibility
                                     if (currentBlock != null)
                                     {
                                         currentBlock.TextAfter.Append(step.Text);
                                     }
 
-                                    // Render with interleaved tool blocks and text
-                                    RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.ToolStart:
@@ -964,13 +1005,12 @@ namespace AICA.ToolWindows
                                     }
                                     hasToolCalls = true;
 
-                                    // Don't show attempt_completion in tool logs (its text becomes the main response)
+                                    // Don't show attempt_completion in tool logs
                                     if (step.ToolCall.Name != "attempt_completion")
                                     {
                                         var toolId = _globalToolCallCounter++;
                                         pendingToolCalls[step.ToolCall.Id] = (step.ToolCall, toolId);
 
-                                        // Generate enhanced tool call HTML (without result yet)
                                         var toolHtml = BuildToolCallHtml(
                                             step.ToolCall.Name,
                                             step.ToolCall.Arguments,
@@ -979,7 +1019,6 @@ namespace AICA.ToolWindows
                                             toolId
                                         );
 
-                                        // NEW: Create a new tool call block
                                         currentBlock = new ToolCallBlock
                                         {
                                             ToolHtml = toolHtml,
@@ -987,24 +1026,27 @@ namespace AICA.ToolWindows
                                             ToolCallId = step.ToolCall.Id
                                         };
                                         toolCallBlocks.Add(currentBlock);
+
+                                        // Associate tool block with current iteration
+                                        if (currentIteration != null)
+                                        {
+                                            currentIteration.ToolBlock = currentBlock;
+                                        }
                                     }
 
-                                    RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.ToolResult:
-                                    // Skip attempt_completion results in tool log (shown as main response)
                                     if (step.ToolCall?.Name == "attempt_completion")
                                     {
                                         break;
                                     }
 
-                                    // Update the tool call with result
                                     if (pendingToolCalls.TryGetValue(step.ToolCall.Id, out var toolInfo))
                                     {
                                         var resultText = step.Result.Success ? step.Result.Content : step.Result.Error;
 
-                                        // Regenerate the tool call HTML with result
                                         var toolHtml = BuildToolCallHtml(
                                             toolInfo.call.Name,
                                             toolInfo.call.Arguments,
@@ -1013,7 +1055,6 @@ namespace AICA.ToolWindows
                                             toolInfo.id
                                         );
 
-                                        // NEW: Find and update the corresponding block
                                         var block = toolCallBlocks.FirstOrDefault(b => b.ToolCallId == step.ToolCall.Id);
                                         if (block != null)
                                         {
@@ -1021,25 +1062,27 @@ namespace AICA.ToolWindows
                                         }
                                     }
 
-                                    RenderConversationStreamingInterleaved(toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    // After tool result, reset currentIteration so next thinking starts a new block
+                                    currentIteration = null;
+
+                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.Complete:
-                                    // Try to parse CompletionResult from step.Text
                                     CompletionResult completionResult = null;
                                     if (!string.IsNullOrEmpty(step.Text) && step.Text.StartsWith("TASK_COMPLETED:"))
                                     {
                                         completionResult = CompletionResult.Deserialize(step.Text);
                                     }
 
-                                    // For completion responses, always trust the structured completion summary
-                                    // as the final user-facing answer. Streaming text before attempt_completion
-                                    // often contains internal tool-decision language and should not be persisted.
                                     string finalContent = responseBuilder.ToString().Trim();
 
-                                    // NEW: Build final tool logs HTML from interleaved blocks
                                     string finalToolLogs = null;
-                                    if (hasToolCalls && toolCallBlocks.Count > 0)
+                                    if (hasToolCalls && iterationBlocks.Count > 0)
+                                    {
+                                        finalToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+                                    }
+                                    else if (hasToolCalls && toolCallBlocks.Count > 0)
                                     {
                                         finalToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
                                     }
@@ -1049,8 +1092,6 @@ namespace AICA.ToolWindows
                                         finalContent = completionResult.Summary;
                                     }
 
-                                    // Diagnostic hint: only if no tools AND response has action-like language
-                                    // AND response is substantial (>200 chars to avoid false positives on greetings)
                                     if (!hasToolCalls && responseBuilder.Length > 200 && ContainsToolIntentLanguage(responseBuilder.ToString()))
                                     {
                                         finalContent += "\n\n---\n⚠️ **提示**: AI 描述了要执行的操作但未实际调用工具。\n" +
@@ -1070,16 +1111,18 @@ namespace AICA.ToolWindows
                                             CompletionData = completionResult != null ? step.Text : null
                                         };
                                         _conversation.Add(message);
-                                        // Also add to LLM history for next turn's context
                                         _llmHistory.Add(ChatMessage.Assistant(completionResult?.Summary ?? finalContent));
                                     }
                                     RenderConversation();
                                     break;
 
                                 case AgentStepType.Error:
-                                    // Preserve any tool logs and text accumulated before the error
                                     string errorToolLogs = null;
-                                    if (hasToolCalls && toolCallBlocks.Count > 0)
+                                    if (hasToolCalls && iterationBlocks.Count > 0)
+                                    {
+                                        errorToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+                                    }
+                                    else if (hasToolCalls && toolCallBlocks.Count > 0)
                                     {
                                         errorToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
                                     }
@@ -1089,7 +1132,6 @@ namespace AICA.ToolWindows
 
                                     if (!string.IsNullOrWhiteSpace(errorToolLogs) || !string.IsNullOrWhiteSpace(errorContent))
                                     {
-                                        // Append the error message after any existing content
                                         var combinedContent = string.IsNullOrWhiteSpace(errorContent)
                                             ? errorMessage
                                             : errorContent + "\n\n---\n" + errorMessage;
@@ -1113,24 +1155,24 @@ namespace AICA.ToolWindows
                 }
                 catch (OperationCanceledException) when (_isPaused)
                 {
-                    // User clicked Pause: preserve partial output in conversation and LLM history
                     dispatcher.Invoke(new Action(() =>
                     {
                         var partialContent = responseBuilder.ToString().Trim();
 
-                        // Build tool logs if any were accumulated
                         string partialToolLogs = null;
-                        if (hasToolCalls && toolCallBlocks.Count > 0)
+                        if (hasToolCalls && iterationBlocks.Count > 0)
+                        {
+                            partialToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+                        }
+                        else if (hasToolCalls && toolCallBlocks.Count > 0)
                         {
                             partialToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
                         }
 
-                        // Append pause indicator
                         var pausedContent = string.IsNullOrWhiteSpace(partialContent)
                             ? "⏸️ *输出已暂停*"
                             : partialContent + "\n\n---\n⏸️ *输出已暂停*";
 
-                        // Add to conversation for UI display
                         _conversation.Add(new ConversationMessage
                         {
                             Role = "assistant",
@@ -1138,7 +1180,6 @@ namespace AICA.ToolWindows
                             ToolLogsHtml = partialToolLogs
                         });
 
-                        // Add to LLM history so the paused content is preserved in context
                         _llmHistory.Add(ChatMessage.Assistant(pausedContent));
 
                         RenderConversation();
@@ -1227,6 +1268,165 @@ namespace AICA.ToolWindows
             if (string.IsNullOrEmpty(text)) return "(empty)";
             if (text.Length <= maxLength) return text.Replace("\n", " ").Replace("\r", "");
             return text.Substring(0, maxLength).Replace("\n", " ").Replace("\r", "") + "...";
+        }
+
+        /// <summary>
+        /// Build HTML for thinking block with collapsible content
+        /// </summary>
+        private string BuildThinkingBlockHtml(string thinkingContent, string actionText, int iterationId)
+        {
+            var html = new StringBuilder();
+
+            html.AppendLine("<div class=\"thinking-container\">");
+            html.AppendLine($"  <input type=\"checkbox\" id=\"thinking-toggle-{iterationId}\" class=\"thinking-toggle\" />");
+            html.AppendLine($"  <label for=\"thinking-toggle-{iterationId}\" class=\"thinking-header\">");
+            html.AppendLine("    <span class=\"thinking-icon\">💭</span>");
+            html.AppendLine("    <span class=\"thinking-label\">Thought</span>");
+            html.AppendLine("    <span class=\"thinking-expand\">▶</span>");
+            html.AppendLine("  </label>");
+
+            if (!string.IsNullOrEmpty(thinkingContent))
+            {
+                html.AppendLine("  <div class=\"thinking-body\">");
+                var thinkingHtml = Markdig.Markdown.ToHtml(thinkingContent, _markdownPipeline);
+                html.AppendLine($"    {thinkingHtml}");
+                html.AppendLine("  </div>");
+            }
+
+            html.AppendLine("</div>");
+
+            // Action text always visible below thinking block
+            if (!string.IsNullOrEmpty(actionText))
+            {
+                html.AppendLine($"<div class=\"action-text\">{System.Web.HttpUtility.HtmlEncode(actionText)}</div>");
+            }
+
+            return html.ToString();
+        }
+
+        /// <summary>
+        /// Render conversation with structured iteration blocks during streaming
+        /// </summary>
+        private void RenderStructuredStreaming(List<IterationBlock> iterationBlocks, List<ToolCallBlock> toolCallBlocks, ToolCallBlock currentBlock, string remainingText)
+        {
+            var bodyBuilder = new StringBuilder();
+
+            // Render all previous conversation messages
+            for (int i = 0; i < _conversation.Count; i++)
+            {
+                var message = _conversation[i];
+                var roleClass = message.Role == "user" ? "user" : "assistant";
+                var roleName = message.Role == "user" ? "You" : "AI";
+
+                // Check if this is a completion message
+                if (message.Role == "assistant" && !string.IsNullOrEmpty(message.CompletionData))
+                {
+                    var completionResult = CompletionResult.Deserialize(message.CompletionData);
+                    if (completionResult != null)
+                    {
+                        bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
+                        bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
+
+                        if (!string.IsNullOrEmpty(message.ToolLogsHtml))
+                        {
+                            bodyBuilder.AppendLine($"<div class=\"content\">{message.ToolLogsHtml}</div>");
+                        }
+
+                        if (!string.IsNullOrEmpty(message.Content))
+                        {
+                            var contentHtml = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
+                            bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
+                        }
+
+                        bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+                        bodyBuilder.AppendLine("</div>");
+                        continue;
+                    }
+                }
+
+                // Regular message rendering
+                if (message.Content != null && message.Content.Contains("<div class=\"tool-call-container\">"))
+                {
+                    bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{message.Content}</div></div>");
+                }
+                else
+                {
+                    var html = Markdig.Markdown.ToHtml(message.Content ?? string.Empty, _markdownPipeline);
+                    bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{html}</div></div>");
+                }
+            }
+
+            // Render streaming message with structured iteration blocks
+            if (iterationBlocks.Count > 0 || !string.IsNullOrEmpty(remainingText))
+            {
+                bodyBuilder.AppendLine("<div class=\"message assistant streaming\"><div class=\"role\">AI</div><div class=\"content\">");
+
+                // Render each iteration block: [thinking+action] → [tool] → [conclusion]
+                foreach (var iteration in iterationBlocks)
+                {
+                    // 1. Thinking + Action
+                    if (!string.IsNullOrEmpty(iteration.ThinkingContent) || !string.IsNullOrEmpty(iteration.ActionText))
+                    {
+                        bodyBuilder.AppendLine(BuildThinkingBlockHtml(iteration.ThinkingContent, iteration.ActionText, iteration.IterationId));
+                    }
+
+                    // 2. Tool call
+                    if (iteration.ToolBlock != null)
+                    {
+                        bodyBuilder.AppendLine(iteration.ToolBlock.ToolHtml);
+                    }
+
+                    // 3. Conclusion text
+                    if (iteration.ConclusionText.Length > 0)
+                    {
+                        var conclusionHtml = Markdig.Markdown.ToHtml(iteration.ConclusionText.ToString(), _markdownPipeline);
+                        bodyBuilder.AppendLine($"<div class=\"conclusion-text\">{conclusionHtml}</div>");
+                    }
+                }
+
+                // Render any remaining text not yet associated with an iteration
+                if (!string.IsNullOrEmpty(remainingText))
+                {
+                    var streamingHtml = Markdig.Markdown.ToHtml(remainingText, _markdownPipeline);
+                    bodyBuilder.AppendLine(streamingHtml);
+                }
+
+                bodyBuilder.AppendLine("</div></div>");
+            }
+
+            UpdateBrowserContent(bodyBuilder.ToString());
+        }
+
+        /// <summary>
+        /// Build final HTML from structured iteration blocks for persistence
+        /// </summary>
+        private string BuildStructuredToolLogsHtml(List<IterationBlock> iterationBlocks, List<ToolCallBlock> toolCallBlocks)
+        {
+            var html = new StringBuilder();
+
+            foreach (var iteration in iterationBlocks)
+            {
+                // 1. Thinking + Action
+                if (!string.IsNullOrEmpty(iteration.ThinkingContent) || !string.IsNullOrEmpty(iteration.ActionText))
+                {
+                    html.AppendLine(BuildThinkingBlockHtml(iteration.ThinkingContent, iteration.ActionText, iteration.IterationId));
+                }
+
+                // 2. Tool call
+                if (iteration.ToolBlock != null)
+                {
+                    html.AppendLine(iteration.ToolBlock.ToolHtml);
+                }
+
+                // 3. Conclusion text
+                if (iteration.ConclusionText.Length > 0)
+                {
+                    var conclusionHtml = Markdig.Markdown.ToHtml(iteration.ConclusionText.ToString(), _markdownPipeline);
+                    html.AppendLine($"<div class=\"conclusion-text\">{conclusionHtml}</div>");
+                }
+            }
+
+            return html.ToString();
         }
 
         /// <summary>
@@ -2092,6 +2292,67 @@ namespace AICA.ToolWindows
         a:hover {{ text-decoration: underline; }}
         h1, h2, h3, h4, h5, h6 {{ margin-top: 1.4em; margin-bottom: 0.6em; }}
 
+        /* Thinking Block Styles - Light Yellow */
+        .thinking-container {{
+            margin: 8px 0;
+            border-left: 3px solid #e6c07b;
+            background: rgba(230, 192, 123, 0.08);
+            border-radius: 4px;
+            overflow: hidden;
+        }}
+        .thinking-toggle {{
+            display: none;
+        }}
+        .thinking-header {{
+            padding: 6px 12px;
+            background: rgba(230, 192, 123, 0.12);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #e6c07b;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .thinking-header:hover {{
+            background: rgba(230, 192, 123, 0.18);
+        }}
+        .thinking-icon {{
+            font-size: 14px;
+        }}
+        .thinking-label {{
+            font-size: 12px;
+        }}
+        .thinking-expand {{
+            margin-left: auto;
+            font-size: 10px;
+            transition: transform 0.2s;
+        }}
+        .thinking-toggle:checked ~ .thinking-header .thinking-expand {{
+            transform: rotate(90deg);
+        }}
+        .thinking-body {{
+            padding: 10px 12px;
+            display: none;
+            font-size: 13px;
+            color: #b0b0b0;
+            border-top: 1px solid rgba(230, 192, 123, 0.15);
+        }}
+        .thinking-toggle:checked ~ .thinking-body {{
+            display: block;
+        }}
+        .action-text {{
+            padding: 4px 12px;
+            font-size: 13px;
+            color: #9ca3af;
+            font-style: italic;
+        }}
+        .conclusion-text {{
+            padding: 8px 0;
+            font-size: 14px;
+        }}
+
         /* Tool Call Visualization Styles */
         .tool-call-container {{
             margin: 8px 0;
@@ -2193,6 +2454,22 @@ namespace AICA.ToolWindows
             overflow-y: auto;
         }}
         @media (prefers-color-scheme: light) {{
+            .thinking-container {{
+                background: rgba(230, 192, 123, 0.05);
+            }}
+            .thinking-header {{
+                background: rgba(230, 192, 123, 0.1);
+            }}
+            .thinking-header:hover {{
+                background: rgba(230, 192, 123, 0.15);
+            }}
+            .thinking-body {{
+                color: #555;
+                border-top-color: rgba(230, 192, 123, 0.2);
+            }}
+            .action-text {{
+                color: #777;
+            }}
             .tool-call-container {{
                 background: rgba(74, 163, 255, 0.05);
             }}

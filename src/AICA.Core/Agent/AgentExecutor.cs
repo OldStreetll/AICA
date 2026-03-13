@@ -142,6 +142,9 @@ namespace AICA.Core.Agent
                 _logger?.LogDebug("Agent iteration {Iteration}", iteration);
                 System.Diagnostics.Debug.WriteLine($"[AICA] Agent iteration {iteration}");
 
+                // ── Micro-compact old tool results to save context space ──
+                conversationHistory = ResponseQualityFilter.MicroCompactToolResults(conversationHistory, keepRecent: 4);
+
                 // Truncate conversation history if it exceeds token budget
                 // Reserve ~15% of budget for system prompt, use 85% for conversation
                 int conversationBudget = (int)(_maxTokenBudget * 0.85);
@@ -414,62 +417,63 @@ namespace AICA.Core.Agent
                     yield break;
                 }
 
-                // ── Hallucination suppression ──
-                // If the model is going to call tools, pre-tool text is often planning/thinking text
-                // rather than user-facing content.
-                // For attempt_completion, suppress ALL pre-tool text because the final user-facing
-                // response should come from the completion summary, not internal tool-decision text.
-                // For other tools, only suppress if the text looks like internal reasoning.
-                bool hasAttemptCompletion = toolCalls.Any(tc => tc.Name == "attempt_completion");
+                // ── Extract <thinking> tags before any suppression logic ──
+                string pendingThinking = null;
+                if (!string.IsNullOrEmpty(assistantResponse))
+                {
+                    var (thinking, userFacing) = ResponseQualityFilter.ExtractThinking(assistantResponse);
+                    if (!string.IsNullOrEmpty(thinking))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Extracted thinking ({thinking.Length} chars)");
+                        pendingThinking = thinking;
+                        assistantResponse = userFacing;
+                        pendingTextChunks.Clear();
+                        if (!string.IsNullOrEmpty(userFacing))
+                            pendingTextChunks.Add(userFacing);
+                    }
+                }
+
+                // Yield thinking chunk (outside try-catch, safe for yield)
+                if (!string.IsNullOrEmpty(pendingThinking))
+                {
+                    yield return AgentStep.ThinkingChunk(pendingThinking);
+                }
+
+                // ── Pre-tool text suppression ──
+                // When the model calls tools, accompanying text is almost always narration
+                // ("I found the file...", "让我读取它...") that should not be shown to the user.
+                // Exception: ask_followup_question needs its pre-text as the question context.
                 bool suppressText = false;
 
                 if (hasToolCalls && !string.IsNullOrWhiteSpace(assistantResponse))
                 {
-                    // Always suppress pre-tool text for attempt_completion
-                    if (hasAttemptCompletion)
+                    bool hasOnlyFollowup = toolCalls.All(tc => tc.Name == "ask_followup_question");
+                    if (!hasOnlyFollowup)
                     {
+                        // Suppress ALL pre-tool text for tool calls (not just reasoning patterns).
+                        // This matches Cline's approach: tool call messages contain only the call, no prose.
                         suppressText = true;
-                    }
-                    // For other tools, check if the text looks like internal reasoning
-                    else
-                    {
-                        var lowerResponse = assistantResponse.ToLowerInvariant();
-
-                        // Patterns indicating internal reasoning/planning (not user-facing content)
-                        var reasoningPatterns = new[]
-                        {
-                            "i need to", "i should", "i will", "i'm going to", "let me",
-                            "我需要", "我应该", "我将", "让我",
-                            "first, i", "next, i", "then, i",
-                            "首先", "接下来", "然后"
-                        };
-
-                        // If text is short and starts with reasoning patterns, it's likely planning text
-                        if (assistantResponse.Length < 200 && reasoningPatterns.Any(p => lowerResponse.StartsWith(p)))
-                        {
-                            suppressText = true;
-                        }
                     }
                 }
 
-                // Additional filter: suppress common meta-reasoning patterns that leak internal thinking
-                if (!suppressText && !string.IsNullOrWhiteSpace(assistantResponse))
+                // When no tool calls but tools have been used before (iteration > 1),
+                // the model is likely narrating tool results instead of calling attempt_completion.
+                // Suppress this narration — the nudge logic below will push it to call attempt_completion.
+                if (!suppressText && !hasToolCalls && _taskState.HasEverUsedTools
+                    && _taskState.Iteration > 1 && !string.IsNullOrWhiteSpace(assistantResponse))
                 {
-                    var lowerResponse = assistantResponse.ToLowerInvariant();
-                    var metaPatterns = new[]
-                    {
-                        "the user is asking", "the user wants", "the user is requesting",
-                        "looking at the instructions", "actually,", "wait,", "let me check",
-                        "i think the user", "let me re-read",
-                        "oh wait", "i see -", "this might be"
-                    };
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Suppressing post-tool narration text ({assistantResponse.Length} chars), nudging to call attempt_completion");
+                    suppressText = true;
+                }
 
-                    if (metaPatterns.Any(p => lowerResponse.Contains(p)))
-                    {
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Suppressing meta-reasoning text ({assistantResponse?.Length ?? 0} chars)");
-                        suppressText = true;
-                    }
+                // Even without tool calls, suppress standalone meta-reasoning text
+                if (!suppressText && !string.IsNullOrWhiteSpace(assistantResponse)
+                    && ResponseQualityFilter.IsInternalReasoning(assistantResponse))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Suppressing meta-reasoning text ({assistantResponse?.Length ?? 0} chars)");
+                    suppressText = true;
                 }
 
                 if (suppressText)
@@ -481,6 +485,14 @@ namespace AICA.Core.Agent
                 }
                 else
                 {
+                    // ── Apply response quality filters before yielding ──
+                    if (pendingTextChunks.Count > 0)
+                    {
+                        pendingTextChunks[0] = ResponseQualityFilter.StripForbiddenOpeners(pendingTextChunks[0]);
+                        var lastIdx = pendingTextChunks.Count - 1;
+                        pendingTextChunks[lastIdx] = ResponseQualityFilter.StripTrailingOffers(pendingTextChunks[lastIdx]);
+                    }
+
                     foreach (var text in pendingTextChunks)
                     {
                         yield return AgentStep.TextChunk(text);
@@ -650,12 +662,14 @@ namespace AICA.Core.Agent
                             $"2. If you need updated information, add/change a parameter (e.g., different offset/limit for read_file)\n" +
                             $"3. If the file was modified, the system will allow re-reading automatically\n\n" +
                             $"This check prevents unnecessary duplicate operations and improves efficiency.");
+                        yield return AgentStep.ActionStart(BuildActionDescription(toolCall));
                         yield return AgentStep.ToolStart(toolCall);
                         yield return AgentStep.WithToolResult(toolCall, dupResult);
                         conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, $"Error: {dupResult.Error}"));
                         continue;
                     }
 
+                    yield return AgentStep.ActionStart(BuildActionDescription(toolCall));
                     yield return AgentStep.ToolStart(toolCall);
 
                     _taskState.LastToolName = toolCall.Name;
@@ -1415,6 +1429,56 @@ namespace AICA.Core.Agent
         }
 
         /// <summary>
+        /// Build a human-readable action description from a tool call for UI display.
+        /// </summary>
+        private static string BuildActionDescription(ToolCall toolCall)
+        {
+            var name = toolCall.Name?.ToLowerInvariant() ?? "";
+            var args = toolCall.Arguments;
+
+            string target = GetFirstArgValue(args, "path", "file_path", "directory");
+            string query = GetFirstArgValue(args, "pattern", "query", "search_term", "name");
+            string command = GetFirstArgValue(args, "command");
+
+            if (name.Contains("read")) return $"📖 正在读取 {Shorten(target)}...";
+            if (name.Contains("write") || name.Contains("create")) return $"✏️ 正在写入 {Shorten(target)}...";
+            if (name.Contains("edit")) return $"📝 正在编辑 {Shorten(target)}...";
+            if (name.Contains("grep") || name.Contains("search")) return $"🔍 正在搜索 {Shorten(query)}...";
+            if (name.Contains("list_dir")) return $"📂 正在列出 {Shorten(target ?? ".")} 目录...";
+            if (name.Contains("find")) return $"🔍 正在查找 {Shorten(query)}...";
+            if (name.Contains("command") || name.Contains("run")) return $"⚡ 正在执行命令 {Shorten(command)}...";
+            if (name.Contains("list_project")) return "📁 正在列出项目信息...";
+            if (name.Contains("list_code")) return "📋 正在分析代码定义...";
+            if (name.Contains("condense")) return "📝 正在压缩上下文...";
+            if (name.Contains("attempt_completion")) return "✅ 正在完成任务...";
+            if (name.Contains("ask_followup")) return "❓ 正在向用户提问...";
+            if (name.Contains("update_plan")) return "📋 正在更新计划...";
+            if (name.Contains("log_analysis")) return "📊 正在分析日志...";
+            return $"🔧 正在执行 {toolCall.Name}...";
+        }
+
+        private static string GetFirstArgValue(Dictionary<string, object> args, params string[] keys)
+        {
+            if (args == null) return null;
+            foreach (var key in keys)
+            {
+                if (args.TryGetValue(key, out var val) && val != null)
+                {
+                    var s = val.ToString();
+                    if (!string.IsNullOrWhiteSpace(s)) return s;
+                }
+            }
+            return null;
+        }
+
+        private static string Shorten(string text, int maxLen = 60)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            text = text.Replace("\r", "").Replace("\n", " ").Trim();
+            return text.Length <= maxLen ? text : text.Substring(0, maxLen) + "...";
+        }
+
+        /// <summary>
         /// Extract potential file paths from user request for rule context.
         /// </summary>
         private List<string> ExtractPathCandidates(string text)
@@ -1454,6 +1518,8 @@ namespace AICA.Core.Agent
         public string ErrorMessage { get; set; }
 
         public static AgentStep TextChunk(string text) => new AgentStep { Type = AgentStepType.TextChunk, Text = text };
+        public static AgentStep ThinkingChunk(string text) => new AgentStep { Type = AgentStepType.ThinkingChunk, Text = text };
+        public static AgentStep ActionStart(string text) => new AgentStep { Type = AgentStepType.ActionStart, Text = text };
         public static AgentStep ToolStart(ToolCall call) => new AgentStep { Type = AgentStepType.ToolStart, ToolCall = call };
         public static AgentStep WithToolResult(ToolCall call, ToolResult result) => new AgentStep { Type = AgentStepType.ToolResult, ToolCall = call, Result = result };
         public static AgentStep Complete(string finalText) => new AgentStep { Type = AgentStepType.Complete, Text = finalText };
@@ -1463,6 +1529,8 @@ namespace AICA.Core.Agent
     public enum AgentStepType
     {
         TextChunk,
+        ThinkingChunk,
+        ActionStart,
         ToolStart,
         ToolResult,
         Complete,

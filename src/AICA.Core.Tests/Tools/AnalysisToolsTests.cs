@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
 using AICA.Core.Tools;
+using AICA.Core.Workspace;
 using Moq;
 using Xunit;
 
