@@ -1016,14 +1016,15 @@ namespace AICA.ToolWindows
                                     break;
 
                                 case AgentStepType.TextChunk:
-                                    // Append text as conclusion to current iteration block
-                                    if (currentIteration != null)
+                                    // Only append text as conclusion to current iteration if we've already seen a tool result
+                                    // This ensures conclusion text appears AFTER the tool, not inside the thinking block
+                                    if (currentIteration != null && currentIteration.ToolBlock != null)
                                     {
                                         currentIteration.ConclusionText.Append(step.Text);
                                     }
                                     else
                                     {
-                                        // No iteration context - append to responseBuilder for final content
+                                        // No iteration context or no tool yet - append to responseBuilder for independent streaming
                                         responseBuilder.Append(step.Text);
                                     }
 
