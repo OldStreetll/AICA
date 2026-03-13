@@ -547,7 +547,7 @@ namespace AICA.ToolWindows
                     {
                         // Render final layout in the desired order:
                         // 1. tool logs (includes thinking, actions, tools, conclusions)
-                        // 2. additional content (only if not in tool logs)
+                        // 2. independent streaming content (part 3)
                         // 3. completion card
                         bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
                         bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
@@ -557,8 +557,8 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{message.ToolLogsHtml}</div>");
                         }
 
-                        // Only render Content if it's not already in ToolLogsHtml
-                        if (!string.IsNullOrEmpty(message.Content) && string.IsNullOrEmpty(message.ToolLogsHtml))
+                        // Render independent streaming content (part 3) if present
+                        if (!string.IsNullOrEmpty(message.Content))
                         {
                             var contentHtml = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
@@ -624,7 +624,7 @@ namespace AICA.ToolWindows
                     {
                         // Render final layout in the desired order:
                         // 1. tool logs (includes thinking, actions, tools, conclusions)
-                        // 2. additional content (only if not in tool logs)
+                        // 2. independent streaming content (part 3)
                         // 3. completion card
                         bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
                         bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
@@ -634,8 +634,8 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{message.ToolLogsHtml}</div>");
                         }
 
-                        // Only render Content if it's not already in ToolLogsHtml
-                        if (!string.IsNullOrEmpty(message.Content) && string.IsNullOrEmpty(message.ToolLogsHtml))
+                        // Render independent streaming content (part 3) if present
+                        if (!string.IsNullOrEmpty(message.Content))
                         {
                             var contentHtml = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
@@ -1121,14 +1121,24 @@ namespace AICA.ToolWindows
                                         // Use structured tool logs (includes thinking, actions, tools, conclusions)
                                         finalToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
 
-                                        // Don't use responseBuilder content as it's already in iteration blocks
-                                        // Only use completion summary if available
-                                        finalContent = null;
+                                        // Save independent streaming content from responseBuilder (part 3)
+                                        // This is content that appeared outside of iteration blocks
+                                        var independentContent = responseBuilder.ToString().Trim();
+                                        if (!string.IsNullOrWhiteSpace(independentContent))
+                                        {
+                                            finalContent = independentContent;
+                                        }
                                     }
                                     else if (hasToolCalls && toolCallBlocks.Count > 0)
                                     {
                                         finalToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
-                                        finalContent = null;
+
+                                        // Save independent streaming content
+                                        var independentContent = responseBuilder.ToString().Trim();
+                                        if (!string.IsNullOrWhiteSpace(independentContent))
+                                        {
+                                            finalContent = independentContent;
+                                        }
                                     }
                                     else
                                     {
