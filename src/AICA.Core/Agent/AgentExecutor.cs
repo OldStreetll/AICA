@@ -440,30 +440,40 @@ namespace AICA.Core.Agent
                 }
 
                 // ── Pre-tool text suppression ──
-                // When the model calls tools, accompanying text is almost always narration
-                // ("I found the file...", "让我读取它...") that should not be shown to the user.
+                // When the model calls tools, ALL accompanying text is captured as thinking content
+                // for the collapsible thinking block. This text represents the LLM's reasoning
+                // for this iteration (e.g., "The file wasn't found, let me check the directory...").
                 // Exception: ask_followup_question needs its pre-text as the question context.
                 bool suppressText = false;
+                string pendingThinkingFromSuppression = null;
 
                 if (hasToolCalls && !string.IsNullOrWhiteSpace(assistantResponse))
                 {
                     bool hasOnlyFollowup = toolCalls.All(tc => tc.Name == "ask_followup_question");
-                    if (!hasOnlyFollowup)
+                    bool hasOnlyCompletion = toolCalls.All(tc => tc.Name == "attempt_completion");
+
+                    if (hasOnlyCompletion)
                     {
-                        // Suppress ALL pre-tool text for tool calls (not just reasoning patterns).
-                        // This matches Cline's approach: tool call messages contain only the call, no prose.
+                        // attempt_completion's accompanying text is the LLM's conclusion/summary,
+                        // not thinking. Yield it as TextChunk so it appears as conclusion (part 3).
+                        suppressText = false;
+                    }
+                    else if (!hasOnlyFollowup)
+                    {
+                        // Capture ALL text as thinking content for this iteration's thinking block
+                        pendingThinkingFromSuppression = assistantResponse;
                         suppressText = true;
                     }
                 }
 
                 // When no tool calls but tools have been used before (iteration > 1),
                 // the model is likely narrating tool results instead of calling attempt_completion.
-                // Suppress this narration — the nudge logic below will push it to call attempt_completion.
                 if (!suppressText && !hasToolCalls && _taskState.HasEverUsedTools
                     && _taskState.Iteration > 1 && !string.IsNullOrWhiteSpace(assistantResponse))
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"[AICA] Suppressing post-tool narration text ({assistantResponse.Length} chars), nudging to call attempt_completion");
+                    pendingThinkingFromSuppression = assistantResponse;
                     suppressText = true;
                 }
 
@@ -473,15 +483,21 @@ namespace AICA.Core.Agent
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"[AICA] Suppressing meta-reasoning text ({assistantResponse?.Length ?? 0} chars)");
+                    pendingThinkingFromSuppression = assistantResponse;
                     suppressText = true;
+                }
+
+                // Yield suppressed text as ThinkingChunk (only if no <thinking> tag was already extracted)
+                if (!string.IsNullOrEmpty(pendingThinkingFromSuppression) && string.IsNullOrEmpty(pendingThinking))
+                {
+                    yield return AgentStep.ThinkingChunk(pendingThinkingFromSuppression);
                 }
 
                 if (suppressText)
                 {
                     System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] Suppressing pre-tool text ({assistantResponse?.Length ?? 0} chars)");
+                        $"[AICA] Suppressed text as thinking ({assistantResponse?.Length ?? 0} chars)");
                     assistantResponse = null;
-                    // Do NOT yield any text — tool results will follow
                 }
                 else
                 {

@@ -37,6 +37,7 @@ namespace AICA.ToolWindows
         private readonly ConversationStorage _conversationStorage = new ConversationStorage();
         private string _currentConversationId;
         private int _globalToolCallCounter = 0; // Global counter for unique tool call IDs across all conversation turns
+        private int _globalIterationCounter = 0; // Global counter for unique thinking block IDs across all conversation turns
         private DTE2 _dte; // Visual Studio DTE for project information
         private EnvDTE.SolutionEvents _solutionEvents; // Solution events for project switching detection
         private bool _isPaused; // Track if user paused the current output
@@ -274,6 +275,7 @@ namespace AICA.ToolWindows
             _uiContext = null;
             WarningBanner.Visibility = Visibility.Collapsed;
             _currentConversationId = null;
+            _globalIterationCounter = 0; // Reset iteration counter when clearing conversation
             UpdateBrowserContent(string.Empty);
         }
 
@@ -544,7 +546,9 @@ namespace AICA.ToolWindows
                     if (completionResult != null)
                     {
                         // Render final layout in the desired order:
-                        // 1. tool logs 2. streamed body content 3. completion card
+                        // 1. tool logs (includes thinking, actions, tools, conclusions)
+                        // 2. additional content (only if not in tool logs)
+                        // 3. completion card
                         bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
                         bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
 
@@ -553,7 +557,8 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{message.ToolLogsHtml}</div>");
                         }
 
-                        if (!string.IsNullOrEmpty(message.Content))
+                        // Only render Content if it's not already in ToolLogsHtml
+                        if (!string.IsNullOrEmpty(message.Content) && string.IsNullOrEmpty(message.ToolLogsHtml))
                         {
                             var contentHtml = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
@@ -601,7 +606,7 @@ namespace AICA.ToolWindows
             UpdateBrowserContent(bodyBuilder.ToString());
         }
 
-        private void RenderConversation(string streamingContent = null)
+        private void RenderConversation(string streamingContent = null, bool preserveScroll = false)
         {
             var bodyBuilder = new StringBuilder();
 
@@ -618,7 +623,9 @@ namespace AICA.ToolWindows
                     if (completionResult != null)
                     {
                         // Render final layout in the desired order:
-                        // 1. tool logs 2. streamed body content 3. completion card
+                        // 1. tool logs (includes thinking, actions, tools, conclusions)
+                        // 2. additional content (only if not in tool logs)
+                        // 3. completion card
                         bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
                         bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
 
@@ -627,7 +634,8 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{message.ToolLogsHtml}</div>");
                         }
 
-                        if (!string.IsNullOrEmpty(message.Content))
+                        // Only render Content if it's not already in ToolLogsHtml
+                        if (!string.IsNullOrEmpty(message.Content) && string.IsNullOrEmpty(message.ToolLogsHtml))
                         {
                             var contentHtml = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
@@ -660,10 +668,10 @@ namespace AICA.ToolWindows
                 bodyBuilder.AppendLine($"<div class=\"message assistant streaming\"><div class=\"role\">AI</div><div class=\"content\">{streamingHtml}</div></div>");
             }
 
-            UpdateBrowserContent(bodyBuilder.ToString());
+            UpdateBrowserContent(bodyBuilder.ToString(), preserveScroll);
         }
 
-        private void UpdateBrowserContent(string innerHtml)
+        private void UpdateBrowserContent(string innerHtml, bool preserveScroll = false)
         {
             if (!_isBrowserReady || ChatBrowser.Document == null)
             {
@@ -677,9 +685,42 @@ namespace AICA.ToolWindows
                 dynamic log = doc?.getElementById("chat-log");
                 if (log != null)
                 {
+                    // Save current scroll position if preserving
+                    // MSHTML quirk: scrollTop lives on body in quirks mode, documentElement in standards mode
+                    int scrollTop = 0;
+                    if (preserveScroll)
+                    {
+                        try
+                        {
+                            scrollTop = (int)(doc?.documentElement?.scrollTop ?? 0);
+                            if (scrollTop == 0)
+                                scrollTop = (int)(doc?.body?.scrollTop ?? 0);
+                        }
+                        catch { }
+                    }
+
                     log.innerHTML = innerHtml;
-                    dynamic window = doc?.parentWindow;
-                    window?.scrollTo(0, doc?.body?.scrollHeight ?? 0);
+
+                    if (preserveScroll)
+                    {
+                        // Restore scroll position — write to both targets for MSHTML compat
+                        try
+                        {
+                            if (scrollTop > 0)
+                            {
+                                doc.documentElement.scrollTop = scrollTop;
+                                doc.body.scrollTop = scrollTop;
+                            }
+                            // If scrollTop was 0, user was at top — don't scroll to bottom
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        // Default: scroll to bottom
+                        dynamic window = doc?.parentWindow;
+                        window?.scrollTo(0, doc?.body?.scrollHeight ?? 0);
+                    }
                     return;
                 }
             }
@@ -920,7 +961,6 @@ namespace AICA.ToolWindows
             // Track iteration blocks for structured rendering
             var iterationBlocks = new List<IterationBlock>();
             IterationBlock currentIteration = null;
-            int iterationCounter = 0;
 
             // Add user message to history BEFORE executing agent
             _llmHistory.Add(ChatMessage.User(userMessage));
@@ -950,7 +990,7 @@ namespace AICA.ToolWindows
                                     currentIteration = new IterationBlock
                                     {
                                         ThinkingContent = step.Text,
-                                        IterationId = iterationCounter++
+                                        IterationId = _globalIterationCounter++
                                     };
                                     iterationBlocks.Add(currentIteration);
                                     RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
@@ -968,7 +1008,7 @@ namespace AICA.ToolWindows
                                         currentIteration = new IterationBlock
                                         {
                                             ActionText = step.Text,
-                                            IterationId = iterationCounter++
+                                            IterationId = _globalIterationCounter++
                                         };
                                         iterationBlocks.Add(currentIteration);
                                     }
@@ -976,18 +1016,15 @@ namespace AICA.ToolWindows
                                     break;
 
                                 case AgentStepType.TextChunk:
-                                    responseBuilder.Append(step.Text);
-
                                     // Append text as conclusion to current iteration block
                                     if (currentIteration != null)
                                     {
                                         currentIteration.ConclusionText.Append(step.Text);
                                     }
-
-                                    // Also track in tool call blocks for backward compatibility
-                                    if (currentBlock != null)
+                                    else
                                     {
-                                        currentBlock.TextAfter.Append(step.Text);
+                                        // No iteration context - append to responseBuilder for final content
+                                        responseBuilder.Append(step.Text);
                                     }
 
                                     RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
@@ -1075,21 +1112,32 @@ namespace AICA.ToolWindows
                                         completionResult = CompletionResult.Deserialize(step.Text);
                                     }
 
-                                    string finalContent = responseBuilder.ToString().Trim();
-
+                                    string finalContent = null;
                                     string finalToolLogs = null;
+
                                     if (hasToolCalls && iterationBlocks.Count > 0)
                                     {
+                                        // Use structured tool logs (includes thinking, actions, tools, conclusions)
                                         finalToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+
+                                        // Don't use responseBuilder content as it's already in iteration blocks
+                                        // Only use completion summary if available
+                                        finalContent = null;
                                     }
                                     else if (hasToolCalls && toolCallBlocks.Count > 0)
                                     {
                                         finalToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
+                                        finalContent = null;
                                     }
-
-                                    if (!hasToolCalls && string.IsNullOrWhiteSpace(finalContent) && completionResult != null)
+                                    else
                                     {
-                                        finalContent = completionResult.Summary;
+                                        // No tool calls - use responseBuilder content
+                                        finalContent = responseBuilder.ToString().Trim();
+
+                                        if (string.IsNullOrWhiteSpace(finalContent) && completionResult != null)
+                                        {
+                                            finalContent = completionResult.Summary;
+                                        }
                                     }
 
                                     if (!hasToolCalls && responseBuilder.Length > 200 && ContainsToolIntentLanguage(responseBuilder.ToString()))
@@ -1108,11 +1156,14 @@ namespace AICA.ToolWindows
                                             Role = "assistant",
                                             Content = finalContent,
                                             ToolLogsHtml = finalToolLogs,
-                                            CompletionData = completionResult != null ? step.Text : null
+                                            CompletionData = completionResult != null ? step.Text : null,
+                                            IterationBlocks = iterationBlocks.Count > 0 ? new List<IterationBlock>(iterationBlocks) : null,
+                                            ToolCallBlocks = toolCallBlocks.Count > 0 ? new List<ToolCallBlock>(toolCallBlocks) : null
                                         };
                                         _conversation.Add(message);
                                         _llmHistory.Add(ChatMessage.Assistant(completionResult?.Summary ?? finalContent));
                                     }
+
                                     RenderConversation();
                                     break;
 
@@ -1140,14 +1191,17 @@ namespace AICA.ToolWindows
                                         {
                                             Role = "assistant",
                                             Content = combinedContent,
-                                            ToolLogsHtml = errorToolLogs
+                                            ToolLogsHtml = errorToolLogs,
+                                            IterationBlocks = iterationBlocks.Count > 0 ? new List<IterationBlock>(iterationBlocks) : null,
+                                            ToolCallBlocks = toolCallBlocks.Count > 0 ? new List<ToolCallBlock>(toolCallBlocks) : null
                                         });
-                                        RenderConversation();
                                     }
                                     else
                                     {
                                         AppendMessage("assistant", errorMessage);
                                     }
+
+                                    RenderConversation();
                                     break;
                             }
                         }));
@@ -1277,23 +1331,22 @@ namespace AICA.ToolWindows
         {
             var html = new StringBuilder();
 
-            html.AppendLine("<div class=\"thinking-container\">");
-            html.AppendLine($"  <input type=\"checkbox\" id=\"thinking-toggle-{iterationId}\" class=\"thinking-toggle\" />");
-            html.AppendLine($"  <label for=\"thinking-toggle-{iterationId}\" class=\"thinking-header\">");
-            html.AppendLine("    <span class=\"thinking-icon\">💭</span>");
-            html.AppendLine("    <span class=\"thinking-label\">Thought</span>");
-            html.AppendLine("    <span class=\"thinking-expand\">▶</span>");
-            html.AppendLine("  </label>");
-
+            // Only render the collapsible thinking block if there's actual thinking content
             if (!string.IsNullOrEmpty(thinkingContent))
             {
+                html.AppendLine("<div class=\"thinking-container\">");
+                html.AppendLine($"  <input type=\"checkbox\" id=\"thinking-toggle-{iterationId}\" class=\"thinking-toggle\" />");
+                html.AppendLine($"  <label for=\"thinking-toggle-{iterationId}\" class=\"thinking-header\">");
+                html.AppendLine("    <span class=\"thinking-icon\">💭</span>");
+                html.AppendLine("    <span class=\"thinking-label\">Thought</span>");
+                html.AppendLine("    <span class=\"thinking-expand\">▶</span>");
+                html.AppendLine("  </label>");
                 html.AppendLine("  <div class=\"thinking-body\">");
                 var thinkingHtml = Markdig.Markdown.ToHtml(thinkingContent, _markdownPipeline);
                 html.AppendLine($"    {thinkingHtml}");
                 html.AppendLine("  </div>");
+                html.AppendLine("</div>");
             }
-
-            html.AppendLine("</div>");
 
             // Action text always visible below thinking block
             if (!string.IsNullOrEmpty(actionText))
@@ -1307,7 +1360,7 @@ namespace AICA.ToolWindows
         /// <summary>
         /// Render conversation with structured iteration blocks during streaming
         /// </summary>
-        private void RenderStructuredStreaming(List<IterationBlock> iterationBlocks, List<ToolCallBlock> toolCallBlocks, ToolCallBlock currentBlock, string remainingText)
+        private void RenderStructuredStreaming(List<IterationBlock> iterationBlocks, List<ToolCallBlock> toolCallBlocks, ToolCallBlock currentBlock, string remainingText, bool preserveScroll = false)
         {
             var bodyBuilder = new StringBuilder();
 
@@ -1394,7 +1447,7 @@ namespace AICA.ToolWindows
                 bodyBuilder.AppendLine("</div></div>");
             }
 
-            UpdateBrowserContent(bodyBuilder.ToString());
+            UpdateBrowserContent(bodyBuilder.ToString(), preserveScroll);
         }
 
         /// <summary>
@@ -2542,6 +2595,8 @@ namespace AICA.ToolWindows
             public string Content { get; set; }
             public string ToolLogsHtml { get; set; }
             public string CompletionData { get; set; } // Stores serialized CompletionResult
+            public List<IterationBlock> IterationBlocks { get; set; } // For post-completion thinking toggles
+            public List<ToolCallBlock> ToolCallBlocks { get; set; }   // For post-completion thinking toggles
         }
 
         /// <summary>
