@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -275,7 +276,8 @@ namespace AICA.ToolWindows
             _uiContext = null;
             WarningBanner.Visibility = Visibility.Collapsed;
             _currentConversationId = null;
-            _globalIterationCounter = 0; // Reset iteration counter when clearing conversation
+            _globalIterationCounter = 0;
+            _globalToolCallCounter = 0;
             UpdateBrowserContent(string.Empty);
         }
 
@@ -1815,6 +1817,12 @@ namespace AICA.ToolWindows
                     }
                 }
 
+                // Reassign all collapsible IDs to ensure uniqueness across messages.
+                // This fixes the bug where clicking any Thought/tool-call tag in loaded
+                // history always toggles the first one (due to duplicate HTML IDs from
+                // conversations built across multiple VS sessions).
+                ReassignCollapsibleIds();
+
                 // Set current conversation ID
                 _currentConversationId = conversationId;
 
@@ -1829,6 +1837,78 @@ namespace AICA.ToolWindows
                 System.Diagnostics.Debug.WriteLine($"[AICA] Failed to load conversation: {ex.Message}");
                 System.Windows.MessageBox.Show($"加载会话失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        /// <summary>
+        /// Reassign all thinking-toggle-N and tool-call-toggle-N IDs in loaded conversation
+        /// messages to ensure global uniqueness. Without this, conversations built across
+        /// multiple VS sessions can have duplicate IDs, causing label-for-checkbox associations
+        /// to always target the first element with that ID on the page.
+        /// </summary>
+        private void ReassignCollapsibleIds()
+        {
+            int newThinkingId = 0;
+            int newToolCallId = 0;
+
+            foreach (var msg in _conversation)
+            {
+                if (string.IsNullOrEmpty(msg.ToolLogsHtml))
+                    continue;
+
+                // Collect distinct old thinking IDs in order of appearance
+                var thinkingOldIds = new List<string>();
+                foreach (Match m in Regex.Matches(msg.ToolLogsHtml, @"thinking-toggle-(\d+)"))
+                {
+                    if (!thinkingOldIds.Contains(m.Groups[1].Value))
+                        thinkingOldIds.Add(m.Groups[1].Value);
+                }
+
+                // Two-pass replacement to avoid collision:
+                // Pass 1: old IDs → temporary placeholders
+                for (int i = 0; i < thinkingOldIds.Count; i++)
+                {
+                    msg.ToolLogsHtml = msg.ToolLogsHtml.Replace(
+                        $"thinking-toggle-{thinkingOldIds[i]}",
+                        $"thinking-toggle-__TEMP{newThinkingId + i}__");
+                }
+                // Pass 2: placeholders → final sequential IDs
+                for (int i = 0; i < thinkingOldIds.Count; i++)
+                {
+                    msg.ToolLogsHtml = msg.ToolLogsHtml.Replace(
+                        $"thinking-toggle-__TEMP{newThinkingId + i}__",
+                        $"thinking-toggle-{newThinkingId + i}");
+                }
+                newThinkingId += thinkingOldIds.Count;
+
+                // Same for tool call IDs
+                var toolCallOldIds = new List<string>();
+                foreach (Match m in Regex.Matches(msg.ToolLogsHtml, @"tool-call-toggle-(\d+)"))
+                {
+                    if (!toolCallOldIds.Contains(m.Groups[1].Value))
+                        toolCallOldIds.Add(m.Groups[1].Value);
+                }
+
+                for (int i = 0; i < toolCallOldIds.Count; i++)
+                {
+                    msg.ToolLogsHtml = msg.ToolLogsHtml.Replace(
+                        $"tool-call-toggle-{toolCallOldIds[i]}",
+                        $"tool-call-toggle-__TEMP{newToolCallId + i}__");
+                }
+                for (int i = 0; i < toolCallOldIds.Count; i++)
+                {
+                    msg.ToolLogsHtml = msg.ToolLogsHtml.Replace(
+                        $"tool-call-toggle-__TEMP{newToolCallId + i}__",
+                        $"tool-call-toggle-{newToolCallId + i}");
+                }
+                newToolCallId += toolCallOldIds.Count;
+            }
+
+            // Update global counters so new messages won't conflict with loaded ones
+            _globalIterationCounter = newThinkingId;
+            _globalToolCallCounter = newToolCallId;
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] Reassigned collapsible IDs: {newThinkingId} thinking blocks, {newToolCallId} tool calls");
         }
 
         private async System.Threading.Tasks.Task SaveConversationAsync()
