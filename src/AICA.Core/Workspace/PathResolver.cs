@@ -69,12 +69,17 @@ namespace AICA.Core.Workspace
                 }
             }
 
-            // 3. Relative to working directory (fallback)
+            // 3. Relative to working directory (fallback, with overlap detection)
             if (!string.IsNullOrEmpty(_workingDirectory))
             {
-                var workspacePath = Path.GetFullPath(Path.Combine(_workingDirectory, cleaned));
+                var workspacePath = SmartCombine(_workingDirectory, cleaned);
                 if (File.Exists(workspacePath))
                     return workspacePath;
+
+                // Also try naive combine in case SmartCombine was too aggressive
+                var naivePath = Path.GetFullPath(Path.Combine(_workingDirectory, cleaned));
+                if (naivePath != workspacePath && File.Exists(naivePath))
+                    return naivePath;
             }
 
             // 4. Source index resolution (when no SourceRoots — normal project)
@@ -125,12 +130,17 @@ namespace AICA.Core.Workspace
                 }
             }
 
-            // 3. Relative to working directory (fallback)
+            // 3. Relative to working directory (fallback, with overlap detection)
             if (!string.IsNullOrEmpty(_workingDirectory))
             {
-                var workspacePath = Path.GetFullPath(Path.Combine(_workingDirectory, cleaned));
+                var workspacePath = SmartCombine(_workingDirectory, cleaned);
                 if (Directory.Exists(workspacePath))
                     return workspacePath;
+
+                // Also try naive combine in case SmartCombine was too aggressive
+                var naivePath = Path.GetFullPath(Path.Combine(_workingDirectory, cleaned));
+                if (naivePath != workspacePath && Directory.Exists(naivePath))
+                    return naivePath;
             }
 
             return null;
@@ -274,6 +284,68 @@ namespace AICA.Core.Workspace
         }
 
         #region Helpers
+
+        /// <summary>
+        /// Safely combine a base directory with a relative path, detecting and removing
+        /// overlapping path segments. This prevents the common bug where:
+        ///   base = "D:\project\src\"  +  relative = "src/CalcManager"
+        ///   naive Combine = "D:\project\src\src\CalcManager"  (WRONG — doubled "src")
+        ///   smart Combine = "D:\project\src\CalcManager"      (CORRECT)
+        /// </summary>
+        private static string SmartCombine(string basePath, string relativePath)
+        {
+            if (string.IsNullOrEmpty(basePath))
+                return relativePath;
+            if (string.IsNullOrEmpty(relativePath))
+                return basePath;
+
+            // Normalize separators for comparison
+            var normalizedBase = basePath.Replace('/', '\\').TrimEnd('\\');
+            var normalizedRel = relativePath.Replace('/', '\\').TrimStart('\\');
+
+            // Split into segments
+            var baseSegments = normalizedBase.Split('\\');
+            var relSegments = normalizedRel.Split('\\');
+
+            if (relSegments.Length == 0)
+                return basePath;
+
+            // Check if the relative path's leading segments overlap with the base path's trailing segments.
+            // Example: base = [..., "src"], rel = ["src", "CalcManager"]
+            //   → overlap at "src", result strips the duplicate prefix from rel
+            int maxOverlap = System.Math.Min(baseSegments.Length, relSegments.Length);
+            int bestOverlap = 0;
+
+            for (int overlapLen = 1; overlapLen <= maxOverlap; overlapLen++)
+            {
+                bool match = true;
+                for (int j = 0; j < overlapLen; j++)
+                {
+                    var baseIdx = baseSegments.Length - overlapLen + j;
+                    if (!string.Equals(baseSegments[baseIdx], relSegments[j], System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                    bestOverlap = overlapLen;
+            }
+
+            // Only apply overlap removal if it doesn't consume the entire relative path.
+            // This prevents false positives like base="...\test\test" rel="test\test\data.txt"
+            // from silently discarding "data.txt".
+            if (bestOverlap > 0 && bestOverlap < relSegments.Length)
+            {
+                // Remove overlapping prefix from relative path
+                var trimmedRel = string.Join("\\", relSegments, bestOverlap, relSegments.Length - bestOverlap);
+                if (string.IsNullOrEmpty(trimmedRel))
+                    return basePath;
+                return Path.GetFullPath(Path.Combine(basePath, trimmedRel));
+            }
+
+            return Path.GetFullPath(Path.Combine(basePath, relativePath));
+        }
 
         private static string CleanPath(string path)
         {

@@ -142,24 +142,49 @@ namespace AICA.Core.Tools
             // Handle JsonElement (from System.Text.Json)
             if (optionsObj is JsonElement jsonElement)
             {
+                // If the LLM passed options as a JSON string instead of an array,
+                // try to parse the string as JSON first
+                if (jsonElement.ValueKind == JsonValueKind.String)
+                {
+                    var str = jsonElement.GetString();
+                    if (!string.IsNullOrEmpty(str))
+                    {
+                        try
+                        {
+                            using var parsed = JsonDocument.Parse(str);
+                            if (parsed.RootElement.ValueKind == JsonValueKind.Array)
+                                return ParseJsonArray(parsed.RootElement);
+                        }
+                        catch
+                        {
+                            // Not valid JSON string, fall through
+                        }
+                    }
+                    return (null, "Options must be an array, got a string");
+                }
+
                 if (jsonElement.ValueKind != JsonValueKind.Array)
                     return (null, "Options must be an array");
 
-                foreach (var item in jsonElement.EnumerateArray())
+                return ParseJsonArray(jsonElement);
+            }
+            // Handle string (LLM may pass serialized JSON array as a raw string)
+            else if (optionsObj is string optionsStr)
+            {
+                if (!string.IsNullOrEmpty(optionsStr))
                 {
-                    var option = new QuestionOption();
-
-                    if (item.TryGetProperty("label", out var labelProp))
-                        option.Label = labelProp.GetString();
-
-                    if (item.TryGetProperty("value", out var valueProp))
-                        option.Value = valueProp.GetString();
-
-                    if (item.TryGetProperty("description", out var descProp))
-                        option.Description = descProp.GetString();
-
-                    options.Add(option);
+                    try
+                    {
+                        using var parsed = JsonDocument.Parse(optionsStr);
+                        if (parsed.RootElement.ValueKind == JsonValueKind.Array)
+                            return ParseJsonArray(parsed.RootElement);
+                    }
+                    catch
+                    {
+                        // Not valid JSON
+                    }
                 }
+                return (null, "Options string could not be parsed as a JSON array");
             }
             // Handle List or Array
             else if (optionsObj is System.Collections.IEnumerable enumerable)
@@ -168,18 +193,7 @@ namespace AICA.Core.Tools
                 {
                     if (item is JsonElement elem)
                     {
-                        var option = new QuestionOption();
-
-                        if (elem.TryGetProperty("label", out var labelProp))
-                            option.Label = labelProp.GetString();
-
-                        if (elem.TryGetProperty("value", out var valueProp))
-                            option.Value = valueProp.GetString();
-
-                        if (elem.TryGetProperty("description", out var descProp))
-                            option.Description = descProp.GetString();
-
-                        options.Add(option);
+                        options.Add(ParseSingleOption(elem));
                     }
                     else if (item is Dictionary<string, object> dict)
                     {
@@ -199,6 +213,33 @@ namespace AICA.Core.Tools
             }
 
             return (options, null);
+        }
+
+        private static (List<QuestionOption> Options, string Error) ParseJsonArray(JsonElement arrayElement)
+        {
+            var options = new List<QuestionOption>();
+            foreach (var item in arrayElement.EnumerateArray())
+            {
+                options.Add(ParseSingleOption(item));
+            }
+            return (options, null);
+        }
+
+        private static QuestionOption ParseSingleOption(JsonElement item)
+        {
+            var option = new QuestionOption();
+
+            // Try both camelCase and PascalCase property names
+            if (item.TryGetProperty("label", out var labelProp) || item.TryGetProperty("Label", out labelProp))
+                option.Label = labelProp.GetString();
+
+            if (item.TryGetProperty("value", out var valueProp) || item.TryGetProperty("Value", out valueProp))
+                option.Value = valueProp.GetString();
+
+            if (item.TryGetProperty("description", out var descProp) || item.TryGetProperty("Description", out descProp))
+                option.Description = descProp.GetString();
+
+            return option;
         }
     }
 }

@@ -236,7 +236,21 @@ namespace AICA.Agent
 
             if (_dte?.Solution != null && !string.IsNullOrEmpty(_dte.Solution.FullName))
             {
-                return Path.GetDirectoryName(_dte.Solution.FullName);
+                var slnDir = Path.GetDirectoryName(_dte.Solution.FullName);
+
+                // Try to find the project root by walking up from the solution directory.
+                // In VS 2022, solutions are often nested (e.g., src/App.sln) while the
+                // project root (containing .git, README, etc.) is a parent directory.
+                // Using the project root ensures user-relative paths resolve correctly.
+                var projectRoot = FindProjectRoot(slnDir);
+                if (projectRoot != null)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Project root detected: {projectRoot} (sln dir: {slnDir})");
+                    return projectRoot;
+                }
+
+                return slnDir;
             }
 
             // Fallback to active document's directory
@@ -246,6 +260,71 @@ namespace AICA.Agent
             }
 
             return Environment.CurrentDirectory;
+        }
+
+        /// <summary>
+        /// Walk up from the solution directory to find the project root.
+        /// Uses strong markers (.git, .svn, .hg) which are trusted at any depth,
+        /// and weak markers (.gitignore, README.md, etc.) which are only trusted
+        /// at depth 0 (sln dir) or depth 1 to prevent accidentally adopting a
+        /// grandparent directory that doesn't own this solution.
+        /// Returns null if no project root is found within a reasonable depth.
+        /// </summary>
+        private static string FindProjectRoot(string startDir)
+        {
+            if (string.IsNullOrEmpty(startDir))
+                return null;
+
+            // Strong VCS markers — authoritative, trusted at any depth
+            var strongMarkers = new[] { ".git", ".svn", ".hg" };
+            // Weak markers — only trusted at depth 0 (sln dir itself) or depth 1
+            var weakMarkers = new[] { ".gitignore", ".editorconfig", "README.md", "README.rst", "LICENSE", "LICENSE.md" };
+
+            // Check the solution directory itself (depth 0)
+            if (HasStrongMarkers(startDir, strongMarkers) || HasWeakMarkers(startDir, weakMarkers))
+                return startDir;
+
+            // Walk up at most 3 levels
+            var current = startDir;
+            for (int depth = 1; depth <= 3; depth++)
+            {
+                var parent = Path.GetDirectoryName(current);
+                if (string.IsNullOrEmpty(parent) || parent == current)
+                    break;
+
+                // Strong markers are trusted at any depth
+                if (HasStrongMarkers(parent, strongMarkers))
+                    return parent;
+
+                // Weak markers only trusted at depth 1 (immediate parent of sln dir)
+                if (depth == 1 && HasWeakMarkers(parent, weakMarkers))
+                    return parent;
+
+                current = parent;
+            }
+
+            // No project root found — use the solution directory as-is
+            return null;
+        }
+
+        private static bool HasStrongMarkers(string dir, string[] markers)
+        {
+            foreach (var marker in markers)
+            {
+                if (Directory.Exists(Path.Combine(dir, marker)))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool HasWeakMarkers(string dir, string[] markers)
+        {
+            foreach (var marker in markers)
+            {
+                if (File.Exists(Path.Combine(dir, marker)))
+                    return true;
+            }
+            return false;
         }
 
         public async Task<IEnumerable<string>> GetAccessibleFilesAsync(CancellationToken ct = default)
@@ -317,7 +396,23 @@ namespace AICA.Agent
 
         public async Task WriteFileAsync(string path, string content, CancellationToken ct = default)
         {
-            var fullPath = GetFullPath(path);
+            // Use PathResolver for consistent path resolution across all tools.
+            // For new files, ResolveFile returns null (file doesn't exist yet),
+            // so we resolve the parent directory and append the filename.
+            var fullPath = ResolveWritePath(path);
+
+            // Re-validate the resolved path against SafetyGuard.
+            // The caller may have validated the raw input path, but after resolution
+            // (e.g., through source roots) the actual path could differ.
+            if (_safetyGuard != null)
+            {
+                var check = _safetyGuard.CheckPathAccess(fullPath);
+                if (!check.IsAllowed)
+                {
+                    throw new UnauthorizedAccessException(
+                        $"Write blocked by SafetyGuard: {fullPath} — {check.Reason}");
+                }
+            }
 
             // Ensure directory exists
             var dir = Path.GetDirectoryName(fullPath);
@@ -330,6 +425,35 @@ namespace AICA.Agent
             {
                 await writer.WriteAsync(content);
             }
+        }
+
+        /// <summary>
+        /// Resolve a path for write operations. Since the target file may not exist yet,
+        /// we resolve the parent directory via PathResolver and append the filename.
+        /// Falls back to GetFullPath if the parent directory cannot be resolved.
+        /// </summary>
+        private string ResolveWritePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return GetFullPath(path);
+
+            // If absolute, use as-is
+            if (Path.IsPathRooted(path))
+                return path;
+
+            // Try to resolve the parent directory
+            var parentDir = Path.GetDirectoryName(path);
+            var fileName = Path.GetFileName(path);
+
+            if (!string.IsNullOrEmpty(parentDir))
+            {
+                var resolvedDir = ResolveDirectoryPath(parentDir);
+                if (resolvedDir != null)
+                    return Path.Combine(resolvedDir, fileName);
+            }
+
+            // Fallback to simple combine
+            return GetFullPath(path);
         }
 
         public Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
@@ -440,7 +564,7 @@ namespace AICA.Agent
 
             try
             {
-                var fullPath = GetFullPath(filePath);
+                var fullPath = ResolveFilePath(filePath) ?? GetFullPath(filePath);
 
                 if (!File.Exists(fullPath))
                 {

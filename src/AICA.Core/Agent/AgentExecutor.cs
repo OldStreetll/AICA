@@ -205,11 +205,20 @@ namespace AICA.Core.Agent
                             var condensed = new List<ChatMessage>();
                             if (conversationHistory.Count > 0)
                                 condensed.Add(conversationHistory[0]); // system prompt
-                            if (conversationHistory.Count > 1)
-                                condensed.Add(conversationHistory[1]); // first user request
 
                             condensed.Add(ChatMessage.System(
                                 "[Conversation auto-condensed] The following is a summary of all previous work:\n" + summary));
+
+                            // Preserve the last user message (current request), not the first one.
+                            // This prevents the LLM from replaying old tasks after auto-condensation.
+                            for (int i = conversationHistory.Count - 1; i >= 0; i--)
+                            {
+                                if (conversationHistory[i].Role == ChatRole.User)
+                                {
+                                    condensed.Add(conversationHistory[i]);
+                                    break;
+                                }
+                            }
 
                             conversationHistory = condensed;
                             _taskState.HasAutoCondensed = true;
@@ -563,7 +572,24 @@ namespace AICA.Core.Agent
                     // Detect if the model claims to have executed a tool but didn't actually call it
                     if (!string.IsNullOrWhiteSpace(assistantResponse) && DetectToolExecutionClaim(assistantResponse))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[AICA] Detected tool execution hallucination - model claimed to execute a tool but didn't call it");
+                        _taskState.HallucinationCount++;
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Detected tool execution hallucination ({_taskState.HallucinationCount}/3) - model claimed to execute a tool but didn't call it");
+
+                        // If hallucination persists after retries, stop and warn the user
+                        // rather than looping indefinitely (may indicate function calling is disabled)
+                        if (_taskState.HallucinationCount >= 3)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Hallucination persisted after 3 retries, aborting with warning");
+                            yield return AgentStep.TextChunk(
+                                "\n\n⚠️ **提示**: AI 多次描述了要执行的操作但未实际调用工具。\n" +
+                                "可能原因：\n" +
+                                "1. LLM 服务器未启用 function calling（需要 `--enable-auto-tool-choice`）\n" +
+                                "2. 模型不支持 OpenAI 格式的工具调用\n" +
+                                "3. 在选项中检查 'Enable Tool Calling' 是否已启用\n" +
+                                "请继续\n");
+                            yield break;
+                        }
 
                         // Yield the hallucinated text first (so user can see what happened)
                         // Already yielded via pendingTextChunks above
@@ -746,16 +772,36 @@ namespace AICA.Core.Agent
                         LastCondenseSummary = summary;
                         CondenseUpToMessageCount = conversationHistory.Count;
 
-                        // Keep system prompt (index 0) and first user message (index 1),
-                        // replace everything else with the summary
+                        // Keep system prompt (index 0), the condensed summary, and the
+                        // LATEST user message (the one that triggered this iteration).
+                        // Previously we kept the FIRST user message (index 1), which caused
+                        // the LLM to replay old tasks after condensation.
                         var condensed = new List<ChatMessage>();
                         if (conversationHistory.Count > 0)
-                            condensed.Add(conversationHistory[0]); // system
-                        if (conversationHistory.Count > 1)
-                            condensed.Add(conversationHistory[1]); // first user request
+                            condensed.Add(conversationHistory[0]); // system prompt
 
                         condensed.Add(ChatMessage.System(
                             "[Conversation condensed] The following is a summary of all previous work:\n" + summary));
+
+                        // Find and preserve the last user message (current request)
+                        bool foundUserMessage = false;
+                        for (int i = conversationHistory.Count - 1; i >= 0; i--)
+                        {
+                            if (conversationHistory[i].Role == ChatRole.User)
+                            {
+                                condensed.Add(conversationHistory[i]);
+                                foundUserMessage = true;
+                                break;
+                            }
+                        }
+
+                        // Safety guard: if no user message found, inject one to prevent
+                        // LLM API errors (APIs require conversation to end on a user turn)
+                        if (!foundUserMessage)
+                        {
+                            condensed.Add(ChatMessage.User(
+                                "Context was condensed. Please continue with the current task based on the summary above."));
+                        }
 
                         conversationHistory = condensed;
                         yield return AgentStep.TextChunk("\n\n📝 *Conversation condensed to save context space.*\n\n");

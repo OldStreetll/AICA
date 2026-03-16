@@ -111,9 +111,17 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **DO NOT just write a summary in text.** You MUST call the tool.");
             _builder.AppendLine("- **CRITICAL: DO NOT ask follow-up questions like 'Do you want me to implement this?' or 'Need help with anything else?' at the end of your response.** Just call attempt_completion with your results. If the user wants more, they will ask in a new message.");
             _builder.AppendLine("- The `attempt_completion` tool parameters:");
-            _builder.AppendLine("  - `result`: A comprehensive summary of what was accomplished");
+            _builder.AppendLine("  - `result`: A comprehensive summary of what was accomplished (see detail requirements below)");
             _builder.AppendLine("  - `command`: (Optional) A command to verify or test the result (e.g., 'dotnet build', 'make', 'g++ -o program main.cpp')");
             _builder.AppendLine("- **If you forget to call `attempt_completion`, the user will not see the completion card and will think the task is incomplete.**");
+            _builder.AppendLine();
+            _builder.AppendLine("### attempt_completion Result Detail Requirements");
+            _builder.AppendLine("- **For file reading tasks**: Include ALL key structures found — classes, interfaces, enums, namespaces, important methods, member variables, #include dependencies. Do NOT summarize with just 3-4 items when the file contains 20+.");
+            _builder.AppendLine("- **For code analysis tasks**: List ALL classes/methods/enums with their correct and complete names (include prefixes, suffixes, namespaces). Provide accurate counts.");
+            _builder.AppendLine("- **For search tasks**: Report total match count, file count, and per-file breakdown.");
+            _builder.AppendLine("- **For file operations**: Report the exact path, operation performed, and current file state.");
+            _builder.AppendLine("- **General rule**: The summary should contain enough detail that the user does not need to re-read raw tool output. Aim for 70%+ coverage of key information.");
+            _builder.AppendLine("- **IMPORTANT: Numbers must be accurate.** If you count 45 methods, say 45. Do not round to 48 or 44. If unsure, say 'approximately N' rather than stating an incorrect number.");
             _builder.AppendLine();
             _builder.AppendLine("### CRITICAL: Handling Instruction Conflicts");
             _builder.AppendLine("- **When you discover that the user's instruction conflicts with the actual situation:**");
