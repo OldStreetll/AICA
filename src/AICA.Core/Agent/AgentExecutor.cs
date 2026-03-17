@@ -489,6 +489,36 @@ namespace AICA.Core.Agent
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"[AICA] Suppressing post-tool narration text ({assistantResponse.Length} chars), nudging to call attempt_completion");
+
+                    // P1-017: detect repeated narration stall — if the LLM keeps outputting
+                    // similar narrative text without calling tools, force-complete
+                    var fingerprint = assistantResponse.Length > 100
+                        ? assistantResponse.Substring(0, 100).Trim().ToLowerInvariant()
+                        : assistantResponse.Trim().ToLowerInvariant();
+
+                    if (fingerprint == _taskState.LastNarrativeFingerprint)
+                    {
+                        _taskState.RepeatedNarrativeCount++;
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Repeated narration detected ({_taskState.RepeatedNarrativeCount})");
+                    }
+                    else
+                    {
+                        _taskState.LastNarrativeFingerprint = fingerprint;
+                        _taskState.RepeatedNarrativeCount = 1;
+                    }
+
+                    if (_taskState.RepeatedNarrativeCount >= 2)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AICA] Narrative stall detected, force-completing");
+                        yield return AgentStep.TextChunk(assistantResponse);
+                        yield return AgentStep.TextChunk(
+                            "\n\n---\n⚠️ **提示**: AI 反复描述要执行的操作但未实际调用工具。任务已停止。\n" +
+                            "可能原因：工具调用被截断或上下文不足。请尝试重新提问。");
+                        yield return AgentStep.Complete(assistantResponse);
+                        yield break;
+                    }
+
                     pendingThinkingFromSuppression = assistantResponse;
                     suppressText = true;
                 }

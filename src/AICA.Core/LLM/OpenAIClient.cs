@@ -151,6 +151,7 @@ namespace AICA.Core.LLM
 
             var toolCallsBuilder = new Dictionary<int, ToolCallBuilder>();
             string currentContent = null;
+            bool emittedDone = false; // P1-017: guard against double emission
 
             while (!reader.EndOfStream && !ct.IsCancellationRequested)
             {
@@ -185,6 +186,7 @@ namespace AICA.Core.LLM
                         }
                     }
                     yield return LLMChunk.Done();
+                    emittedDone = true;
                     yield break;
                 }
 
@@ -245,8 +247,16 @@ namespace AICA.Core.LLM
                 }
 
                 // Check for finish reason
-                if (chunk.Choices[0].FinishReason == "tool_calls")
+                if (chunk.Choices[0].FinishReason == "tool_calls"
+                    || (chunk.Choices[0].FinishReason == "stop" && toolCallsBuilder.Count > 0))
                 {
+                    // P1-017: also emit on finish_reason=stop when tool calls are pending
+                    // (some providers like MiniMax use "stop" even with tool calls)
+                    if (chunk.Choices[0].FinishReason == "stop" && toolCallsBuilder.Count > 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] finish_reason=stop but {toolCallsBuilder.Count} tool calls pending, emitting them");
+                    }
                     foreach (var builder in toolCallsBuilder.Values)
                     {
                         var toolCall = builder.Build();
@@ -264,6 +274,23 @@ namespace AICA.Core.LLM
                     yield return LLMChunk.Finished(chunk.Choices[0].FinishReason);
                 }
             }
+            // P1-017 fix: fallback — if stream ended without [DONE] (e.g., server disconnect),
+            // emit any accumulated partial tool calls that have a valid name
+            if (!emittedDone && toolCallsBuilder.Count > 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Stream ended without [DONE], attempting to recover {toolCallsBuilder.Count} partial tool calls");
+                foreach (var builder in toolCallsBuilder.Values)
+                {
+                    var toolCall = builder.Build();
+                    if (toolCall != null && !string.IsNullOrEmpty(toolCall.Name))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Recovered partial tool call: {toolCall.Name}");
+                        yield return LLMChunk.Tool(toolCall);
+                    }
+                }
+                yield return LLMChunk.Done();
+            }
+
             } // end using stream + reader
         }
 

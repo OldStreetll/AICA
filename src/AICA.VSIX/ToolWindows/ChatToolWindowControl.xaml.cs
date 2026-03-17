@@ -953,6 +953,7 @@ namespace AICA.ToolWindows
         private async System.Threading.Tasks.Task ExecuteAgentModeAsync(string userMessage)
         {
             var responseBuilder = new StringBuilder();
+            var preToolContent = new StringBuilder(); // P0-007: preserve streaming text before tool calls
             var hasToolCalls = false;
             var pendingToolCalls = new Dictionary<string, (ToolCall call, int id)>();
 
@@ -1034,12 +1035,16 @@ namespace AICA.ToolWindows
                                     break;
 
                                 case AgentStepType.ToolStart:
-                                    // When first tool arrives: discard any buffered pre-tool text
+                                    // When first tool arrives: preserve streaming text then clear responseBuilder
                                     if (!hasToolCalls)
                                     {
-                                        if (responseBuilder.Length > 100)
+                                        // P0-007 fix: save pre-tool streaming content before clearing
+                                        // This content (e.g., detailed analysis from Explain/Refactor commands)
+                                        // would otherwise be lost when attempt_completion replaces it
+                                        if (responseBuilder.Length > 0)
                                         {
-                                            System.Diagnostics.Debug.WriteLine($"[AICA-UI] Discarding {responseBuilder.Length} chars of pre-tool text");
+                                            preToolContent.Append(responseBuilder);
+                                            System.Diagnostics.Debug.WriteLine($"[AICA-UI] Preserved {responseBuilder.Length} chars of pre-tool text in preToolContent");
                                         }
                                         responseBuilder.Clear();
                                     }
@@ -1151,6 +1156,27 @@ namespace AICA.ToolWindows
                                         {
                                             finalContent = completionResult.Summary;
                                         }
+                                    }
+
+                                    // P0-007 fix: restore pre-tool streaming content that was saved before
+                                    // responseBuilder was cleared on ToolStart. This happens when
+                                    // attempt_completion is the only tool (no tool logs rendered),
+                                    // e.g., right-click Explain/Refactor commands where the LLM streams
+                                    // detailed analysis before calling attempt_completion.
+                                    var preToolText = preToolContent.ToString().Trim();
+                                    if (!string.IsNullOrWhiteSpace(preToolText)
+                                        && iterationBlocks.Count == 0
+                                        && toolCallBlocks.Count == 0)
+                                    {
+                                        if (string.IsNullOrWhiteSpace(finalContent))
+                                        {
+                                            finalContent = preToolText;
+                                        }
+                                        else
+                                        {
+                                            finalContent = preToolText + "\n\n" + finalContent;
+                                        }
+                                        System.Diagnostics.Debug.WriteLine($"[AICA-UI] Restored {preToolText.Length} chars of pre-tool content into finalContent");
                                     }
 
                                     if (!hasToolCalls && responseBuilder.Length > 200 && ContainsToolIntentLanguage(responseBuilder.ToString()))

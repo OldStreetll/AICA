@@ -50,6 +50,10 @@ namespace AICA.Core.Agent
         // Hallucination tracking
         public int HallucinationCount { get; set; }
 
+        // P1-017: Narrative stall detection
+        public string LastNarrativeFingerprint { get; set; }
+        public int RepeatedNarrativeCount { get; set; }
+
         // Context pressure tracking
         public bool HasCondenseHinted { get; set; }
         public int CondenseHintIteration { get; set; }
