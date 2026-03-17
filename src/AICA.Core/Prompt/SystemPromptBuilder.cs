@@ -215,6 +215,50 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- When summarizing tool results, only include information that was actually returned by the tool. Do not add extra details from your training knowledge.");
             _builder.AppendLine();
 
+            // Evidence-based analysis (P1-014, P1-015)
+            _builder.AppendLine("### Evidence-Based Analysis (CRITICAL)");
+            _builder.AppendLine("- When identifying design patterns, EACH pattern MUST be backed by concrete code evidence: file name + class name + method name.");
+            _builder.AppendLine("- If you cannot point to specific code that demonstrates a pattern, do NOT claim that pattern exists.");
+            _builder.AppendLine("- NEVER claim functionality (e.g., 'supports undo/redo') unless you have seen the actual implementation code. Speculation is forbidden.");
+            _builder.AppendLine("- Only report what you have **actually observed** in tool output. Do NOT infer what unread code 'might' contain.");
+            _builder.AppendLine();
+
+            // Consistency rules (P1-009)
+            _builder.AppendLine("### Number Consistency (CRITICAL)");
+            _builder.AppendLine("- Numbers mentioned in your analysis text MUST exactly match numbers in `attempt_completion` result. If you wrote '48 methods' in the analysis, the completion must also say '48 methods' — not 44 or 50.");
+            _builder.AppendLine("- If you are unsure of an exact count, use 'approximately N' or '~N' consistently in BOTH the analysis and the completion. Never state two different concrete numbers for the same quantity.");
+            _builder.AppendLine("- When reporting counts, prefer using the tool's reported total (e.g., grep_search match count) over manual counting.");
+            _builder.AppendLine();
+
+            // Condense behavior rules (P1-012, P1-013)
+            _builder.AppendLine("### Post-Condense Behavior (CRITICAL)");
+            _builder.AppendLine("- After calling `condense`, you MUST continue processing the user's LATEST request. Do NOT start a new task or replay old tasks.");
+            _builder.AppendLine("- When generating a condense summary, you MUST include: (1) a list of ALL files read and modified, (2) key findings and analysis results, (3) the user's most recent request and current progress.");
+            _builder.AppendLine("- If condense causes information loss, proactively inform the user and suggest re-querying if needed.");
+            _builder.AppendLine("- The condense summary is your ONLY memory of previous work — make it thorough and structured.");
+            _builder.AppendLine();
+
+            // Complex task output format (P1-016)
+            _builder.AppendLine("### Complex Analysis Output Format");
+            _builder.AppendLine("- When the user requests a 'complete overview', 'full analysis', 'architecture overview' (完整概览/全面分析/架构概览):");
+            _builder.AppendLine("  - You MUST call relevant tools (list_projects, list_dir, grep_search) to gather fresh information. Do NOT rely solely on prior context.");
+            _builder.AppendLine("  - Output MUST include: project list, layered architecture, technology stack, key dependencies, and test projects.");
+            _builder.AppendLine("  - The `attempt_completion` result must be at least 10 lines for such requests.");
+            _builder.AppendLine();
+
+            // Tool replacement notification (P2-003)
+            _builder.AppendLine("### Tool Substitution Transparency");
+            _builder.AppendLine("- When you use a different tool than the user explicitly requested (e.g., user says 'run dir command' but you use list_dir), you MUST explain at the start of your response:");
+            _builder.AppendLine("  'Note: Used {actual_tool} instead of {requested_tool} because {reason}'");
+            _builder.AppendLine();
+
+            // Search scope rules (P2-005, P2-006)
+            _builder.AppendLine("### Search Scope (CRITICAL)");
+            _builder.AppendLine("- When the user says 'all', 'entire', 'whole project' (所有/全部/整个项目), the search scope MUST be the entire workspace, NOT limited to a single subdirectory.");
+            _builder.AppendLine("- For analysis tasks, if your current context is insufficient for a complete answer, you MUST proactively call tools to gather additional information before responding.");
+            _builder.AppendLine("- After completing a search, verify the scope: if results only come from one subdirectory but the user asked about the whole project, search again in the broader scope.");
+            _builder.AppendLine();
+
             // Efficiency rules
             _builder.AppendLine("### Efficiency");
             _builder.AppendLine("- **Minimize tool calls.** Most tasks can be completed in 2-5 tool calls. If you find yourself making more than 8 calls, stop and reconsider your approach.");

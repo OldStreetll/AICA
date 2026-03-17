@@ -29,7 +29,14 @@ namespace AICA.Core.Tools
                         ["result"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "A concise summary (1-5 sentences) of what was accomplished. Focus on outcomes, not process. Do not repeat information already shown to the user."
+                            Description = "A structured summary of what was accomplished. Include the following sections as applicable:\n" +
+                                "1. **[File Structure]** All classes, enums, interfaces, namespaces found — use COMPLETE names (with prefixes/suffixes/namespaces)\n" +
+                                "2. **[Method List]** All public methods, grouped by category\n" +
+                                "3. **[Dependencies]** #include / using / import references and key dependencies\n" +
+                                "4. **[Counts]** Precise numbers (class count, method count, file count, match count). Use tool-reported totals, not manual counts\n" +
+                                "5. **[Key Findings]** Design patterns (with code evidence), notable structures, issues found\n" +
+                                "For simple tasks (file creation, single search), 1-3 sentences suffice. For analysis tasks, aim for 70%+ coverage of key information. " +
+                                "Numbers MUST be accurate and consistent with your analysis text."
                         },
                         ["command"] = new ToolParameterProperty
                         {

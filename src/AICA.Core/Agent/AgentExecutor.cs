@@ -220,6 +220,13 @@ namespace AICA.Core.Agent
                                 }
                             }
 
+                            // Post-condense instruction: guide LLM to answer the current request (P1-012)
+                            condensed.Add(ChatMessage.System(
+                                "[Post-condense instruction] The conversation was condensed to save context space. " +
+                                "You MUST answer the user's LATEST message based on the summary above. " +
+                                "Do NOT start a new task, replay old tasks, or explore new files unless the user asks. " +
+                                "If the user asked about previous work (e.g., 'what files did I read?'), answer from the summary."));
+
                             conversationHistory = condensed;
                             _taskState.HasAutoCondensed = true;
 
@@ -803,6 +810,13 @@ namespace AICA.Core.Agent
                                 "Context was condensed. Please continue with the current task based on the summary above."));
                         }
 
+                        // Post-condense instruction: guide LLM to answer the current request (P1-012)
+                        condensed.Add(ChatMessage.System(
+                            "[Post-condense instruction] The conversation was condensed. " +
+                            "You MUST answer the user's LATEST message based on the summary above. " +
+                            "Do NOT start a new task, replay old tasks, or explore new files unless the user asks. " +
+                            "If the user asked about previous work (e.g., 'what files did I read?'), answer from the summary."));
+
                         conversationHistory = condensed;
                         yield return AgentStep.TextChunk("\n\n📝 *Conversation condensed to save context space.*\n\n");
                         continue; // restart the loop with condensed history
@@ -926,120 +940,197 @@ namespace AICA.Core.Agent
         private static string BuildAutoCondenseSummary(List<ChatMessage> conversationHistory)
         {
             var sb = new System.Text.StringBuilder();
-            var filesRead = new List<string>();
-            var filesModified = new List<string>();
+            var filesRead = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var filesCreated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var filesModified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var toolsUsed = new HashSet<string>();
             var userRequests = new List<string>();
             var keyFindings = new List<string>();
+            var searchResults = new List<string>();
 
-            foreach (var msg in conversationHistory)
+            // Pass 1: Extract structured info from tool calls and results
+            for (int i = 0; i < conversationHistory.Count; i++)
             {
+                var msg = conversationHistory[i];
+
                 if (msg.Role == ChatRole.User && msg.Content != null
-                    && !msg.Content.StartsWith("[System") && !msg.Content.StartsWith("⚠️"))
+                    && !msg.Content.StartsWith("[System") && !msg.Content.StartsWith("[CONTEXT_PRESSURE")
+                    && !msg.Content.StartsWith("⚠️") && !msg.Content.StartsWith("Context was condensed"))
                 {
-                    // Capture real user requests (truncate long ones)
-                    var text = msg.Content.Length > 200 ? msg.Content.Substring(0, 200) + "..." : msg.Content;
+                    var text = msg.Content.Length > 300 ? msg.Content.Substring(0, 300) + "..." : msg.Content;
                     userRequests.Add(text);
                 }
                 else if (msg.Role == ChatRole.Assistant && msg.ToolCalls != null)
                 {
                     foreach (var tc in msg.ToolCalls)
                     {
-                        toolsUsed.Add(tc.Function?.Name ?? "unknown");
+                        var toolName = tc.Function?.Name ?? "unknown";
+                        toolsUsed.Add(toolName);
+
+                        // Extract file paths from tool call arguments (JSON string)
+                        var argsJson = tc.Function?.Arguments;
+                        if (!string.IsNullOrEmpty(argsJson))
+                        {
+                            var args = TryParseJsonArgs(argsJson);
+                            if (args != null)
+                            {
+                                string filePath = null;
+                                if (args.TryGetValue("path", out var pathVal) && pathVal != null)
+                                    filePath = pathVal;
+                                else if (args.TryGetValue("file_path", out var fpVal) && fpVal != null)
+                                    filePath = fpVal;
+
+                                if (!string.IsNullOrEmpty(filePath))
+                                {
+                                    switch (toolName)
+                                    {
+                                        case "read_file":
+                                            filesRead.Add(filePath);
+                                            break;
+                                        case "write_to_file":
+                                            filesCreated.Add(filePath);
+                                            break;
+                                        case "edit":
+                                            filesModified.Add(filePath);
+                                            break;
+                                    }
+                                }
+
+                                // Extract search queries for context
+                                if (toolName == "grep_search" && args.TryGetValue("query", out var queryVal) && queryVal != null)
+                                {
+                                    var searchPath = args.TryGetValue("path", out var sp) && sp != null ? sp : "workspace";
+                                    searchResults.Add($"grep '{queryVal}' in {searchPath}");
+                                }
+                                if (toolName == "find_by_name" && args.TryGetValue("pattern", out var patVal) && patVal != null)
+                                {
+                                    searchResults.Add($"find '{patVal}'");
+                                }
+                            }
+                        }
                     }
                 }
-                else if (msg.Role == ChatRole.Tool && msg.Content != null)
+                else if (msg.Role == ChatRole.Tool && msg.Content != null && !msg.Content.StartsWith("Error:"))
                 {
-                    // Extract file paths from tool results
-                    if (msg.Content.StartsWith("Error:"))
-                        continue; // skip failed results
-
-                    // Truncate long tool results for summary
-                    if (msg.Content.Length > 100)
+                    // Extract meaningful findings from successful tool results (keep more context)
+                    if (msg.Content.Length > 200)
                     {
-                        keyFindings.Add(msg.Content.Substring(0, 100) + "...");
+                        keyFindings.Add(msg.Content.Substring(0, 200) + "...");
+                    }
+                    else if (msg.Content.Length > 20)
+                    {
+                        keyFindings.Add(msg.Content);
                     }
                 }
             }
 
-            // Also scan assistant text messages for file references
+            // Pass 2: Also scan assistant text for file references (fallback)
             foreach (var msg in conversationHistory)
             {
                 if (msg.Role != ChatRole.Assistant || msg.Content == null) continue;
 
-                // Extract read_file / write_to_file / edit references from assistant text
                 var content = msg.Content;
-                if (content.Contains("read_file") || content.Contains("读取"))
+                var pathMatches = Regex.Matches(
+                    content, @"[\w/\\.-]+\.(?:cs|ts|js|py|json|xml|md|txt|cpp|h|hpp|java|go|sln|csproj|vcxproj)");
+                foreach (Match m in pathMatches)
                 {
-                    // Try to find file paths mentioned
-                    var pathMatches = System.Text.RegularExpressions.Regex.Matches(
-                        content, @"[\w/\\]+\.(?:cs|ts|js|py|json|xml|md|txt|cpp|h|java|go)");
-                    foreach (System.Text.RegularExpressions.Match m in pathMatches)
-                        filesRead.Add(m.Value);
-                }
-                if (content.Contains("write_to_file") || content.Contains("edit") || content.Contains("修改"))
-                {
-                    var pathMatches = System.Text.RegularExpressions.Regex.Matches(
-                        content, @"[\w/\\]+\.(?:cs|ts|js|py|json|xml|md|txt|cpp|h|java|go)");
-                    foreach (System.Text.RegularExpressions.Match m in pathMatches)
-                        filesModified.Add(m.Value);
+                    // Only add paths not already captured from tool calls
+                    var path = m.Value;
+                    if (!filesRead.Contains(path) && !filesModified.Contains(path) && !filesCreated.Contains(path))
+                    {
+                        filesRead.Add(path);
+                    }
                 }
             }
 
-            sb.AppendLine("## Auto-generated conversation summary");
+            // Build structured summary
+            sb.AppendLine("## Conversation Summary (auto-generated)");
             sb.AppendLine();
 
+            // Section 1: File operations (most important for P1-013)
+            sb.AppendLine("### File Operations");
+            if (filesRead.Count > 0)
+                sb.AppendLine($"- **Files read ({filesRead.Count}):** {string.Join(", ", filesRead)}");
+            if (filesCreated.Count > 0)
+                sb.AppendLine($"- **Files created ({filesCreated.Count}):** {string.Join(", ", filesCreated)}");
+            if (filesModified.Count > 0)
+                sb.AppendLine($"- **Files modified ({filesModified.Count}):** {string.Join(", ", filesModified)}");
+            if (filesRead.Count == 0 && filesCreated.Count == 0 && filesModified.Count == 0)
+                sb.AppendLine("- (no file operations recorded)");
+            sb.AppendLine();
+
+            // Section 2: Searches performed
+            if (searchResults.Count > 0)
+            {
+                sb.AppendLine("### Searches Performed");
+                foreach (var sr in searchResults.Count > 10 ? searchResults.GetRange(searchResults.Count - 10, 10) : searchResults)
+                    sb.AppendLine($"- {sr}");
+                sb.AppendLine();
+            }
+
+            // Section 3: User requests (all of them, for context)
             if (userRequests.Count > 0)
             {
-                sb.AppendLine("### User requests:");
-                foreach (var req in userRequests)
-                    sb.AppendLine($"- {req}");
+                sb.AppendLine("### User Requests (chronological)");
+                for (int i = 0; i < userRequests.Count; i++)
+                    sb.AppendLine($"{i + 1}. {userRequests[i]}");
                 sb.AppendLine();
             }
 
-            if (toolsUsed.Count > 0)
-            {
-                sb.AppendLine($"### Tools used: {string.Join(", ", toolsUsed)}");
-                sb.AppendLine();
-            }
-
-            if (filesRead.Count > 0)
-            {
-                var unique = new HashSet<string>(filesRead, System.StringComparer.OrdinalIgnoreCase);
-                sb.AppendLine($"### Files read ({unique.Count}): {string.Join(", ", unique)}");
-                sb.AppendLine();
-            }
-
-            if (filesModified.Count > 0)
-            {
-                var unique = new HashSet<string>(filesModified, System.StringComparer.OrdinalIgnoreCase);
-                sb.AppendLine($"### Files modified ({unique.Count}): {string.Join(", ", unique)}");
-                sb.AppendLine();
-            }
-
+            // Section 4: Key findings (more generous allocation)
             if (keyFindings.Count > 0)
             {
-                sb.AppendLine("### Key tool results (truncated):");
-                // Only keep last few findings to save space
-                var recent = keyFindings.Count > 5
-                    ? keyFindings.GetRange(keyFindings.Count - 5, 5)
+                sb.AppendLine("### Key Tool Results");
+                var recent = keyFindings.Count > 8
+                    ? keyFindings.GetRange(keyFindings.Count - 8, 8)
                     : keyFindings;
                 foreach (var finding in recent)
                     sb.AppendLine($"- {finding}");
                 sb.AppendLine();
             }
 
-            sb.AppendLine($"### Progress: {conversationHistory.Count} messages processed, task in progress.");
+            // Section 5: Tools and progress
+            if (toolsUsed.Count > 0)
+                sb.AppendLine($"### Tools Used: {string.Join(", ", toolsUsed)}");
+
+            sb.AppendLine($"### Progress: {conversationHistory.Count} messages processed.");
 
             return sb.ToString();
         }
 
         /// <summary>
-        /// Fallback parser for text-based tool calls that some models output.
-        /// Supports formats like:
-        ///   <function=tool_name> <parameter=key> value </tool_call>
-        ///   <tool_call> {"name": "tool_name", "arguments": {...}} </tool_call>
+        /// Try to parse a JSON arguments string into a simple string dictionary.
+        /// Used by BuildAutoCondenseSummary to extract file paths from tool call arguments.
+        /// Returns null on parse failure.
         /// </summary>
+        private static Dictionary<string, string> TryParseJsonArgs(string json)
+        {
+            try
+            {
+                var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                // Simple JSON parsing using System.Text.Json
+                using (var doc = System.Text.Json.JsonDocument.Parse(json))
+                {
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            result[prop.Name] = prop.Value.GetString();
+                        }
+                        else if (prop.Value.ValueKind != System.Text.Json.JsonValueKind.Null)
+                        {
+                            result[prop.Name] = prop.Value.GetRawText();
+                        }
+                    }
+                }
+                return result;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>
         /// Auto-add missing parameters when user intent is clear but LLM omitted them.
         /// For example, auto-add recursive=true to list_dir when user asks for "完整结构".

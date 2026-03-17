@@ -13,7 +13,7 @@ namespace AICA.Core.Tools
     public class CondenseTool : IAgentTool
     {
         public string Name => "condense";
-        public string Description => "Condense the conversation history by providing a summary of work done so far. Use this when the conversation is getting long and you need more context space. The summary will replace earlier messages in the conversation.";
+        public string Description => "Condense the conversation history by providing a structured summary of work done so far. Use this when the conversation is getting long and you need more context space. The summary will replace earlier messages in the conversation. IMPORTANT: After condensing, you MUST continue answering the user's latest request — do NOT start a new task.";
 
         public ToolDefinition GetDefinition()
         {
@@ -29,7 +29,12 @@ namespace AICA.Core.Tools
                         ["summary"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "A comprehensive summary of all work done so far, including files read/modified, tools used, decisions made, and current progress. This replaces the earlier conversation history."
+                            Description = "A structured summary of all work done so far. MUST include these sections:\n" +
+                                "1. **File Operations**: List ALL files read, created, and modified (with full paths)\n" +
+                                "2. **Key Findings**: Important analysis results, class/method names discovered, counts, patterns identified\n" +
+                                "3. **Searches Performed**: What was searched for and key results\n" +
+                                "4. **Current Task Status**: The user's latest request and current progress\n" +
+                                "This replaces the earlier conversation history — anything not included here will be lost."
                         }
                     },
                     Required = new[] { "summary" }
