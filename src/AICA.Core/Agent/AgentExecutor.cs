@@ -220,12 +220,15 @@ namespace AICA.Core.Agent
                                 }
                             }
 
-                            // Post-condense instruction: guide LLM to answer the current request (P1-012)
+                            // Post-condense instruction: guide LLM to answer the current request (P1-012, P1-013)
                             condensed.Add(ChatMessage.System(
                                 "[Post-condense instruction] The conversation was condensed to save context space. " +
+                                "The 'Tool Call History' section above contains FACTUAL data about every tool call made in this conversation. " +
                                 "You MUST answer the user's LATEST message based on the summary above. " +
-                                "Do NOT start a new task, replay old tasks, or explore new files unless the user asks. " +
-                                "If the user asked about previous work (e.g., 'what files did I read?'), answer from the summary."));
+                                "When the user asks about previous work (e.g., 'what files did I read?', '之前读取了哪些文件'), " +
+                                "your answer MUST be based EXCLUSIVELY on the Tool Call History section. " +
+                                "Do NOT claim tools were not used if they appear in the history. " +
+                                "Do NOT start a new task, replay old tasks, or explore new files unless the user asks."));
 
                             conversationHistory = condensed;
                             _taskState.HasAutoCondensed = true;
@@ -803,6 +806,16 @@ namespace AICA.Core.Agent
                         && result.Content != null && result.Content.StartsWith("CONDENSE:"))
                     {
                         var summary = result.Content.Substring("CONDENSE:".Length);
+
+                        // P1-013 fix: Augment LLM summary with programmatic tool call history
+                        // The LLM's summary may omit tool call details. Programmatic extraction ensures
+                        // tool call records survive condense regardless of LLM summary quality.
+                        var toolHistory = ExtractToolCallHistory(conversationHistory);
+                        if (!string.IsNullOrEmpty(toolHistory))
+                        {
+                            summary = summary + "\n\n" + toolHistory;
+                        }
+
                         System.Diagnostics.Debug.WriteLine($"[AICA] Condensing conversation with summary ({summary.Length} chars)");
 
                         // Record condense info for UI layer to persist
@@ -840,12 +853,15 @@ namespace AICA.Core.Agent
                                 "Context was condensed. Please continue with the current task based on the summary above."));
                         }
 
-                        // Post-condense instruction: guide LLM to answer the current request (P1-012)
+                        // Post-condense instruction: guide LLM to answer the current request (P1-012, P1-013)
                         condensed.Add(ChatMessage.System(
-                            "[Post-condense instruction] The conversation was condensed. " +
+                            "[Post-condense instruction] The conversation was condensed to save context space. " +
+                            "The 'Tool Call History' section above contains FACTUAL data about every tool call made in this conversation. " +
                             "You MUST answer the user's LATEST message based on the summary above. " +
-                            "Do NOT start a new task, replay old tasks, or explore new files unless the user asks. " +
-                            "If the user asked about previous work (e.g., 'what files did I read?'), answer from the summary."));
+                            "When the user asks about previous work (e.g., 'what files did I read?', '之前读取了哪些文件'), " +
+                            "your answer MUST be based EXCLUSIVELY on the Tool Call History section. " +
+                            "Do NOT claim tools were not used if they appear in the history. " +
+                            "Do NOT start a new task, replay old tasks, or explore new files unless the user asks."));
 
                         conversationHistory = condensed;
                         yield return AgentStep.TextChunk("\n\n📝 *Conversation condensed to save context space.*\n\n");
@@ -970,7 +986,7 @@ namespace AICA.Core.Agent
         private static string BuildAutoCondenseSummary(List<ChatMessage> conversationHistory)
         {
             var sb = new System.Text.StringBuilder();
-            var filesRead = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var filesRead = new List<string>();
             var filesCreated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var filesModified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var toolsUsed = new HashSet<string>();
@@ -1066,7 +1082,8 @@ namespace AICA.Core.Agent
                 {
                     // Only add paths not already captured from tool calls
                     var path = m.Value;
-                    if (!filesRead.Contains(path) && !filesModified.Contains(path) && !filesCreated.Contains(path))
+                    if (!filesRead.Any(f => string.Equals(f, path, StringComparison.OrdinalIgnoreCase))
+                        && !filesModified.Contains(path) && !filesCreated.Contains(path))
                     {
                         filesRead.Add(path);
                     }
@@ -1080,7 +1097,10 @@ namespace AICA.Core.Agent
             // Section 1: File operations (most important for P1-013)
             sb.AppendLine("### File Operations");
             if (filesRead.Count > 0)
-                sb.AppendLine($"- **Files read ({filesRead.Count}):** {string.Join(", ", filesRead)}");
+            {
+                var dedupedFilesRead = filesRead.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                sb.AppendLine($"- **Files read ({filesRead.Count} calls, {dedupedFilesRead.Count} unique):** {string.Join(", ", dedupedFilesRead)}");
+            }
             if (filesCreated.Count > 0)
                 sb.AppendLine($"- **Files created ({filesCreated.Count}):** {string.Join(", ", filesCreated)}");
             if (filesModified.Count > 0)
@@ -1111,8 +1131,8 @@ namespace AICA.Core.Agent
             if (keyFindings.Count > 0)
             {
                 sb.AppendLine("### Key Tool Results");
-                var recent = keyFindings.Count > 8
-                    ? keyFindings.GetRange(keyFindings.Count - 8, 8)
+                var recent = keyFindings.Count > 12
+                    ? keyFindings.GetRange(keyFindings.Count - 12, 12)
                     : keyFindings;
                 foreach (var finding in recent)
                     sb.AppendLine($"- {finding}");
@@ -1129,8 +1149,115 @@ namespace AICA.Core.Agent
         }
 
         /// <summary>
+        /// Extract a structured tool call history from conversation for condense augmentation.
+        /// This ensures tool call records survive condense regardless of LLM summary quality.
+        /// </summary>
+        private static string ExtractToolCallHistory(List<ChatMessage> conversationHistory)
+        {
+            var toolCalls = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var msg in conversationHistory)
+            {
+                if (msg.Role != ChatRole.Assistant || msg.ToolCalls == null) continue;
+
+                foreach (var tc in msg.ToolCalls)
+                {
+                    var toolName = tc.Function?.Name ?? "unknown";
+                    var argsJson = tc.Function?.Arguments;
+                    string summary = null;
+
+                    if (!string.IsNullOrEmpty(argsJson))
+                    {
+                        var args = TryParseJsonArgs(argsJson);
+                        if (args != null)
+                        {
+                            switch (toolName)
+                            {
+                                case "read_file":
+                                    args.TryGetValue("path", out summary);
+                                    if (summary == null) args.TryGetValue("file_path", out summary);
+                                    break;
+                                case "grep_search":
+                                    if (args.TryGetValue("query", out var q))
+                                    {
+                                        var searchPath = args.TryGetValue("path", out var sp) ? sp : "workspace";
+                                        summary = $"\"{q}\" in {searchPath}";
+                                    }
+                                    break;
+                                case "find_by_name":
+                                    if (args.TryGetValue("pattern", out var p))
+                                        summary = $"\"{p}\"";
+                                    break;
+                                case "list_dir":
+                                    args.TryGetValue("path", out summary);
+                                    if (summary == null) summary = "workspace root";
+                                    break;
+                                case "write_to_file":
+                                case "edit":
+                                    args.TryGetValue("path", out summary);
+                                    if (summary == null) args.TryGetValue("file_path", out summary);
+                                    break;
+                                case "list_code_definition_names":
+                                    args.TryGetValue("path", out summary);
+                                    break;
+                                case "list_projects":
+                                    summary = "(solution)";
+                                    break;
+                                case "run_command":
+                                    args.TryGetValue("command", out summary);
+                                    if (summary != null && summary.Length > 60)
+                                        summary = summary.Substring(0, 60) + "...";
+                                    break;
+                            }
+                        }
+                    }
+
+                    if (!toolCalls.ContainsKey(toolName))
+                        toolCalls[toolName] = new List<string>();
+
+                    if (summary != null)
+                        toolCalls[toolName].Add(summary);
+                    else
+                        toolCalls[toolName].Add("(no args)");
+                }
+            }
+
+            if (toolCalls.Count == 0) return null;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("## Tool Call History (auto-extracted, factual)");
+
+            int totalChars = 0;
+            const int maxChars = 2000;
+
+            foreach (var kvp in toolCalls)
+            {
+                var dedupedArgs = kvp.Value.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var line = $"### {kvp.Key} ({kvp.Value.Count} calls)";
+                sb.AppendLine(line);
+                totalChars += line.Length;
+
+                foreach (var arg in dedupedArgs)
+                {
+                    if (totalChars > maxChars)
+                    {
+                        sb.AppendLine("- ... (truncated for space)");
+                        break;
+                    }
+                    var argLine = $"- {arg}";
+                    sb.AppendLine(argLine);
+                    totalChars += argLine.Length;
+                }
+
+                if (totalChars > maxChars) break;
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Try to parse a JSON arguments string into a simple string dictionary.
-        /// Used by BuildAutoCondenseSummary to extract file paths from tool call arguments.
+        /// Used by BuildAutoCondenseSummary and ExtractToolCallHistory to extract parameters from tool call arguments.
         /// Returns null on parse failure.
         /// </summary>
         private static Dictionary<string, string> TryParseJsonArgs(string json)

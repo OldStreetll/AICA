@@ -112,7 +112,7 @@ namespace AICA.Core.Tools
 
             var sb = new StringBuilder();
             int itemCount_total = 0;
-            const int maxItems = 500;
+            const int maxItems = 800;
 
             try
             {
@@ -121,7 +121,12 @@ namespace AICA.Core.Tools
                     sb.AppendLine($"{relativePath}/");
                     ListDirectoryRecursive(fullPath, sb, "", 1, maxDepth, ref itemCount_total, maxItems);
                     if (itemCount_total >= maxItems)
-                        sb.AppendLine($"\n... (output truncated at {maxItems} items)");
+                    {
+                        int totalEstimate = CountTotalItemsRecursive(fullPath, maxDepth);
+                        int remaining = System.Math.Max(0, totalEstimate - maxItems);
+                        sb.AppendLine($"\n... (output truncated at {maxItems} items, approximately {remaining} more items not shown)");
+                        sb.AppendLine("Tip: Use a more specific path or reduce max_depth to see complete results for a subdirectory.");
+                    }
                 }
                 else
                 {
@@ -216,6 +221,38 @@ namespace AICA.Core.Tools
             {
                 return 0;
             }
+        }
+
+        /// <summary>
+        /// Fast count of total items in a directory tree for truncation reporting.
+        /// Stops counting after reaching a reasonable limit to avoid excessive I/O.
+        /// </summary>
+        private int CountTotalItemsRecursive(string dirPath, int maxDepth, int currentDepth = 0)
+        {
+            if (currentDepth > maxDepth) return 0;
+
+            int count = 0;
+            const int countLimit = 5000; // Safety limit to avoid excessive counting
+
+            try
+            {
+                var dirs = Directory.GetDirectories(dirPath);
+                var files = Directory.GetFiles(dirPath);
+                count += dirs.Length + files.Length;
+
+                if (count > countLimit) return count;
+
+                foreach (var dir in dirs)
+                {
+                    var name = Path.GetFileName(dir);
+                    if (ExcludedDirs.Contains(name)) continue;
+                    count += CountTotalItemsRecursive(dir, maxDepth, currentDepth + 1);
+                    if (count > countLimit) return count;
+                }
+            }
+            catch { }
+
+            return count;
         }
 
         private string FormatSize(long bytes)
