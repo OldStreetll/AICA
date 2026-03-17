@@ -458,6 +458,20 @@ namespace AICA.Core.Agent
                     yield return AgentStep.ThinkingChunk(pendingThinking);
                 }
 
+                // ── Diagnostic: detect tool call intent without actual tool_calls (P1-POCO-011) ──
+                if (!hasToolCalls && !string.IsNullOrWhiteSpace(assistantResponse))
+                {
+                    var responseText = assistantResponse;
+                    if (responseText.Contains("ask_followup_question") || responseText.Contains("let me use")
+                        || responseText.Contains("让我使用") || responseText.Contains("我需要询问"))
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] WARNING: LLM intended to call a tool but no tool_calls in response. " +
+                            $"Check: 1) Function calling enabled? 2) Model supports tool use? " +
+                            $"Content preview: {responseText.Substring(0, System.Math.Min(200, responseText.Length))}");
+                    }
+                }
+
                 // ── Pre-tool text suppression ──
                 // When the model calls tools, ALL accompanying text is captured as thinking content
                 // for the collapsible thinking block. This text represents the LLM's reasoning
@@ -853,14 +867,16 @@ namespace AICA.Core.Agent
                                 "Context was condensed. Please continue with the current task based on the summary above."));
                         }
 
-                        // Post-condense instruction: guide LLM to answer the current request (P1-012, P1-013)
+                        // Post-condense instruction: guide LLM to answer the current request (P1-012, P1-013, P1-POCO-012/013)
                         condensed.Add(ChatMessage.System(
                             "[Post-condense instruction] The conversation was condensed to save context space. " +
-                            "The 'Tool Call History' section above contains FACTUAL data about every tool call made in this conversation. " +
+                            "The 'Tool Call History' section above is AUTO-EXTRACTED and FACTUAL — it lists every tool call made. " +
                             "You MUST answer the user's LATEST message based on the summary above. " +
-                            "When the user asks about previous work (e.g., 'what files did I read?', '之前读取了哪些文件'), " +
-                            "your answer MUST be based EXCLUSIVELY on the Tool Call History section. " +
-                            "Do NOT claim tools were not used if they appear in the history. " +
+                            "When the user asks about previous work (e.g., 'what files did I read?', '之前读取了哪些文件'): " +
+                            "1) Your answer MUST be based EXCLUSIVELY on the Tool Call History section. " +
+                            "2) If read_file appears with N paths, tell the user ALL N paths — do NOT say 'only 1 file'. " +
+                            "3) Do NOT reclassify tool names — read_file stays read_file, NOT list_code_definition_names. " +
+                            "4) Do NOT claim tools were not used if they appear in the history. " +
                             "Do NOT start a new task, replay old tasks, or explore new files unless the user asks."));
 
                         conversationHistory = condensed;

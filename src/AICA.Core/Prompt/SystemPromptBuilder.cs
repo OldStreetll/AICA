@@ -161,10 +161,15 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- `list_projects`: **ALWAYS use this when the user asks about projects or solution structure.** Trigger keywords: 'projects', 'solution', '项目', '解决方案', 'list projects', '列出项目'. This tool parses .vcxproj/.csproj files and shows project metadata, types, file counts, filters, and dependencies. DO NOT use `list_dir` for project queries.");
             _builder.AppendLine("- `list_dir`: Use for file system directory listings. Use `recursive=true` when the user asks for 'full structure', 'complete tree', '完整结构', '目录树' etc. Set `max_depth` to control depth (default 3, max 10). DO NOT use this for project/solution queries.");
             _builder.AppendLine("- `list_code_definition_names`: Use this to understand code structure (classes, methods, properties) without reading entire files. Ideal for code structure overview requests.");
-            _builder.AppendLine("- `grep_search`: Prefer this over `read_file` when looking for specific patterns across multiple files.");
+            _builder.AppendLine("- `grep_search`: Prefer this over `read_file` when looking for specific patterns across multiple files. When searching for class inheritance patterns (e.g., 'public Channel'), ALWAYS search for BOTH unqualified and fully-qualified names (e.g., also search 'public Poco::Channel'). Report results grouped by module.");
             _builder.AppendLine("- `read_file`: Supports reading large files in chunks using `offset` and `limit` parameters. **CRITICAL: If you read a file with offset/limit and the content appears truncated, continue reading by calling read_file again with the next offset until you have the complete content needed for your task.** Do NOT tell the user 'the file was truncated' and stop - keep reading until you have enough information.");
             _builder.AppendLine("  - **IMPORTANT: When using offset/limit, the tool returns content with line numbers (e.g., '   123: code here'). Use these line numbers when referencing code locations in your analysis.**");
             _builder.AppendLine("  - **When reporting code locations, always use the actual line numbers shown in the tool output, NOT calculated offsets.**");
+            _builder.AppendLine("  - **SUMMARY FORMAT: After reading a file, your summary MUST start with:**");
+            _builder.AppendLine("    [File] path/to/file.h | Lines: N | Namespace: X");
+            _builder.AppendLine("    [Includes] ALL #include directives (both project AND standard library headers like <map>, <vector>)");
+            _builder.AppendLine("    Then provide: [Public API] ALL public classes, methods, enums. [Protected/Private] counts (e.g., '3 protected methods, 5 private members'). [Macros] any #define if present.");
+            _builder.AppendLine("    Coverage target: ≥70% of structural elements. NEVER say 'and other methods' — list ALL or give exact count.");
             _builder.AppendLine("- `edit`: Always `read_file` first. The `old_string` must exactly match file content and be unique.");
             _builder.AppendLine();
 
@@ -228,14 +233,29 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- Citation format when claiming patterns: '**[Pattern Name]** — Evidence: `ClassName::MethodName` in `file.h` (line ~N)'. If you cannot provide evidence, do NOT claim the pattern.");
             _builder.AppendLine();
 
-            // Consistency rules (P1-009)
-            _builder.AppendLine("### Number Consistency (CRITICAL)");
-            _builder.AppendLine("- Numbers mentioned in your analysis text MUST exactly match numbers in `attempt_completion` result. If you wrote '48 methods' in the analysis, the completion must also say '48 methods' — not 44 or 50.");
-            _builder.AppendLine("- If you are unsure of an exact count, use 'approximately N' or '~N' consistently in BOTH the analysis and the completion. Never state two different concrete numbers for the same quantity.");
-            _builder.AppendLine("- When reporting counts, prefer using the tool's reported total (e.g., grep_search match count) over manual counting.");
-            _builder.AppendLine("- ALWAYS prefer counts from tool output (e.g., grep_search match count, list_dir file count) over manual counting. If you must count manually, use 'approximately' qualifier.");
-            _builder.AppendLine("- Before calling attempt_completion, verify that all numbers in your result match the numbers you reported during analysis. If they differ, use the number from the tool output.");
-            _builder.AppendLine("- When results are truncated (e.g., 'showing 200 of 343'), report the TOTAL (343), not the visible count.");
+            // Definition vs Reference distinction (P1-POCO-001, P1-POCO-008)
+            _builder.AppendLine("### Definition vs Reference Distinction (IMPORTANT)");
+            _builder.AppendLine("When describing file contents or search results, distinguish:");
+            _builder.AppendLine("- DEFINED HERE: Classes, methods, enums, macros declared/implemented in this file.");
+            _builder.AppendLine("- REFERENCED: Types, constants used but defined in other files. Mark with source: 'uses Message::PRIO_FATAL (from Message.h)'");
+            _builder.AppendLine("For inheritance analysis from grep_search results:");
+            _builder.AppendLine("- 'class Foo: public Bar' → Foo INHERITS Bar (direct relationship)");
+            _builder.AppendLine("- '#include Bar.h' without ': public Bar' → Foo REFERENCES Bar (NOT inheritance). Do NOT list as 'inheriting Bar'.");
+            _builder.AppendLine();
+
+            // Consistency rules (P1-009, strengthened after POCO A-class testing)
+            _builder.AppendLine("### Number Consistency (CRITICAL — HIGHEST PRIORITY RULE)");
+            _builder.AppendLine("BEFORE outputting ANY number, apply this verification:");
+            _builder.AppendLine("1. COUNT-WHAT-YOU-LIST: If you list N items in a table or bullet list, the number you state MUST be N. Do NOT write a different number.");
+            _builder.AppendLine("   BAD: 'Found 8 test files:' followed by 10 bullet points");
+            _builder.AppendLine("   GOOD: 'Found 10 test files:' followed by 10 bullet points");
+            _builder.AppendLine("2. SUBTOTALS-MUST-SUM: Module subtotals MUST add up to the grand total.");
+            _builder.AppendLine("   BAD: 'Foundation (28), Net (4), Data (2) = 44 total' (28+4+2=34≠44)");
+            _builder.AppendLine("   GOOD: 'Foundation (36), Net (4), Data (2), Apache (2) = 44 total'");
+            _builder.AppendLine("3. BODY-COMPLETION-MATCH: Every number in attempt_completion MUST match the corresponding number in the body text.");
+            _builder.AppendLine("4. NEVER USE APPROXIMATE COUNTS when exact counts are available from tools. BAD: 'approximately 30+ classes' GOOD: '32 classes'");
+            _builder.AppendLine("5. ALWAYS prefer counts from tool output over manual counting. When results are truncated (e.g., 'showing 200 of 343'), report the TOTAL (343).");
+            _builder.AppendLine("SELF-CHECK: Before calling attempt_completion, re-read your response and verify every number matches what you listed.");
             _builder.AppendLine();
 
             // Condense behavior rules (P1-012, P1-013)

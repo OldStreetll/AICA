@@ -126,6 +126,11 @@ namespace AICA.Core.Tools
                         int remaining = System.Math.Max(0, totalEstimate - maxItems);
                         sb.AppendLine($"\n... (output truncated at {maxItems} items, approximately {remaining} more items not shown)");
                         sb.AppendLine("Tip: Use a more specific path or reduce max_depth to see complete results for a subdirectory.");
+                        sb.AppendLine($"[Listed {maxItems} of {totalEstimate} items]");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"\n[Total: {itemCount_total} items listed]");
                     }
                 }
                 else
@@ -137,12 +142,15 @@ namespace AICA.Core.Tools
                         var count = GetItemCount(dir);
                         sb.AppendLine($"  {name}/ ({count} items)");
                     }
-                    foreach (var file in Directory.GetFiles(fullPath))
+                    var allFiles = Directory.GetFiles(fullPath);
+                    foreach (var file in allFiles)
                     {
                         var name = Path.GetFileName(file);
                         var size = new FileInfo(file).Length;
                         sb.AppendLine($"  {name} ({FormatSize(size)})");
                     }
+                    var dirCount = Directory.GetDirectories(fullPath).Length;
+                    sb.AppendLine($"\n[Total: {dirCount} directories, {allFiles.Length} files]");
                 }
             }
             catch (System.UnauthorizedAccessException)
