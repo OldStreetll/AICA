@@ -214,9 +214,9 @@ namespace AICA.Core.Prompt
         }
 
         /// <summary>
-        /// Replace old tool result messages with short placeholders to save context space.
+        /// Replace old tool result messages with informative summaries to save context space.
         /// Preserves the most recent N tool results and any short results (&lt;12 chars).
-        /// Inspired by learn-claude-code's micro_compact Layer 1 compression.
+        /// Summaries include tool name and key parameters so the LLM knows what was returned.
         /// </summary>
         public static List<ChatMessage> MicroCompactToolResults(
             List<ChatMessage> messages,
@@ -238,6 +238,18 @@ namespace AICA.Core.Prompt
             if (toolResultIndices.Count <= keepRecent)
                 return new List<ChatMessage>(messages);
 
+            // Build a lookup from ToolCallId → (toolName, argsJson) from Assistant messages
+            var toolCallLookup = new Dictionary<string, (string Name, string Args)>();
+            foreach (var msg in messages)
+            {
+                if (msg.Role != ChatRole.Assistant || msg.ToolCalls == null) continue;
+                foreach (var tc in msg.ToolCalls)
+                {
+                    if (tc.Id != null)
+                        toolCallLookup[tc.Id] = (tc.Function?.Name, tc.Function?.Arguments);
+                }
+            }
+
             // Determine which indices to compact (all except the last N)
             var indicesToCompact = new HashSet<int>(
                 toolResultIndices.Take(toolResultIndices.Count - keepRecent));
@@ -251,9 +263,8 @@ namespace AICA.Core.Prompt
                     // Only compact if content is long enough
                     if (msg.Content != null && msg.Content.Length >= minLengthToCompact)
                     {
-                        result.Add(ChatMessage.ToolResult(
-                            msg.ToolCallId,
-                            "[Previous tool result]"));
+                        var summary = BuildCompactSummary(msg, toolCallLookup);
+                        result.Add(ChatMessage.ToolResult(msg.ToolCallId, summary));
                     }
                     else
                     {
@@ -267,6 +278,123 @@ namespace AICA.Core.Prompt
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Build an informative compact summary for a tool result message.
+        /// Uses the corresponding tool call info to produce tool-specific summaries.
+        /// </summary>
+        private static string BuildCompactSummary(
+            ChatMessage toolResultMsg,
+            Dictionary<string, (string Name, string Args)> toolCallLookup)
+        {
+            var content = toolResultMsg.Content ?? "";
+
+            // Try to find the corresponding tool call
+            if (toolResultMsg.ToolCallId == null
+                || !toolCallLookup.TryGetValue(toolResultMsg.ToolCallId, out var callInfo)
+                || callInfo.Name == null)
+            {
+                return $"[Previous tool result ({content.Length} chars)]";
+            }
+
+            var toolName = callInfo.Name;
+            var args = TryParseArgs(callInfo.Args);
+
+            switch (toolName)
+            {
+                case "read_file":
+                {
+                    var path = GetArg(args, "path") ?? GetArg(args, "file_path") ?? "unknown";
+                    var lineCount = content.Split('\n').Length;
+                    return $"[Previously read: {path} ({lineCount} lines, {content.Length} chars)]";
+                }
+
+                case "grep_search":
+                {
+                    var query = GetArg(args, "query") ?? "?";
+                    var searchPath = GetArg(args, "path") ?? "workspace";
+                    var matchCount = CountOccurrences(content, "Match");
+                    return $"[Previously searched: \"{query}\" in {searchPath} — {matchCount} matches]";
+                }
+
+                case "edit":
+                case "write_to_file":
+                {
+                    var path = GetArg(args, "path") ?? GetArg(args, "file_path") ?? "unknown";
+                    return $"[Previously edited: {path}]";
+                }
+
+                case "run_command":
+                {
+                    var command = GetArg(args, "command") ?? "?";
+                    if (command.Length > 50) command = command.Substring(0, 50) + "...";
+                    var firstLine = content.Split('\n')[0];
+                    if (firstLine.Length > 80) firstLine = firstLine.Substring(0, 80) + "...";
+                    return $"[Previously ran: {command} — {firstLine}]";
+                }
+
+                case "find_by_name":
+                {
+                    var pattern = GetArg(args, "pattern") ?? "?";
+                    var resultCount = content.Split('\n').Length;
+                    return $"[Previously found: \"{pattern}\" — {resultCount} results]";
+                }
+
+                case "list_dir":
+                {
+                    var path = GetArg(args, "path") ?? "workspace";
+                    return $"[Previously listed: {path}]";
+                }
+
+                default:
+                {
+                    var preview = content.Length > 80 ? content.Substring(0, 80) + "..." : content;
+                    // Remove newlines for compact display
+                    preview = preview.Replace('\n', ' ').Replace('\r', ' ');
+                    return $"[Previously called {toolName}: {preview}]";
+                }
+            }
+        }
+
+        private static Dictionary<string, string> TryParseArgs(string argsJson)
+        {
+            if (string.IsNullOrEmpty(argsJson)) return null;
+            try
+            {
+                var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                using (var doc = System.Text.Json.JsonDocument.Parse(argsJson))
+                {
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        result[prop.Name] = prop.Value.ToString();
+                    }
+                }
+                return result;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string GetArg(Dictionary<string, string> args, string key)
+        {
+            if (args == null) return null;
+            return args.TryGetValue(key, out var val) ? val : null;
+        }
+
+        private static int CountOccurrences(string text, string pattern)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(pattern)) return 0;
+            int count = 0;
+            int idx = 0;
+            while ((idx = text.IndexOf(pattern, idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                count++;
+                idx += pattern.Length;
+            }
+            return count;
         }
     }
 }

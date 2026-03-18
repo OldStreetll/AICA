@@ -300,7 +300,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("### Efficiency");
             _builder.AppendLine("- **Minimize tool calls.** Most tasks can be completed in 2-5 tool calls. If you find yourself making more than 8 calls, stop and reconsider your approach.");
             _builder.AppendLine("- **Reuse results.** Never call the same tool with similar arguments twice. If you already have a directory listing, use it instead of listing again.");
-            _builder.AppendLine("- **IMPORTANT: Duplicate call prevention.** The system will reject duplicate tool calls (same tool + same arguments). If you need to re-read a file after editing it, the system will allow it automatically. Otherwise, use the previous result from your conversation history.");
+            _builder.AppendLine("- **IMPORTANT: Duplicate call prevention.** The system will reject duplicate tool calls (same tool + same target). Use your existing results instead of retrying.");
             _builder.AppendLine("- **CRITICAL: Do NOT re-read files you have already read.** Before calling read_file, check if you already have the file contents from a previous call in this conversation. The system will skip duplicate calls anyway, but each skipped call wastes an iteration.");
             _builder.AppendLine("- **Stay focused.** Only explore directories and files directly relevant to the user's question. Do not wander into unrelated directories.");
             _builder.AppendLine("- **One search is usually enough.** For `grep_search`, one well-crafted query is better than multiple vague ones. Review the results before searching again.");

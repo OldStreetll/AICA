@@ -1,8 +1,8 @@
 # AICA Agent 演进计划 — 从工具调用者到真正的 Agent
 
-> 版本: 3.0
+> 版本: 3.1
 > 日期: 2026-03-18
-> 状态: **Phase 0-2 已完成**, Phase 3 待启动
+> 状态: **Phase 0-2.5 已完成**, Phase 3 待启动
 > 基于: POCO A 类测试发现 + AICA 源码深度分析 + SK 架构集成
 > 目标: 将 AICA 从 "单轮工具调用者" 演进为 "自主任务完成者"
 
@@ -29,7 +29,7 @@
 
 | 组件 | 文件 | 行数 | 职责 |
 |------|------|------|------|
-| AgentExecutor | Agent/AgentExecutor.cs | ~1860 | 主循环, condense, 工具调度, **知识注入** |
+| AgentExecutor | Agent/AgentExecutor.cs | ~1993 | 主循环, condense, 工具调度, **知识注入**, **工具去重** |
 | SystemPromptBuilder | Prompt/SystemPromptBuilder.cs | ~660 | 系统 Prompt 构建, **AddKnowledgeContext** |
 | ToolDispatcher | Agent/ToolDispatcher.cs | 133 | 工具路由 |
 | ToolRegistry | Agent/ToolRegistry.cs | 173 | 工具注册 |
@@ -262,6 +262,76 @@
 
 ---
 
+### Phase 2.5: 工具重复调用修复 ✅ 已完成 [2026-03-18]
+
+> 修复 Agent 循环中 LLM 重复调用已执行工具的问题，减少无效迭代、节省 token
+
+#### 根因分析
+
+| 根因 | 影响 | 说明 |
+|------|------|------|
+| RC1: MicroCompaction 用 `[Previous tool result]` 替换旧结果 | **高** | LLM 看不到旧工具返回了什么，于是重新调用 |
+| RC2: `DidEditFile` 是全局布尔值 | **高** | 编辑任何文件后，所有 `read_file` 都绕过去重 |
+| RC3: `read_file` 无语义去重 | **中** | 改变 offset/limit 即可绕过签名去重 |
+| RC4: 去重错误消息教 LLM 绕过 | **中** | 消息建议"改变参数"来重试 |
+| RC5: Condense 后工具历史缺结果摘要 | **低** | 去重 HashSet 仍生效，但浪费迭代 |
+
+#### 完成内容
+
+| 修改 | 文件 | 说明 |
+|------|------|------|
+| RC4: 去重错误消息简化 | Agent/AgentExecutor.cs | 移除 "add/change a parameter" 建议，改为 "Do NOT retry this call" |
+| RC2: EditedFiles 按路径追踪 | Agent/TaskState.cs | `DidEditFile` bool → `EditedFiles` HashSet\<string\>（大小写不敏感），保留向后兼容属性 |
+| RC2: read_file 按路径去重 | Agent/AgentExecutor.cs | 仅当 `read_file` 的目标路径在 `EditedFiles` 中时才允许重复调用 |
+| RC2: edit/write 按路径记录 | Agent/AgentExecutor.cs | `ExtractPathFromToolCall` 提取路径后 `Add` 到 `EditedFiles` |
+| RC3: 签名语义去重 | Agent/AgentExecutor.cs | `GetToolCallSignature` 跳过 `read_file` 的 offset/limit 和 `grep_search` 的 max_results |
+| RC1: MicroCompact 信息化摘要 | Prompt/ResponseQualityFilter.cs | 替换 `[Previous tool result]` 为工具特定摘要（如 `[Previously read: path (N lines)]`） |
+| RC5: 工具历史结果摘要 | Agent/AgentExecutor.cs | `ExtractToolCallHistory` 向前查找 Tool 消息获取结果摘要，maxChars 2000 → 3000 |
+| 效率规则更新 | Prompt/SystemPromptBuilder.cs | 去除 "add/change a parameter" 引导，改为 "Use your existing results instead of retrying" |
+
+#### MicroCompact 摘要格式
+
+| 工具 | 摘要格式 |
+|------|----------|
+| read_file | `[Previously read: {path} ({lineCount} lines, {charCount} chars)]` |
+| grep_search | `[Previously searched: "{query}" in {path} — {matchCount} matches]` |
+| edit / write_to_file | `[Previously edited: {path}]` |
+| run_command | `[Previously ran: {command} — {firstLineOfOutput}]` |
+| find_by_name | `[Previously found: "{pattern}" — {resultCount} results]` |
+| list_dir | `[Previously listed: {path}]` |
+| 其他 | `[Previously called {toolName}: {first 80 chars}...]` |
+
+#### 技术决策
+
+- **EditedFiles 用 OrdinalIgnoreCase**: Windows 文件系统不区分大小写，路径比较必须忽略大小写
+- **签名去重跳过 offset/limit**: 同一文件不同偏移的多次读取本质上是同一操作，LLM 应使用首次读取结果
+- **错误消息不提供绕过建议**: 原消息提示 "add/change a parameter"，LLM 据此改变 offset 绕过去重，形成恶性循环
+- **MicroCompact 保留结果摘要**: LLM 能看到 "之前读了什么、结果多大"，不再因看到 `[Previous tool result]` 而重新调用
+
+#### 验证结果
+
+| 指标 | 结果 |
+|------|------|
+| 编译 | ✅ 0 errors（MSBuild Debug 通过） |
+| 向后兼容 | ✅ `DidEditFile` 属性保留为计算属性 |
+| 待人工验证 | 🔲 9 项测试用例（详见测试计划） |
+
+#### 待人工验证测试矩阵
+
+| # | 测试点 | 通过条件 | 结果 |
+|---|--------|----------|------|
+| 1 | 重复调用错误消息 | 无 "add/change" 字样 | 🔲 |
+| 2 | 编辑 A 后重读 A 通过、重读 B 拦截 | A 通过，B 拦截 | 🔲 |
+| 3 | 多文件编辑精准追踪 | 仅编辑过的文件可重读 | 🔲 |
+| 4 | 同文件不同 offset 去重 | 第二次被拦截 | 🔲 |
+| 5 | 同 query 不同 max_results 去重 | 第二次被拦截 | 🔲 |
+| 6 | 不同路径不误杀 | 两次都通过 | 🔲 |
+| 7 | MicroCompact 带信息摘要 | 显示文件名/行数而非通用占位符 | 🔲 |
+| 8 | Condense 工具历史带结果 | 条目含 `→ (...)` 结果摘要 | 🔲 |
+| 9 | System prompt 规则更新 | 新文本，无旧建议 | 🔲 |
+
+---
+
 ### Phase 3: 多 Agent 协作 [计划中]
 
 > 突破单 Agent 串行瓶颈
@@ -311,6 +381,7 @@
 | 记忆存储 | JSON 文件 (.aica/ 目录) | 📋 Phase 5 计划 |
 | 工具 Fallback | ToolCallTextParser + TOOL_EXACT_STATS | ✅ Phase 1.5 完成 |
 | 任务规划 | UpdatePlanTool + 悬浮面板 UI | ✅ Phase 2 完成 |
+| 工具去重 | EditedFiles 按路径 + 签名语义去重 + MicroCompact 信息化摘要 | ✅ Phase 2.5 完成 |
 
 ---
 
@@ -324,6 +395,13 @@ Phase 0 ✅              Phase 1 ✅              Phase 1.5 ✅          Phase 2
 │ 45 测试通过    │     │ 28631 symbols    │    │ Agent Loop 修复  │  │ 多计划切换       │
 └────────────────┘     └──────────────────┘    └──────────────────┘  └──────────────────┘
                                                                              │
+Phase 2.5 ✅ ◄───────────────────────────────────────────────────────────────┘
+┌──────────────────┐
+│ 工具去重修复     │
+│ MicroCompact 摘要│
+│ 按路径精准追踪   │
+└──────────────────┘
+         │
 Phase 5                  Phase 4                Phase 3 ◄────────────────────┘
 ┌────────────────┐     ┌──────────────────┐    ┌──────────────────┐
 │ 跨会话记忆     │←────│ 分层上下文       │←───│ AgentOrchestrator│
@@ -349,6 +427,7 @@ Phase 5                  Phase 4                Phase 3 ◄───────
 | **1** | ProjectIndexer, KnowledgeContextProvider, ProjectKnowledgeStore | POCO 索引 <30s; "Logger 是什么" 直接回答 | ✅ 完成 |
 | **1.5** | ToolCallTextParser, TOOL_EXACT_STATS, Agent Loop 修复 | TC-A12 PASS; tool_calls 正确执行 | ✅ 完成 |
 | **2** | UpdatePlanTool, 悬浮计划面板, PlanAwareRecovery, 多计划切换 | "分析日志系统架构" 自动拆解为 3+ 步; 红色悬浮面板固定显示 | ✅ 完成 |
+| **2.5** | EditedFiles 按路径去重, MicroCompact 信息化摘要, 签名语义去重 | 同文件不同 offset 被拦截; 编辑 A 后仅允许重读 A; 压缩摘要含工具信息 | ✅ 完成 |
 | **3** | AgentOrchestrator, ResearchAgent, SharedContext | 并行执行耗时降低 50%+ | 📋 计划中 |
 | **4** | SmartContextSelector, 分层上下文 | 50 轮对话后仍能回忆第 1 轮发现 | 📋 计划中 |
 | **5** | MemoryStore, 记忆注入 | 新会话自动知道 "POCO 用 CppUnit" | 📋 计划中 |
@@ -364,6 +443,7 @@ Phase 5                  Phase 4                Phase 3 ◄───────
 | 项目索引耗时 (大项目) | 中 | 后台异步, FindProjectRoot | ✅ 9.3s |
 | LLM function calling 不可靠 | 高 | Phase 1.5 Text Fallback | ✅ 已解决 |
 | WPF WebBrowser IE 兼容性 | 中 | IE=edge meta + 自定义 classList 替代函数 | ✅ 已解决 |
+| 工具重复调用浪费 token | 高 | Phase 2.5 按路径去重 + 签名语义去重 + 信息化摘要 | ✅ 已解决 |
 | 多 Agent 并行的 token 成本 | 高 | 子 Agent 使用小上下文 | 📋 Phase 3 |
 | .NET Standard 2.0 限制 | 中 | 避免 .NET 6+ API | ✅ 已验证 |
 | VS 扩展性能 | 中 | 索引异步执行, UI 不阻塞 | ✅ 已验证 |

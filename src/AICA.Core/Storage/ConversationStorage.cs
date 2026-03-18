@@ -395,6 +395,12 @@ namespace AICA.Core.Storage
         /// are represented by the summary; messages from this index onward are loaded normally.
         /// </summary>
         public int SummaryUpToIndex { get; set; }
+
+        /// <summary>
+        /// Task plan history HTML for the floating plan panel.
+        /// Null for old conversations without plan data (backward compatible).
+        /// </summary>
+        public List<string> PlanHistory { get; set; }
     }
 
     /// <summary>

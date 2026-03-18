@@ -268,6 +268,8 @@ namespace AICA.ToolWindows
         {
             _conversation.Clear();
             _llmHistory.Clear();
+            _planHistory.Clear();
+            _lastPlan = null;
             _llmClient?.Dispose();
             _llmClient = null;
             _agentExecutor = null;
@@ -1017,6 +1019,40 @@ namespace AICA.ToolWindows
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[AICA] Error updating floating plan panel: {ex.Message}");
+            }
+        }
+
+        private void CollapsePlanPanel()
+        {
+            try
+            {
+                if (!_isBrowserReady || ChatBrowser.Document == null) return;
+                dynamic doc = ChatBrowser.Document;
+                dynamic panel = doc.getElementById("plan-floating-panel");
+                if (panel != null) panel.className = "collapsed";
+                dynamic chatLog = doc.getElementById("chat-log");
+                if (chatLog != null) chatLog.style.paddingBottom = "48px";
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Error collapsing plan panel: {ex.Message}");
+            }
+        }
+
+        private void HidePlanPanel()
+        {
+            try
+            {
+                if (!_isBrowserReady || ChatBrowser.Document == null) return;
+                dynamic doc = ChatBrowser.Document;
+                dynamic panel = doc.getElementById("plan-floating-panel");
+                if (panel != null) panel.style.display = "none";
+                dynamic chatLog = doc.getElementById("chat-log");
+                if (chatLog != null) chatLog.style.paddingBottom = "20px";
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Error hiding plan panel: {ex.Message}");
             }
         }
 
@@ -2013,12 +2049,31 @@ namespace AICA.ToolWindows
                 // conversations built across multiple VS sessions).
                 ReassignCollapsibleIds();
 
+                // Restore plan history
+                _planHistory.Clear();
+                _lastPlan = null;
+                if (record.PlanHistory != null && record.PlanHistory.Count > 0)
+                {
+                    _planHistory.AddRange(record.PlanHistory);
+                }
+
                 // Set current conversation ID
                 _currentConversationId = conversationId;
 
                 // Re-render interface
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 RenderConversation();
+
+                // Restore floating plan panel state
+                if (_planHistory.Count > 0)
+                {
+                    UpdateFloatingPlanPanel();
+                    CollapsePlanPanel();
+                }
+                else
+                {
+                    HidePlanPanel();
+                }
 
                 System.Diagnostics.Debug.WriteLine($"[AICA] Loaded conversation {conversationId} with {record.Messages.Count} messages");
             }
@@ -2192,6 +2247,9 @@ namespace AICA.ToolWindows
                         CompletionData = msg.CompletionData
                     });
                 }
+
+                if (_planHistory.Count > 0)
+                    record.PlanHistory = new List<string>(_planHistory);
 
                 await _conversationStorage.SaveConversationAsync(record);
 

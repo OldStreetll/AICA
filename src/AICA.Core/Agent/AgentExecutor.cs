@@ -776,12 +776,15 @@ namespace AICA.Core.Agent
                     // (exempt attempt_completion, condense, and read_file after edit)
                     var toolSignature = GetToolCallSignature(toolCall);
 
-                    // Allow read_file to be called again if a file was edited since last read
+                    // Allow read_file to be called again only if that specific file was edited
                     bool allowDuplicate = false;
-                    if (toolCall.Name == "read_file" && _taskState.DidEditFile)
+                    if (toolCall.Name == "read_file" && _taskState.EditedFiles.Count > 0)
                     {
-                        // Check if this read_file is for a file that might have been edited
-                        allowDuplicate = true;
+                        var readPath = ExtractPathFromToolCall(toolCall);
+                        if (readPath != null && _taskState.EditedFiles.Contains(readPath.TrimEnd('/', '\\')))
+                        {
+                            allowDuplicate = true;
+                        }
                     }
 
                     if (toolCall.Name != "attempt_completion" && toolCall.Name != "condense"
@@ -792,12 +795,9 @@ namespace AICA.Core.Agent
                         System.Diagnostics.Debug.WriteLine($"[AICA] Skipping duplicate tool call: {toolCall.Name}");
                         _taskState.TotalToolCallCount++; // Count duplicates too for force-completion
                         var dupResult = ToolResult.Fail(
-                            $"Duplicate call detected: You already called {toolCall.Name} with the same arguments earlier in this conversation.\n\n" +
-                            $"What to do:\n" +
-                            $"1. Use the previous result from your conversation history\n" +
-                            $"2. If you need updated information, add/change a parameter (e.g., different offset/limit for read_file)\n" +
-                            $"3. If the file was modified, the system will allow re-reading automatically\n\n" +
-                            $"This check prevents unnecessary duplicate operations and improves efficiency.");
+                            $"Duplicate call: {toolCall.Name} was already called with these arguments. " +
+                            $"The result is in your conversation history — use it directly. " +
+                            $"Do NOT retry this call.");
                         yield return AgentStep.ActionStart(BuildActionDescription(toolCall));
                         yield return AgentStep.ToolStart(toolCall);
                         yield return AgentStep.WithToolResult(toolCall, dupResult);
@@ -831,9 +831,13 @@ namespace AICA.Core.Agent
                     if (result.Success)
                     {
                         _taskState.ResetFailureCounts();
-                        // Track file edits
+                        // Track file edits by path
                         if (toolCall.Name == "edit" || toolCall.Name == "write_to_file")
-                            _taskState.DidEditFile = true;
+                        {
+                            var editPath = ExtractPathFromToolCall(toolCall);
+                            if (!string.IsNullOrEmpty(editPath))
+                                _taskState.EditedFiles.Add(editPath.TrimEnd('/', '\\'));
+                        }
                     }
                     else
                     {
@@ -1255,8 +1259,9 @@ namespace AICA.Core.Agent
         {
             var toolCalls = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var msg in conversationHistory)
+            for (int msgIdx = 0; msgIdx < conversationHistory.Count; msgIdx++)
             {
+                var msg = conversationHistory[msgIdx];
                 if (msg.Role != ChatRole.Assistant || msg.ToolCalls == null) continue;
 
                 foreach (var tc in msg.ToolCalls)
@@ -1311,13 +1316,33 @@ namespace AICA.Core.Agent
                         }
                     }
 
+                    // Look forward for the corresponding Tool result message to get a result hint
+                    string resultHint = null;
+                    if (tc.Id != null)
+                    {
+                        for (int j = msgIdx + 1; j < conversationHistory.Count; j++)
+                        {
+                            if (conversationHistory[j].Role == ChatRole.Tool
+                                && conversationHistory[j].ToolCallId == tc.Id)
+                            {
+                                var resultContent = conversationHistory[j].Content ?? "";
+                                if (resultContent.Length > 100)
+                                    resultHint = resultContent.Substring(0, 80) + "...";
+                                else if (resultContent.Length > 0)
+                                    resultHint = resultContent;
+                                break;
+                            }
+                        }
+                    }
+
                     if (!toolCalls.ContainsKey(toolName))
                         toolCalls[toolName] = new List<string>();
 
-                    if (summary != null)
-                        toolCalls[toolName].Add(summary);
-                    else
-                        toolCalls[toolName].Add("(no args)");
+                    var entry = summary ?? "(no args)";
+                    if (resultHint != null)
+                        entry = $"{entry} → ({resultHint})";
+
+                    toolCalls[toolName].Add(entry);
                 }
             }
 
@@ -1327,7 +1352,7 @@ namespace AICA.Core.Agent
             sb.AppendLine("## Tool Call History (auto-extracted, factual)");
 
             int totalChars = 0;
-            const int maxChars = 2000;
+            const int maxChars = 3000;
 
             foreach (var kvp in toolCalls)
             {
@@ -1781,6 +1806,10 @@ namespace AICA.Core.Agent
                 sortedKeys.Sort(StringComparer.Ordinal);
                 foreach (var key in sortedKeys)
                 {
+                    // Skip parameters that don't affect the operation's identity
+                    if (call.Name == "read_file" && (key == "offset" || key == "limit")) continue;
+                    if (call.Name == "grep_search" && key == "max_results") continue;
+
                     sb.Append('|').Append(key).Append('=');
                     var val = call.Arguments[key];
                     var strVal = val?.ToString() ?? "";
@@ -1797,6 +1826,18 @@ namespace AICA.Core.Agent
                 }
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Extract the file path from a tool call's arguments.
+        /// Checks common parameter names: "path", "file_path".
+        /// </summary>
+        private static string ExtractPathFromToolCall(ToolCall toolCall)
+        {
+            if (toolCall.Arguments == null) return null;
+            if (toolCall.Arguments.TryGetValue("path", out var path)) return path?.ToString();
+            if (toolCall.Arguments.TryGetValue("file_path", out var filePath)) return filePath?.ToString();
+            return null;
         }
 
         /// <summary>
