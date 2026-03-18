@@ -120,7 +120,7 @@ namespace AICA.Core.Tools
                 }
 
                 if (results.Count == 0)
-                    return ToolResult.Ok($"No matches found for pattern '{pattern}'.");
+                    return ToolResult.Ok($"No matches found for pattern '{pattern}'.\n[TOOL_EXACT_STATS: total_results=0, files=0, directories=0]");
 
                 var sb = new StringBuilder();
                 sb.AppendLine($"Found {results.Count} result(s) for '{pattern}':");
@@ -140,6 +140,10 @@ namespace AICA.Core.Tools
 
                 if (results.Count >= maxResults)
                     sb.AppendLine($"\n[Results truncated at {maxResults}]");
+
+                int fileCount = results.Count(r => !r.IsDirectory);
+                int dirCount = results.Count(r => r.IsDirectory);
+                sb.AppendLine($"\n[TOOL_EXACT_STATS: total_results={results.Count}, files={fileCount}, directories={dirCount}]");
 
                 return ToolResult.Ok(sb.ToString());
             }, ct).ConfigureAwait(false);

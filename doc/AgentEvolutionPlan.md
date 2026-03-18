@@ -1,8 +1,8 @@
 # AICA Agent 演进计划 — 从工具调用者到真正的 Agent
 
-> 版本: 2.0
+> 版本: 3.0
 > 日期: 2026-03-18
-> 状态: **Phase 0-1 已完成**, Phase 2 待启动
+> 状态: **Phase 0-2 已完成**, Phase 3 待启动
 > 基于: POCO A 类测试发现 + AICA 源码深度分析 + SK 架构集成
 > 目标: 将 AICA 从 "单轮工具调用者" 演进为 "自主任务完成者"
 
@@ -34,7 +34,7 @@
 | ToolDispatcher | Agent/ToolDispatcher.cs | 133 | 工具路由 |
 | ToolRegistry | Agent/ToolRegistry.cs | 173 | 工具注册 |
 | OpenAIClient | LLM/OpenAIClient.cs | 80+ | LLM HTTP 通信 |
-| 14 个工具 | Tools/*.cs | 3644 | 文件/搜索/命令/交互 |
+| 15 个工具 | Tools/*.cs | 3800+ | 文件/搜索/命令/交互/**update_plan** |
 | **KernelFactory** | SK/KernelFactory.cs | ~120 | **SK Kernel 构建 (Phase 0)** |
 | **LLMClientAdapter** | SK/Adapters/*.cs | ~400 | **SK 适配器 (Phase 0)** |
 | **SymbolParser** | Knowledge/SymbolParser.cs | ~360 | **C/C++/C# 符号提取 (Phase 1)** |
@@ -50,10 +50,10 @@
 |------|----------|------|----------------|
 | 上下文窗口小 (32K) | TC-A14: condense 后信息丢失 | maxTokenBudget = 32000 | ❌ 未解决 |
 | 单 Agent 串行 | 复杂任务需多轮才能完成 | AgentExecutor 单循环 | ❌ 未解决 |
-| function calling 不可靠 | TC-A12/A07: tool_calls 为空 | LLM 模型兼容性 | ❌ 未解决 |
+| function calling 不可靠 | TC-A12/A07: tool_calls 为空 | LLM 模型兼容性 | ✅ **Phase 1.5 Text Fallback** |
 | 无项目记忆 | 每次会话重新理解项目 | 无持久化知识库 | ✅ **Phase 1 知识索引** |
-| LLM 计数弱 | 5/14 用例数字矛盾 | LLM 固有弱点 | ❌ 未解决 |
-| 被动响应 | 用户问一步做一步 | 无任务分解能力 | ❌ 未解决 |
+| LLM 计数弱 | 5/14 用例数字矛盾 | LLM 固有弱点 | ✅ **Phase 1.5 TOOL_EXACT_STATS** |
+| 被动响应 | 用户问一步做一步 | 无任务分解能力 | ✅ **Phase 2 任务规划** |
 
 ---
 
@@ -162,37 +162,103 @@
 
 ---
 
-### Phase 1.5: 工具调用可靠性修复 [计划中]
+### Phase 1.5: 工具调用可靠性修复 ✅ 已完成 [2026-03-18]
 
 > 解决 function calling 失败问题，这是影响所有后续 Phase 的基础
 
-#### 1.5.1 Tool Call Fallback — 解决 function calling 失败
+#### 完成内容
 
-**问题**: TC-A12/A07 中 LLM 返回无 tool_calls 字段, 工具未执行
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| ToolCallTextParser | Tools/ToolCallTextParser.cs | 当 LLM 返回无 tool_calls 时，从文本中解析 JSON 工具调用（正则 + JSON 反序列化） |
+| TOOL_EXACT_STATS | 14 个工具的 ExecuteAsync | 搜索/列表工具在结果末尾附加 `[TOOL_EXACT_STATS: ...]` 精确计数，解决 LLM 计数不准问题 |
+| Agent Loop 修复 | Agent/AgentExecutor.cs | 修复 iteration 1 时即使收到 tool_calls 也直接结束的 bug，确保工具执行后继续循环 |
+| 复杂度检测 | Agent/AgentExecutor.cs | `AnalyzeComplexity` 方法基于关键词和请求长度判断任务复杂度（Simple/Medium/Complex），决定是否触发任务规划 |
 
-**方案**: 当检测到工具意图但无 tool_calls 时, 从文本中解析工具调用
+#### 验证结果
 
-#### 1.5.2 工具侧计数注入
-
-**方案**: 搜索/列表工具在返回结果末尾自动附加精确统计
-
-#### 1.5.3 Agent Loop 完善
-
-**问题**: `Conversational message on iteration 1, yielding text and completing (toolCalls=1)` — 即使收到 tool_calls，也直接结束而不执行
-
-**方案**: 确保 Agent Loop 在收到 tool_calls 时执行工具并继续循环
+| 指标 | 结果 |
+|------|------|
+| TC-A12 tool_calls 为空 | ✅ Text Fallback 正确解析并执行工具 |
+| 计数一致性 | ✅ AI 使用 TOOL_EXACT_STATS 中的数字，不再自行计数 |
+| Agent Loop | ✅ 工具调用后正确继续循环直到任务完成 |
+| 回归测试 | ✅ 全量通过 |
 
 ---
 
-### Phase 2: 任务规划系统 [计划中]
+### Phase 2: 任务规划系统 ✅ 已完成 [2026-03-18]
 
-> 让 AICA 能自主分解和执行多步任务
+> 让 AICA 能自主分解和执行多步任务，并通过可视化 UI 展示执行进度
 
-#### 2.1 TaskPlanner — 分析用户请求复杂度，决定是否需要分解
+#### 完成内容
 
-#### 2.2 执行计划 UI — 聊天窗口中显示可折叠的执行计划
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| UpdatePlanTool | Tools/UpdatePlanTool.cs | `update_plan` 工具，接受 plan 数组（step + status），解析为 TaskPlan 并更新上下文 |
+| TaskPlan / PlanStep | Agent/IAgentContext.cs | 计划数据模型：Steps 列表 + 状态枚举（Pending/InProgress/Completed/Failed） |
+| PlanAwareRecovery | Agent/AgentExecutor.cs | 工具失败时结合计划上下文分析原因，自动调整策略而非盲目重试 |
+| 悬浮计划面板 | VSIX/ToolWindows/ChatToolWindowControl.xaml.cs | 固定在底部的红色计划卡片面板，独立于聊天消息流 |
+| 多计划切换 | 同上 | `_planHistory` 持久化所有计划，多计划时显示标签栏（Plan 1 \| Plan 2）切换查看 |
+| 系统 Prompt | Prompt/SystemPromptBuilder.cs | 指引 LLM 创建 3-7 步计划，完成前必须调用 update_plan 标记所有步骤为 completed |
 
-#### 2.3 自主重试与策略调整 — 工具失败时分析原因并切换策略
+#### UI 设计
+
+**计划卡片样式 — 红色主题**
+- 左边框 `#e06c75` 红色，与思考卡片（黄色）和工具卡片（蓝色）形成三色区分
+- 每个步骤显示状态图标：⏳ 待处理 / 🔄 进行中 / ✅ 完成 / ❌ 失败
+- 底部进度条实时反映完成百分比
+
+**悬浮面板架构**
+```
+┌──────────────────────────────────────┐
+│ 📋 Task Plan (1)        ▼           │  ← Toggle Bar（始终可见）
+├──────────────────────────────────────┤
+│ [Plan 1] [Plan 2] ...               │  ← 标签栏（多计划时显示）
+├──────────────────────────────────────┤
+│ 📋 Task Plan (3/5)                  │
+│ ✅ 分析项目结构                      │
+│ ✅ 检索相关文件                      │
+│ 🔄 生成重构方案                      │
+│ ⏳ 应用代码修改                      │
+│ ⏳ 验证修改结果                      │
+│ ████████████░░░░░░░░░  60%          │  ← 进度条
+└──────────────────────────────────────┘
+```
+
+- `position: fixed; bottom: 0` — 固定在输入框上方，不随聊天滚动
+- 点击 Toggle Bar 折叠/展开，折叠时仅显示标题栏
+- 任务完成后面板保留（默认折叠），可随时展开查看历史计划
+- 通过直接 DOM innerHTML 更新，避免 `execScript` 字符串转义问题
+
+#### 调试过程中发现并修复的 Bug
+
+| Bug | 原因 | 修复 |
+|-----|------|------|
+| 脚本错误弹窗 "contains" | WPF WebBrowser 默认 IE7 模式不支持 `classList` API | 添加 `<meta http-equiv="X-UA-Compatible" content="IE=edge">`；全部 JS 改用自定义 `hasClass/addClass/removeClass/toggleClass` 函数 |
+| 脚本错误 80020101 | `execScript` 拼接 HTML 字符串时 emoji/引号/换行导致 JS 解析失败 | 改用直接 DOM `innerHTML` 赋值，移除所有 `execScript` 调用 |
+| Toggle 按钮不可见 | 按钮 `position: absolute; top: -28px` 被面板 `overflow-y: auto` 裁剪 | 重构为面板内部 Toggle Bar，通过 CSS `display: none` 控制内容区显隐 |
+| 最后一步无法标记完成 | 系统 Prompt 未明确指示完成前需更新计划 | 添加指令："Before calling attempt_completion, ALWAYS call update_plan to mark ALL steps as completed" |
+| 嵌套 dispatcher.Invoke | PlanUpdate case 已在外层 `dispatcher.Invoke` 内，内部再次 Invoke 可能死锁 | 移除内层 Invoke，直接调用 `UpdateFloatingPlanPanel()` |
+| `window.onerror` 弹窗 | IE Trident 引擎默认弹出脚本错误对话框 | 注入 `window.onerror = function() { return true; }` 全局抑制 |
+
+#### 技术决策
+
+- **红色主题而非琥珀色**: 与思考（黄色 `#f0ad4e`）和工具（蓝色 `#4aa3ff`）卡片形成明确的三色视觉层次
+- **悬浮面板而非内嵌卡片**: 计划面板从消息流中抽离为独立 `position: fixed` 区域，始终可见且不随聊天滚动
+- **直接 DOM 操作**: 通过 `doc.getElementById(...).innerHTML` 更新面板内容，避免 `execScript` 的字符串转义和 IE 兼容性问题
+- **IE 兼容 JS**: 所有 JavaScript 避免使用 `classList`、`forEach`、箭头函数等 ES5+ API，确保在 WPF WebBrowser 的 Trident 引擎中稳定运行
+
+#### 验证结果
+
+| 指标 | 结果 |
+|------|------|
+| 红色风格 | ✅ 与思考（黄色）和工具（蓝色）明显区分 |
+| 悬浮固定 | ✅ 面板固定在底部，不随聊天滚动 |
+| 折叠/展开 | ✅ Toggle Bar 始终可见，点击切换 |
+| 任务结束保留 | ✅ 面板持久化，可随时查看历史 |
+| 多计划堆叠 | ✅ 标签栏切换多个计划 |
+| 脚本错误 | ✅ 无弹窗错误 |
+| 编译 | ✅ 0 errors |
 
 ---
 
@@ -243,21 +309,22 @@
 | 向量索引 | SK VectorStore + ONNX (可选) | 📋 Phase 4 计划 |
 | 并行执行 | Task.WhenAll + CancellationToken | 📋 Phase 3 计划 |
 | 记忆存储 | JSON 文件 (.aica/ 目录) | 📋 Phase 5 计划 |
-| 工具 Fallback | ToolCallTextParser | 📋 Phase 1.5 计划 |
+| 工具 Fallback | ToolCallTextParser + TOOL_EXACT_STATS | ✅ Phase 1.5 完成 |
+| 任务规划 | UpdatePlanTool + 悬浮面板 UI | ✅ Phase 2 完成 |
 
 ---
 
 ## 五、实施路线图
 
 ```
-Phase 0 ✅              Phase 1 ✅              Phase 1.5
-┌────────────────┐     ┌──────────────────┐    ┌──────────────────┐
-│ SK 1.54.0 集成 │     │ ProjectIndexer   │    │ Tool Fallback    │
-│ 4 个适配器     │────→│ KnowledgeContext │───→│ 计数注入         │
-│ 45 测试通过    │     │ 28631 symbols    │    │ Agent Loop 修复  │
-└────────────────┘     └──────────────────┘    └──────────────────┘
-                                                       │
-Phase 5                  Phase 4                Phase 3 ← Phase 2
+Phase 0 ✅              Phase 1 ✅              Phase 1.5 ✅          Phase 2 ✅
+┌────────────────┐     ┌──────────────────┐    ┌──────────────────┐  ┌──────────────────┐
+│ SK 1.54.0 集成 │     │ ProjectIndexer   │    │ Tool Fallback    │  │ UpdatePlanTool   │
+│ 4 个适配器     │────→│ KnowledgeContext │───→│ EXACT_STATS      │─→│ 悬浮计划面板     │
+│ 45 测试通过    │     │ 28631 symbols    │    │ Agent Loop 修复  │  │ 多计划切换       │
+└────────────────┘     └──────────────────┘    └──────────────────┘  └──────────────────┘
+                                                                             │
+Phase 5                  Phase 4                Phase 3 ◄────────────────────┘
 ┌────────────────┐     ┌──────────────────┐    ┌──────────────────┐
 │ 跨会话记忆     │←────│ 分层上下文       │←───│ AgentOrchestrator│
 │ 记忆注入       │     │ SK VectorStore   │    │ 子 Agent 类型    │
@@ -280,8 +347,8 @@ Phase 5                  Phase 4                Phase 3 ← Phase 2
 |-------|--------|----------|------|
 | **0** | SK 集成, 4 个适配器 | 45 测试通过, VSIX 回归通过 | ✅ 完成 |
 | **1** | ProjectIndexer, KnowledgeContextProvider, ProjectKnowledgeStore | POCO 索引 <30s; "Logger 是什么" 直接回答 | ✅ 完成 |
-| **1.5** | ToolCallTextParser, 计数注入, Agent Loop 修复 | TC-A12 PASS; tool_calls 正确执行 | 📋 计划中 |
-| **2** | TaskPlanner, 执行计划 UI, RecoveryStrategies | "分析日志系统架构" 自动拆解为 3+ 步 | 📋 计划中 |
+| **1.5** | ToolCallTextParser, TOOL_EXACT_STATS, Agent Loop 修复 | TC-A12 PASS; tool_calls 正确执行 | ✅ 完成 |
+| **2** | UpdatePlanTool, 悬浮计划面板, PlanAwareRecovery, 多计划切换 | "分析日志系统架构" 自动拆解为 3+ 步; 红色悬浮面板固定显示 | ✅ 完成 |
 | **3** | AgentOrchestrator, ResearchAgent, SharedContext | 并行执行耗时降低 50%+ | 📋 计划中 |
 | **4** | SmartContextSelector, 分层上下文 | 50 轮对话后仍能回忆第 1 轮发现 | 📋 计划中 |
 | **5** | MemoryStore, 记忆注入 | 新会话自动知道 "POCO 用 CppUnit" | 📋 计划中 |
@@ -295,7 +362,8 @@ Phase 5                  Phase 4                Phase 3 ← Phase 2
 |------|------|----------|----------|
 | SK 版本兼容性 (STJ 10.x) | 高 | 固定 SK 1.54.0 | ✅ 已解决 |
 | 项目索引耗时 (大项目) | 中 | 后台异步, FindProjectRoot | ✅ 9.3s |
-| LLM function calling 不可靠 | 高 | Phase 1.5 Text Fallback | ⚠️ 待解决 |
+| LLM function calling 不可靠 | 高 | Phase 1.5 Text Fallback | ✅ 已解决 |
+| WPF WebBrowser IE 兼容性 | 中 | IE=edge meta + 自定义 classList 替代函数 | ✅ 已解决 |
 | 多 Agent 并行的 token 成本 | 高 | 子 Agent 使用小上下文 | 📋 Phase 3 |
 | .NET Standard 2.0 限制 | 中 | 避免 .NET 6+ API | ✅ 已验证 |
 | VS 扩展性能 | 中 | 索引异步执行, UI 不阻塞 | ✅ 已验证 |

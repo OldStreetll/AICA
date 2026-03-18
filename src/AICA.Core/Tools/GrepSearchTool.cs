@@ -257,7 +257,7 @@ namespace AICA.Core.Tools
 
                 if (fileMatchCounts.Count == 0)
                 {
-                    return ToolResult.Ok($"No matches found for '{query}' in {filesSearched} files.");
+                    return ToolResult.Ok($"No matches found for '{query}' in {filesSearched} files.\n[TOOL_EXACT_STATS: matches=0, files_matched=0, files_searched={filesSearched}]");
                 }
 
                 // Calculate total matches (may be more than displayed)
@@ -280,7 +280,9 @@ namespace AICA.Core.Tools
                     summary.AppendLine("Detailed matches (first " + maxResults + "):");
                 }
 
-                return ToolResult.Ok(summary.ToString() + results.ToString());
+                var output = summary.ToString() + results.ToString();
+                output += $"\n[TOOL_EXACT_STATS: matches={totalMatches}, files_matched={filesMatched}, files_searched={filesSearched}]";
+                return ToolResult.Ok(output);
             }, ct).ConfigureAwait(false);
         }
 

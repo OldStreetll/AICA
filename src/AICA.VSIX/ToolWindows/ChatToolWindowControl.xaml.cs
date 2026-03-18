@@ -873,6 +873,154 @@ namespace AICA.ToolWindows
         }
 
         /// <summary>
+        /// Plan card history for floating panel display (persists across tasks)
+        /// </summary>
+        private readonly List<string> _planHistory = new List<string>();
+        private AICA.Core.Agent.TaskPlan _lastPlan;
+
+        /// <summary>
+        /// Build a red-colored plan card HTML from a TaskPlan
+        /// </summary>
+        private string BuildPlanCardHtml(AICA.Core.Agent.TaskPlan plan, int planIndex)
+        {
+            if (plan?.Steps == null || plan.Steps.Count == 0)
+                return string.Empty;
+
+            var completedCount = plan.Steps.Count(s => s.Status == AICA.Core.Agent.PlanStepStatus.Completed);
+            var totalCount = plan.Steps.Count;
+            var progressPercent = totalCount > 0 ? (int)((completedCount * 100.0) / totalCount) : 0;
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"<div class=\"plan-card\" data-plan-index=\"{planIndex}\">");
+            sb.AppendLine($"  <div class=\"plan-header\"><span class=\"plan-icon\">📋</span> Task Plan ({completedCount}/{totalCount})</div>");
+            sb.AppendLine("  <div class=\"plan-steps\">");
+
+            foreach (var step in plan.Steps)
+            {
+                string icon;
+                string statusClass;
+                switch (step.Status)
+                {
+                    case AICA.Core.Agent.PlanStepStatus.InProgress:
+                        icon = "🔄";
+                        statusClass = "in-progress";
+                        break;
+                    case AICA.Core.Agent.PlanStepStatus.Completed:
+                        icon = "✅";
+                        statusClass = "completed";
+                        break;
+                    case AICA.Core.Agent.PlanStepStatus.Failed:
+                        icon = "❌";
+                        statusClass = "failed";
+                        break;
+                    default:
+                        icon = "⏳";
+                        statusClass = "pending";
+                        break;
+                }
+
+                var escapedDesc = System.Net.WebUtility.HtmlEncode(step.Description ?? "");
+                sb.AppendLine($"    <div class=\"plan-step {statusClass}\"><span class=\"plan-step-icon\">{icon}</span><span class=\"plan-step-desc\">{escapedDesc}</span></div>");
+            }
+
+            sb.AppendLine("  </div>");
+            sb.AppendLine($"  <div class=\"plan-progress\"><div class=\"plan-progress-bar\" style=\"width: {progressPercent}%\"></div></div>");
+            sb.AppendLine("</div>");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Check if the new plan is an update of the same plan (same step descriptions)
+        /// </summary>
+        private bool IsSamePlanUpdate(AICA.Core.Agent.TaskPlan newPlan)
+        {
+            if (_lastPlan == null || newPlan?.Steps == null || _lastPlan.Steps == null)
+                return false;
+
+            if (newPlan.Steps.Count != _lastPlan.Steps.Count)
+                return false;
+
+            for (int i = 0; i < newPlan.Steps.Count; i++)
+            {
+                if (newPlan.Steps[i].Description != _lastPlan.Steps[i].Description)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Update the floating plan panel via JavaScript injection
+        /// </summary>
+        private void UpdateFloatingPlanPanel()
+        {
+            if (_planHistory.Count == 0) return;
+
+            try
+            {
+                if (!_isBrowserReady || ChatBrowser.Document == null) return;
+
+                dynamic doc = ChatBrowser.Document;
+
+                // Build tabs HTML if multiple plans
+                var tabsHtml = new StringBuilder();
+                if (_planHistory.Count > 1)
+                {
+                    tabsHtml.Append("<div class='plan-tabs'>");
+                    for (int i = 0; i < _planHistory.Count; i++)
+                    {
+                        var active = i == _planHistory.Count - 1 ? "active" : "";
+                        tabsHtml.Append($"<div class='plan-tab {active}' onclick='showPlan({i})'>Plan {i + 1}</div>");
+                    }
+                    tabsHtml.Append("</div>");
+                }
+
+                // Build content HTML (all plan cards, only last one visible)
+                var contentHtml = new StringBuilder();
+                for (int i = 0; i < _planHistory.Count; i++)
+                {
+                    var display = i == _planHistory.Count - 1 ? "block" : "none";
+                    contentHtml.Append($"<div style='display:{display}'>{_planHistory[i]}</div>");
+                }
+
+                // Set via direct DOM manipulation — no string escaping issues
+                dynamic tabsEl = doc.getElementById("plan-tabs-container");
+                dynamic contentEl = doc.getElementById("plan-content");
+                dynamic panelEl = doc.getElementById("plan-floating-panel");
+
+                if (tabsEl != null) tabsEl.innerHTML = tabsHtml.ToString();
+                if (contentEl != null) contentEl.innerHTML = contentHtml.ToString();
+
+                // Show the panel and expand it
+                if (panelEl != null)
+                {
+                    panelEl.style.display = "block";
+                    panelEl.className = ""; // Remove collapsed class to auto-expand
+                }
+
+                // Update toggle label with count info
+                dynamic labelEl = doc.getElementById("plan-toggle-label");
+                if (labelEl != null)
+                {
+                    labelEl.innerHTML = $"📋 Task Plan ({_planHistory.Count})";
+                }
+
+                // Adjust chat padding via direct DOM — no execScript
+                dynamic chatLog = doc.getElementById("chat-log");
+                if (chatLog != null && panelEl != null)
+                {
+                    // Panel is expanded (collapsed class removed above), set generous padding
+                    chatLog.style.paddingBottom = "200px";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Error updating floating plan panel: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Update conversation title based on first user message
         /// </summary>
         private async System.Threading.Tasks.Task UpdateConversationTitleAsync(string firstMessage)
@@ -964,6 +1112,9 @@ namespace AICA.ToolWindows
             // Track iteration blocks for structured rendering
             var iterationBlocks = new List<IterationBlock>();
             IterationBlock currentIteration = null;
+
+            // Reset last plan reference for new execution (but preserve _planHistory for persistence)
+            _lastPlan = null;
 
             // Add user message to history BEFORE executing agent
             _llmHistory.Add(ChatMessage.User(userMessage));
@@ -1110,6 +1261,19 @@ namespace AICA.ToolWindows
                                     // After tool result, reset currentIteration so next thinking starts a new block
                                     currentIteration = null;
 
+                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    break;
+
+                                case AgentStepType.PlanUpdate:
+                                    var planHtml = BuildPlanCardHtml(step.Plan, _planHistory.Count);
+                                    if (_planHistory.Count > 0 && IsSamePlanUpdate(step.Plan))
+                                        _planHistory[_planHistory.Count - 1] = planHtml;
+                                    else
+                                    {
+                                        _planHistory.Add(planHtml);
+                                    }
+                                    _lastPlan = step.Plan;
+                                    UpdateFloatingPlanPanel();
                                     RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
@@ -2374,6 +2538,7 @@ namespace AICA.ToolWindows
 <html>
 <head>
     <meta charset=""utf-8"" />
+    <meta http-equiv=""X-UA-Compatible"" content=""IE=edge"" />
     <style>
         :root {{ color-scheme: light dark; }}
         body {{
@@ -2382,7 +2547,7 @@ namespace AICA.ToolWindows
             font-size: 14px; line-height: 1.5;
             background: #1e1e1e; color: #d4d4d4;
         }}
-        .container {{ padding: 12px 16px 20px 16px; max-width: 1100px; margin: 0 auto; }}
+        .container {{ padding: 12px 16px 40px 16px; max-width: 1100px; margin: 0 auto; }}
         @media (prefers-color-scheme: light) {{
             body {{ background: #ffffff; color: #1e1e1e; }}
             pre code {{ background: #f6f8fa; color: #1e1e1e; }}
@@ -2655,29 +2820,205 @@ namespace AICA.ToolWindows
             .tool-call-result {{
                 background: rgba(0,0,0,0.03);
             }}
+            .plan-card {{
+                background: rgba(224,108,117,0.05);
+                border-color: rgba(224,108,117,0.3);
+            }}
+            .plan-header {{
+                background: rgba(224,108,117,0.1);
+            }}
+            .plan-step.completed .plan-step-desc {{
+                color: #666;
+            }}
+            .plan-step.failed .plan-step-desc {{
+                color: #c62828;
+            }}
         }}
+
+        /* Plan Card Styles - Red */
+        .plan-card {{
+            margin: 8px 0;
+            border-left: 3px solid #e06c75;
+            background: rgba(224, 108, 117, 0.08);
+            border-radius: 4px;
+            overflow: hidden;
+        }}
+        .plan-header {{
+            padding: 8px 12px;
+            background: rgba(224, 108, 117, 0.12);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #e06c75;
+        }}
+        .plan-icon {{
+            font-size: 14px;
+        }}
+        .plan-steps {{
+            padding: 4px 0;
+        }}
+        .plan-step {{
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            padding: 4px 12px;
+            font-size: 13px;
+        }}
+        .plan-step-icon {{
+            flex-shrink: 0;
+            width: 18px;
+            text-align: center;
+        }}
+        .plan-step-desc {{
+            color: #d4d4d4;
+        }}
+        .plan-step.completed .plan-step-desc {{
+            color: #888;
+        }}
+        .plan-step.failed .plan-step-desc {{
+            text-decoration: line-through;
+            color: #e57373;
+        }}
+        .plan-progress {{
+            height: 3px;
+            background: #333;
+            margin: 8px 12px;
+            border-radius: 2px;
+        }}
+        .plan-progress-bar {{
+            height: 100%;
+            background: #e06c75;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }}
+
+        /* Floating Plan Panel - fixed at bottom */
+        #plan-floating-panel {{
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            z-index: 1000;
+            background: #1e1e1e;
+            border-top: 2px solid #e06c75;
+        }}
+        #plan-toggle-bar {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 12px;
+            background: #1e1e1e;
+            cursor: pointer;
+            user-select: none;
+            border-bottom: 1px solid #333;
+        }}
+        #plan-toggle-bar:hover {{ background: #252525; }}
+        #plan-toggle-label {{
+            color: #e06c75;
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        #plan-toggle-arrow {{
+            color: #888;
+            font-size: 12px;
+            transition: transform 0.2s ease;
+        }}
+        #plan-floating-panel.collapsed #plan-toggle-arrow {{
+            transform: rotate(180deg);
+        }}
+        #plan-panel-body {{
+            max-height: 40vh;
+            overflow-y: auto;
+        }}
+        #plan-floating-panel.collapsed #plan-panel-body {{
+            display: none;
+        }}
+
+        /* Multi-plan tab bar */
+        .plan-tabs {{ display: flex; gap: 0; border-bottom: 1px solid #333; }}
+        .plan-tab {{
+            padding: 6px 14px; cursor: pointer;
+            font-size: 12px; color: #888;
+            border-bottom: 2px solid transparent;
+            background: transparent; border-top: none; border-left: none; border-right: none;
+        }}
+        .plan-tab:hover {{ color: #ccc; }}
+        .plan-tab.active {{ color: #e06c75; border-bottom-color: #e06c75; }}
     </style>
     <script>
+        /* Suppress script error dialogs */
+        window.onerror = function() {{ return true; }};
+
+        /* IE-safe class helpers — no classList dependency */
+        function hasClass(el, cls) {{
+            if (!el) return false;
+            return (' ' + el.className + ' ').indexOf(' ' + cls + ' ') > -1;
+        }}
+        function addClass(el, cls) {{
+            if (!el) return;
+            if (!hasClass(el, cls)) el.className = (el.className ? el.className + ' ' : '') + cls;
+        }}
+        function removeClass(el, cls) {{
+            if (!el) return;
+            el.className = (' ' + el.className + ' ').replace(' ' + cls + ' ', ' ').replace(/^\s+|\s+$/g, '');
+        }}
+        function toggleClass(el, cls) {{
+            if (hasClass(el, cls)) {{ removeClass(el, cls); }} else {{ addClass(el, cls); }}
+        }}
+
         function provideFeedback(messageId, feedback) {{
-            // Toggle selection
             var btns = document.querySelectorAll('[data-message-id=""' + messageId + '""]');
             var currentFeedback = 'none';
-            btns.forEach(function(btn) {{
-                if (btn.dataset.feedback === feedback) {{
-                    if (btn.classList.contains('selected')) {{
-                        btn.classList.remove('selected');
+            for (var j = 0; j < btns.length; j++) {{
+                var btn = btns[j];
+                if (btn.getAttribute('data-feedback') === feedback) {{
+                    if (hasClass(btn, 'selected')) {{
+                        removeClass(btn, 'selected');
                         currentFeedback = 'none';
                     }} else {{
-                        btn.classList.add('selected');
+                        addClass(btn, 'selected');
                         currentFeedback = feedback;
                     }}
                 }} else {{
-                    btn.classList.remove('selected');
+                    removeClass(btn, 'selected');
                 }}
-            }});
-
-            // Notify host via navigation (will be intercepted)
+            }}
             window.location.href = 'aica://feedback?messageId=' + messageId + '&feedback=' + currentFeedback;
+        }}
+
+        function togglePlanPanel() {{
+            var panel = document.getElementById('plan-floating-panel');
+            if (!panel) return;
+            toggleClass(panel, 'collapsed');
+            adjustChatPadding();
+        }}
+
+        function adjustChatPadding() {{
+            var panel = document.getElementById('plan-floating-panel');
+            var container = document.getElementById('chat-log');
+            if (!container) return;
+            if (!panel || panel.style.display === 'none') {{
+                container.style.paddingBottom = '20px';
+            }} else if (hasClass(panel, 'collapsed')) {{
+                container.style.paddingBottom = '48px';
+            }} else {{
+                setTimeout(function() {{
+                    if (panel) container.style.paddingBottom = (panel.offsetHeight + 8) + 'px';
+                }}, 50);
+            }}
+        }}
+
+        function showPlan(index) {{
+            var tabs = document.querySelectorAll('.plan-tab');
+            var cards = document.querySelectorAll('#plan-content .plan-card');
+            for (var i = 0; i < tabs.length; i++) {{
+                removeClass(tabs[i], 'active');
+            }}
+            for (var i = 0; i < cards.length; i++) {{
+                cards[i].style.display = 'none';
+            }}
+            if (tabs[index]) addClass(tabs[index], 'active');
+            if (cards[index]) cards[index].style.display = 'block';
         }}
 
         function toggleToolCall(toolCallId) {{
@@ -2685,15 +3026,13 @@ namespace AICA.ToolWindows
             var expand = document.getElementById('tool-call-expand-' + toolCallId);
 
             if (body && expand) {{
-                if (body.classList.contains('expanded')) {{
-                    body.classList.remove('expanded');
-                    expand.classList.remove('expanded');
+                if (hasClass(body, 'expanded')) {{
+                    removeClass(body, 'expanded');
+                    removeClass(expand, 'expanded');
                 }} else {{
-                    body.classList.add('expanded');
-                    expand.classList.add('expanded');
+                    addClass(body, 'expanded');
+                    addClass(expand, 'expanded');
                 }}
-            }} else {{
-                console.error('Tool call elements not found for ID: ' + toolCallId);
             }}
         }}
     </script>
@@ -2701,6 +3040,16 @@ namespace AICA.ToolWindows
 <body>
 <div id=""chat-log"" class=""container"">
 {innerContent}
+</div>
+<div id=""plan-floating-panel"" class=""collapsed"" style=""display:none"">
+    <div id=""plan-toggle-bar"" onclick=""togglePlanPanel()"">
+        <span id=""plan-toggle-label"">📋 Task Plan</span>
+        <span id=""plan-toggle-arrow"">▼</span>
+    </div>
+    <div id=""plan-panel-body"">
+        <div id=""plan-tabs-container""></div>
+        <div id=""plan-content""></div>
+    </div>
 </div>
 </body>
 </html>";

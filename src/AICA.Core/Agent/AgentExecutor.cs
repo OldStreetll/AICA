@@ -124,6 +124,12 @@ namespace AICA.Core.Agent
 
             var systemPrompt = builder.Build();
 
+            var isComplexRequest = TaskComplexityAnalyzer.IsComplexRequest(userRequest);
+            if (isComplexRequest)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Complex request detected, will inject planning message");
+            }
+
             // Build conversation history: system prompt + previous messages
             var conversationHistory = new List<ChatMessage>();
 
@@ -144,6 +150,18 @@ namespace AICA.Core.Agent
             {
                 // If no previous messages, add the current user request
                 conversationHistory.Add(ChatMessage.User(userRequest));
+            }
+
+            // Inject planning directive as a user message AFTER the user's request
+            // This is the last thing the LLM sees, making it much harder to ignore
+            // than burying it in a long system prompt.
+            if (isComplexRequest)
+            {
+                conversationHistory.Add(ChatMessage.User(
+                    "[System: Task Planning Required] This is a complex multi-step task. " +
+                    "Before doing anything else, you MUST first call the `update_plan` tool to create a plan with 3+ concrete steps (all status 'pending'). " +
+                    "Do NOT call any other tool before `update_plan`. " +
+                    "After creating the plan, execute each step and call `update_plan` again to update step status (in_progress → completed/failed) as you progress."));
             }
 
             _taskState = new TaskState
@@ -445,7 +463,7 @@ namespace AICA.Core.Agent
 
                 // ── GUARD FIRST: conversational messages yield text normally and exit ──
                 // Must run BEFORE suppression to avoid replacing greetings with indicators.
-                if (_taskState.Iteration == 1 && IsLikelyConversational(userRequest))
+                if (_taskState.Iteration == 1 && !hasToolCalls && IsLikelyConversational(userRequest))
                 {
                     System.Diagnostics.Debug.WriteLine($"[AICA] Conversational message on iteration 1, yielding text and completing (toolCalls={toolCalls.Count})");
                     foreach (var text in pendingTextChunks)
@@ -767,6 +785,7 @@ namespace AICA.Core.Agent
                     }
 
                     if (toolCall.Name != "attempt_completion" && toolCall.Name != "condense"
+                        && toolCall.Name != "update_plan"
                         && !allowDuplicate
                         && !executedToolSignatures.Add(toolSignature))
                     {
@@ -824,7 +843,34 @@ namespace AICA.Core.Agent
                         }
                     }
 
+                    // Log tool result summary for debugging (visible in VS Output → Debug)
+                    if (result.Success && result.Content != null)
+                    {
+                        var contentForLog = result.Content;
+                        var statsIdx = contentForLog.LastIndexOf("[TOOL_EXACT_STATS:");
+                        if (statsIdx >= 0)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Tool '{toolCall.Name}' → {contentForLog.Substring(statsIdx).TrimEnd()}");
+                        }
+                        else
+                        {
+                            var preview = contentForLog.Length > 120 ? contentForLog.Substring(0, 120) + "..." : contentForLog;
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Tool '{toolCall.Name}' → ({contentForLog.Length} chars) {preview}");
+                        }
+                    }
+                    else if (!result.Success)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Tool '{toolCall.Name}' FAILED → {result.Error}");
+                    }
+
                     yield return AgentStep.WithToolResult(toolCall, result);
+
+                    // Yield plan update step when update_plan succeeds with steps
+                    if (toolCall.Name == "update_plan" && result.Success && context.CurrentPlan?.Steps?.Count > 0)
+                    {
+                        _taskState.HasActivePlan = true;
+                        yield return AgentStep.PlanUpdated(context.CurrentPlan);
+                    }
 
                     // Handle attempt_completion result — ends the agent loop
                     if (toolCall.Name == "attempt_completion" && result.Success
@@ -984,15 +1030,31 @@ namespace AICA.Core.Agent
 
                         yield return AgentStep.TextChunk($"\n\n⚠️ *遇到连续错误，正在尝试恢复 ({_taskState.RecoveryPromptCount}/{_taskState.MaxRecoveryPrompts})...*\n\n");
 
-                        conversationHistory.Add(ChatMessage.User(
-                            "⚠️ You have encountered multiple consecutive errors with your current approach. " +
-                            "STOP trying the same approach. Instead, you MUST call the `ask_followup_question` tool " +
-                            "to ask the user for guidance. Summarize what you were trying to do, what errors occurred, " +
-                            "and provide options such as:\n" +
-                            "- Try a different approach\n" +
-                            "- Skip this step and move on\n" +
-                            "- End the task with current progress\n" +
-                            "Do NOT retry the failed operation. Call `ask_followup_question` now."));
+                        if (_taskState.HasActivePlan)
+                        {
+                            // Plan-aware recovery: ask LLM to update the plan instead of asking user
+                            conversationHistory.Add(ChatMessage.User(
+                                "⚠️ You have encountered multiple consecutive errors with your current approach. " +
+                                "STOP trying the same approach. You have an active task plan — call `update_plan` to " +
+                                "mark the failing step as 'failed' and adjust the remaining steps with an alternative strategy. " +
+                                "Consider:\n" +
+                                "- Marking the current step as 'failed'\n" +
+                                "- Adding a new step with a different approach\n" +
+                                "- Skipping to the next feasible step\n" +
+                                "Do NOT retry the failed operation. Call `update_plan` now to adjust your strategy."));
+                        }
+                        else
+                        {
+                            conversationHistory.Add(ChatMessage.User(
+                                "⚠️ You have encountered multiple consecutive errors with your current approach. " +
+                                "STOP trying the same approach. Instead, you MUST call the `ask_followup_question` tool " +
+                                "to ask the user for guidance. Summarize what you were trying to do, what errors occurred, " +
+                                "and provide options such as:\n" +
+                                "- Try a different approach\n" +
+                                "- Skip this step and move on\n" +
+                                "- End the task with current progress\n" +
+                                "Do NOT retry the failed operation. Call `ask_followup_question` now."));
+                        }
                         continue;
                     }
                     else
@@ -1741,7 +1803,7 @@ namespace AICA.Core.Agent
         /// Detect if a user message is likely conversational (greeting, thanks, acknowledgment)
         /// rather than a coding task. Used to prevent proactive tool execution on greetings.
         /// </summary>
-        private static bool IsLikelyConversational(string message)
+        internal static bool IsLikelyConversational(string message)
         {
             if (string.IsNullOrWhiteSpace(message)) return true;
             var trimmed = message.Trim();
@@ -1757,6 +1819,7 @@ namespace AICA.Core.Agent
                 "运行", "执行", "构建", "编译", "测试", "分析", "重构", "调试", "打开", "关闭",
                 "添加", "移除", "更新", "生成", "实现", "修复", "优化", "部署", "安装", "配置",
                 "项目", "目录", "函数", "类", "方法", "变量", "错误", "bug", "报错",
+                "是什么", "怎么", "哪些", "有多少", "在哪", "为什么", "如何",
                 // English
                 "file", "code", "read", "write", "edit", "create", "delete", "search", "find",
                 "run", "exec", "build", "compile", "test", "debug", "refactor", "fix",
@@ -1863,12 +1926,14 @@ namespace AICA.Core.Agent
         public ToolCall ToolCall { get; set; }
         public ToolResult Result { get; set; }
         public string ErrorMessage { get; set; }
+        public TaskPlan Plan { get; set; }
 
         public static AgentStep TextChunk(string text) => new AgentStep { Type = AgentStepType.TextChunk, Text = text };
         public static AgentStep ThinkingChunk(string text) => new AgentStep { Type = AgentStepType.ThinkingChunk, Text = text };
         public static AgentStep ActionStart(string text) => new AgentStep { Type = AgentStepType.ActionStart, Text = text };
         public static AgentStep ToolStart(ToolCall call) => new AgentStep { Type = AgentStepType.ToolStart, ToolCall = call };
         public static AgentStep WithToolResult(ToolCall call, ToolResult result) => new AgentStep { Type = AgentStepType.ToolResult, ToolCall = call, Result = result };
+        public static AgentStep PlanUpdated(TaskPlan plan) => new AgentStep { Type = AgentStepType.PlanUpdate, Plan = plan };
         public static AgentStep Complete(string finalText) => new AgentStep { Type = AgentStepType.Complete, Text = finalText };
         public static AgentStep WithError(string error) => new AgentStep { Type = AgentStepType.Error, ErrorMessage = error };
     }
@@ -1880,6 +1945,7 @@ namespace AICA.Core.Agent
         ActionStart,
         ToolStart,
         ToolResult,
+        PlanUpdate,
         Complete,
         Error
     }

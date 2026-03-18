@@ -60,25 +60,46 @@ namespace AICA.Core.Tools
                 Steps = new List<PlanStep>()
             };
 
-            // Parse plan array
+            // Parse plan array — handle both pre-deserialized List<object> (from ConvertJsonElement)
+            // and raw JSON string representations
             try
             {
-                var planJson = planObj.ToString();
-                var steps = JsonSerializer.Deserialize<List<PlanStepInput>>(planJson, new JsonSerializerOptions
+                if (planObj is List<object> planList)
                 {
-                    PropertyNameCaseInsensitive = true
-                });
-
-                if (steps != null)
-                {
-                    foreach (var step in steps)
+                    // Already deserialized by ConvertJsonElement: List<object> of Dictionary<string,object>
+                    foreach (var item in planList)
                     {
-                        var status = ParseStatus(step.Status);
-                        taskPlan.Steps.Add(new PlanStep
+                        if (item is Dictionary<string, object> stepDict)
                         {
-                            Description = step.Step,
-                            Status = status
-                        });
+                            var stepDesc = stepDict.TryGetValue("step", out var s) ? s?.ToString() : null;
+                            var statusStr = stepDict.TryGetValue("status", out var st) ? st?.ToString() : null;
+                            taskPlan.Steps.Add(new PlanStep
+                            {
+                                Description = stepDesc ?? "",
+                                Status = ParseStatus(statusStr)
+                            });
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback: try to parse as JSON string
+                    var planJson = planObj is JsonElement je ? je.GetRawText() : planObj.ToString();
+                    var steps = JsonSerializer.Deserialize<List<PlanStepInput>>(planJson, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
+                    if (steps != null)
+                    {
+                        foreach (var step in steps)
+                        {
+                            taskPlan.Steps.Add(new PlanStep
+                            {
+                                Description = step.Step,
+                                Status = ParseStatus(step.Status)
+                            });
+                        }
                     }
                 }
             }

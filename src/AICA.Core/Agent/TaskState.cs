@@ -54,6 +54,9 @@ namespace AICA.Core.Agent
         public string LastNarrativeFingerprint { get; set; }
         public int RepeatedNarrativeCount { get; set; }
 
+        // Task planning tracking
+        public bool HasActivePlan { get; set; }
+
         // Context pressure tracking
         public bool HasCondenseHinted { get; set; }
         public int CondenseHintIteration { get; set; }

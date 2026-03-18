@@ -122,6 +122,15 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **For file operations**: Report the exact path, operation performed, and current file state.");
             _builder.AppendLine("- **General rule**: The summary should contain enough detail that the user does not need to re-read raw tool output. Aim for 70%+ coverage of key information.");
             _builder.AppendLine("- **IMPORTANT: Numbers must be accurate.** If you count 45 methods, say 45. Do not round to 48 or 44. If unsure, say 'approximately N' rather than stating an incorrect number.");
+            _builder.AppendLine("- **TOOL_EXACT_STATS**: Tool results include a `[TOOL_EXACT_STATS: ...]` footer with authoritative counts. ALWAYS use these numbers when reporting results. Never estimate or count manually when exact stats are provided.");
+            _builder.AppendLine();
+            _builder.AppendLine("### Task Planning");
+            _builder.AppendLine("- For complex multi-step tasks, use `update_plan` to create a task plan BEFORE executing tools.");
+            _builder.AppendLine("- A good plan has 3-7 concrete, actionable steps.");
+            _builder.AppendLine("- Update step status as you progress: pending → in_progress → completed (or failed).");
+            _builder.AppendLine("- **IMPORTANT**: Before calling `attempt_completion`, ALWAYS call `update_plan` one final time to mark ALL remaining steps as `completed`. The plan card must show 100% progress when the task finishes.");
+            _builder.AppendLine("- If a step fails, update the plan with an adjusted approach rather than retrying blindly.");
+            _builder.AppendLine("- Simple tasks (greetings, single-file reads, simple questions) do NOT need a plan.");
             _builder.AppendLine();
             _builder.AppendLine("### CRITICAL: Handling Instruction Conflicts");
             _builder.AppendLine("- **When you discover that the user's instruction conflicts with the actual situation:**");

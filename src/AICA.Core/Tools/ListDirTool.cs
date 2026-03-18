@@ -132,6 +132,7 @@ namespace AICA.Core.Tools
                     {
                         sb.AppendLine($"\n[Total: {itemCount_total} items listed]");
                     }
+                    sb.AppendLine($"[TOOL_EXACT_STATS: items_listed={itemCount_total}]");
                 }
                 else
                 {
@@ -151,6 +152,7 @@ namespace AICA.Core.Tools
                     }
                     var dirCount = Directory.GetDirectories(fullPath).Length;
                     sb.AppendLine($"\n[Total: {dirCount} directories, {allFiles.Length} files]");
+                    sb.AppendLine($"[TOOL_EXACT_STATS: directories={dirCount}, files={allFiles.Length}, total={dirCount + allFiles.Length}]");
                 }
             }
             catch (System.UnauthorizedAccessException)

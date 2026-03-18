@@ -83,6 +83,7 @@ namespace AICA.Core.Tools
 
             var sb = new StringBuilder();
             int fileCount = 0;
+            int totalDefinitions = 0;
             const int maxFiles = 50;
 
             if (File.Exists(fullPath))
@@ -93,6 +94,8 @@ namespace AICA.Core.Tools
                     sb.AppendLine($"{relativePath}:");
                     foreach (var line in defs)
                         sb.AppendLine($"  {line}");
+                    fileCount = 1;
+                    totalDefinitions = defs.Count;
                 }
                 else
                 {
@@ -101,7 +104,7 @@ namespace AICA.Core.Tools
             }
             else if (Directory.Exists(fullPath))
             {
-                ScanDirectory(fullPath, context.WorkingDirectory, sb, ref fileCount, maxFiles);
+                ScanDirectory(fullPath, context.WorkingDirectory, sb, ref fileCount, ref totalDefinitions, maxFiles);
                 if (fileCount == 0)
                     sb.AppendLine("No supported source files found.");
                 if (fileCount >= maxFiles)
@@ -112,10 +115,12 @@ namespace AICA.Core.Tools
                 return Task.FromResult(ToolResult.Fail($"Path not found: {relativePath}"));
             }
 
+            sb.AppendLine($"\n[TOOL_EXACT_STATS: files_scanned={fileCount}, definitions={totalDefinitions}]");
+
             return Task.FromResult(ToolResult.Ok(sb.ToString()));
         }
 
-        private void ScanDirectory(string dirPath, string workingDir, StringBuilder sb, ref int fileCount, int maxFiles)
+        private void ScanDirectory(string dirPath, string workingDir, StringBuilder sb, ref int fileCount, ref int totalDefinitions, int maxFiles)
         {
             if (fileCount >= maxFiles) return;
 
@@ -140,6 +145,7 @@ namespace AICA.Core.Tools
                             sb.AppendLine($"  {line}");
                         sb.AppendLine();
                         fileCount++;
+                        totalDefinitions += defs.Count;
                     }
                 }
 
@@ -149,7 +155,7 @@ namespace AICA.Core.Tools
                     if (fileCount >= maxFiles) return;
                     var dirName = Path.GetFileName(subDir);
                     if (ExcludedDirs.Contains(dirName)) continue;
-                    ScanDirectory(subDir, workingDir, sb, ref fileCount, maxFiles);
+                    ScanDirectory(subDir, workingDir, sb, ref fileCount, ref totalDefinitions, maxFiles);
                 }
             }
             catch (UnauthorizedAccessException) { }
