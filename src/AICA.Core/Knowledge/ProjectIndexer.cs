@@ -86,15 +86,17 @@ namespace AICA.Core.Knowledge
         private static readonly HashSet<string> SupportedExtensions = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase)
         {
-            ".h", ".hpp", ".hxx", ".cpp", ".cxx", ".c", ".cs"
+            ".h", ".hpp", ".hxx", ".cpp", ".cxx", ".c", ".cppm", ".cs"
         };
 
         private static readonly HashSet<string> SkipDirectories = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase)
         {
-            "build", "cmake", ".git", "bin", "obj", "debug", "release",
+            "build", "cmake", "cmake-build", "cmake-build-debug", "cmake-build-release",
+            ".git", "bin", "obj", "lib", "debug", "release",
             "packages", "node_modules", ".vs", "x64", "x86",
-            "CMakeFiles", "TestResults"
+            "CMakeFiles", "TestResults",
+            "dependencies", "third_party", "thirdparty", "3rdparty", "vendor", "out"
         };
 
         /// <summary>

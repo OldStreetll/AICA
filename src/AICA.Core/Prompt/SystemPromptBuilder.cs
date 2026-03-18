@@ -487,12 +487,19 @@ namespace AICA.Core.Prompt
         /// Add auto-indexed project knowledge context to the prompt.
         /// Knowledge is injected with Normal priority so it can be shed under token pressure.
         /// </summary>
-        public SystemPromptBuilder AddKnowledgeContext(string knowledgeContext)
+        private const int DefaultKnowledgeMaxTokens = 3000;
+
+        public SystemPromptBuilder AddKnowledgeContext(string knowledgeContext, int maxTokens = DefaultKnowledgeMaxTokens)
         {
             if (!string.IsNullOrWhiteSpace(knowledgeContext))
             {
+                var maxChars = maxTokens * 4;
+                var text = knowledgeContext.Length > maxChars
+                    ? knowledgeContext.Substring(0, maxChars) + "\n... (truncated to fit token budget)"
+                    : knowledgeContext;
+
                 _builder.AppendLine();
-                _builder.AppendLine(knowledgeContext);
+                _builder.AppendLine(text);
             }
             return this;
         }
@@ -512,7 +519,15 @@ namespace AICA.Core.Prompt
 
         public string Build()
         {
-            return _builder.ToString();
+            var result = _builder.ToString();
+            var estimatedTokens = result.Length / 4;
+            if (estimatedTokens > 8000)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] WARNING: System prompt is ~{estimatedTokens} tokens. " +
+                    "Consider using BuildWithBudget() for token-pressure management.");
+            }
+            return result;
         }
 
         /// <summary>

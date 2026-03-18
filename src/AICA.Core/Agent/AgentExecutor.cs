@@ -284,6 +284,55 @@ namespace AICA.Core.Agent
                     }
                 }
 
+                // ── Bug 4 fix: Message count-based proactive condense ──
+                // MiniMax-M2.5 function calling reliability degrades at messages ≥ 8.
+                // Auto-condense when message count gets high to keep context short.
+                if (!_taskState.HasAutoCondensed && conversationHistory.Count >= 10)
+                {
+                    int compressibleMessages = conversationHistory
+                        .Count(m => m.Role != ChatRole.System);
+
+                    if (compressibleMessages >= 6)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Message count at {conversationHistory.Count}, performing proactive condense to prevent function calling degradation");
+
+                        var summary = BuildAutoCondenseSummary(conversationHistory);
+                        LastCondenseSummary = summary;
+                        CondenseUpToMessageCount = conversationHistory.Count;
+
+                        var condensed = new List<ChatMessage>();
+                        if (conversationHistory.Count > 0)
+                            condensed.Add(conversationHistory[0]);
+
+                        condensed.Add(ChatMessage.System(
+                            "[Conversation auto-condensed] The following is a summary of all previous work:\n" + summary));
+
+                        for (int i = conversationHistory.Count - 1; i >= 0; i--)
+                        {
+                            if (conversationHistory[i].Role == ChatRole.User)
+                            {
+                                condensed.Add(conversationHistory[i]);
+                                break;
+                            }
+                        }
+
+                        condensed.Add(ChatMessage.System(
+                            "[Post-condense instruction] The conversation was condensed to save context space. " +
+                            "You MUST answer the user's LATEST message based on the summary above. " +
+                            "Do NOT start a new task or replay old tasks unless the user asks."));
+
+                        conversationHistory = condensed;
+                        _taskState.HasAutoCondensed = true;
+
+                        currentTokens = conversationHistory.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                        tokenUsageRatio = (double)currentTokens / Math.Max(1, conversationBudget);
+
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Proactive condense complete, messages reduced to {conversationHistory.Count}, token usage {tokenUsageRatio:P0}");
+                    }
+                }
+
                 // Only force completion in extreme edge cases
                 bool forceCompletion = false;
 
@@ -539,44 +588,54 @@ namespace AICA.Core.Agent
                 }
 
                 // When no tool calls but tools have been used before (iteration > 1),
-                // the model is likely narrating tool results instead of calling attempt_completion.
+                // only suppress if the text is clearly tool-planning narration,
+                // not a valid answer or summary of tool results.
                 if (!suppressText && !hasToolCalls && _taskState.HasEverUsedTools
                     && _taskState.Iteration > 1 && !string.IsNullOrWhiteSpace(assistantResponse))
                 {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] Suppressing post-tool narration text ({assistantResponse.Length} chars), nudging to call attempt_completion");
+                    bool looksLikeToolPlanning = IsToolPlanningText(assistantResponse);
 
-                    // P1-017: detect repeated narration stall — if the LLM keeps outputting
-                    // similar narrative text without calling tools, force-complete
-                    var fingerprint = assistantResponse.Length > 100
-                        ? assistantResponse.Substring(0, 100).Trim().ToLowerInvariant()
-                        : assistantResponse.Trim().ToLowerInvariant();
-
-                    if (fingerprint == _taskState.LastNarrativeFingerprint)
+                    if (looksLikeToolPlanning)
                     {
-                        _taskState.RepeatedNarrativeCount++;
                         System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Repeated narration detected ({_taskState.RepeatedNarrativeCount})");
+                            $"[AICA] Suppressing tool-planning narration ({assistantResponse.Length} chars), nudging to call attempt_completion");
+
+                        // P1-017: detect repeated narration stall
+                        var fingerprint = assistantResponse.Length > 100
+                            ? assistantResponse.Substring(0, 100).Trim().ToLowerInvariant()
+                            : assistantResponse.Trim().ToLowerInvariant();
+
+                        if (fingerprint == _taskState.LastNarrativeFingerprint)
+                        {
+                            _taskState.RepeatedNarrativeCount++;
+                            System.Diagnostics.Debug.WriteLine(
+                                $"[AICA] Repeated narration detected ({_taskState.RepeatedNarrativeCount})");
+                        }
+                        else
+                        {
+                            _taskState.LastNarrativeFingerprint = fingerprint;
+                            _taskState.RepeatedNarrativeCount = 1;
+                        }
+
+                        if (_taskState.RepeatedNarrativeCount >= 2)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[AICA] Narrative stall detected, force-completing");
+                            yield return AgentStep.TextChunk(assistantResponse);
+                            yield return AgentStep.TextChunk(
+                                "\n\n---\n⚠️ **提示**: AI 反复描述要执行的操作但未实际调用工具。任务已停止。\n" +
+                                "可能原因：工具调用被截断或上下文不足。请尝试重新提问。");
+                            yield return AgentStep.Complete(assistantResponse);
+                            yield break;
+                        }
+
+                        pendingThinkingFromSuppression = assistantResponse;
+                        suppressText = true;
                     }
                     else
                     {
-                        _taskState.LastNarrativeFingerprint = fingerprint;
-                        _taskState.RepeatedNarrativeCount = 1;
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Post-tool response looks like valid answer ({assistantResponse.Length} chars), allowing through");
                     }
-
-                    if (_taskState.RepeatedNarrativeCount >= 2)
-                    {
-                        System.Diagnostics.Debug.WriteLine("[AICA] Narrative stall detected, force-completing");
-                        yield return AgentStep.TextChunk(assistantResponse);
-                        yield return AgentStep.TextChunk(
-                            "\n\n---\n⚠️ **提示**: AI 反复描述要执行的操作但未实际调用工具。任务已停止。\n" +
-                            "可能原因：工具调用被截断或上下文不足。请尝试重新提问。");
-                        yield return AgentStep.Complete(assistantResponse);
-                        yield break;
-                    }
-
-                    pendingThinkingFromSuppression = assistantResponse;
-                    suppressText = true;
                 }
 
                 // Even without tool calls, suppress standalone meta-reasoning text
@@ -1592,35 +1651,93 @@ namespace AICA.Core.Agent
             }
 
             // Pattern 3: JSON-style tool calls in text
+            // Uses balanced brace extraction to handle nested JSON objects correctly
             if (result.Count == 0)
             {
-                var jsonPattern = new Regex(
-                    @"\{[^{}]*""name""\s*:\s*""(\w+)""[^{}]*""arguments""\s*:\s*(\{[^}]*\})[^{}]*\}",
-                    RegexOptions.Singleline);
-
-                foreach (Match match in jsonPattern.Matches(text))
+                var jsonBlocks = ExtractBalancedJsonBlocks(text);
+                foreach (var block in jsonBlocks)
                 {
                     try
                     {
-                        var name = match.Groups[1].Value;
-                        var argsJson = match.Groups[2].Value;
-                        var args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(argsJson);
-
-                        if (!string.IsNullOrEmpty(name))
+                        using (var doc = System.Text.Json.JsonDocument.Parse(block))
                         {
-                            result.Add(new ToolCall
+                            var root = doc.RootElement;
+                            if (root.TryGetProperty("name", out var nameProp))
                             {
-                                Id = "text_" + Guid.NewGuid().ToString("N").Substring(0, 8),
-                                Name = name,
-                                Arguments = args ?? new Dictionary<string, object>()
-                            });
+                                var name = nameProp.GetString();
+                                var args = new Dictionary<string, object>();
+
+                                if (root.TryGetProperty("arguments", out var argsProp))
+                                {
+                                    args = System.Text.Json.JsonSerializer
+                                        .Deserialize<Dictionary<string, object>>(
+                                            argsProp.GetRawText());
+                                }
+
+                                if (!string.IsNullOrEmpty(name))
+                                {
+                                    result.Add(new ToolCall
+                                    {
+                                        Id = "text_" + Guid.NewGuid().ToString("N").Substring(0, 8),
+                                        Name = name,
+                                        Arguments = args ?? new Dictionary<string, object>()
+                                    });
+                                }
+                            }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Failed to parse JSON tool call block: {ex.Message}");
+                    }
                 }
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Extract top-level balanced JSON objects from text.
+        /// Uses brace counting to handle nested objects correctly.
+        /// </summary>
+        private static List<string> ExtractBalancedJsonBlocks(string text)
+        {
+            var blocks = new List<string>();
+            var i = 0;
+            while (i < text.Length)
+            {
+                if (text[i] == '{')
+                {
+                    var depth = 0;
+                    var start = i;
+                    var inString = false;
+                    var escape = false;
+
+                    for (; i < text.Length; i++)
+                    {
+                        if (escape) { escape = false; continue; }
+                        if (text[i] == '\\' && inString) { escape = true; continue; }
+                        if (text[i] == '"') { inString = !inString; continue; }
+                        if (inString) continue;
+                        if (text[i] == '{') depth++;
+                        else if (text[i] == '}') { depth--; if (depth == 0) break; }
+                    }
+
+                    if (depth == 0 && i < text.Length)
+                    {
+                        var block = text.Substring(start, i - start + 1);
+                        if (block.Contains("\"name\"") && block.Contains("\"arguments\""))
+                            blocks.Add(block);
+                    }
+                    i++;
+                }
+                else
+                {
+                    i++;
+                }
+            }
+            return blocks;
         }
 
         /// <summary>
@@ -1695,7 +1812,24 @@ namespace AICA.Core.Agent
                 (lowerText.Contains("状态") && lowerText.Contains("文件")) ||
                 (text.Contains("|") && text.Contains("---")); // Markdown table
 
-            return hasExecutionClaim || hasStructuredOutput;
+            // Bug 4 fix: Detect fabricated TOOL_EXACT_STATS in text.
+            // Real EXACT_STATS are injected by tools into tool results, never in assistant text.
+            // If assistant text contains this pattern, the LLM fabricated search results.
+            bool hasFakeExactStats = text.Contains("[TOOL_EXACT_STATS:");
+
+            // Bug 4 fix: Detect fabricated search result patterns
+            // LLM sometimes generates formatted search results without calling grep_search/find_by_name
+            bool hasFakeSearchResults = false;
+            if (lowerText.Contains("match") && lowerText.Contains("file"))
+            {
+                // Pattern: "Found N match(es) in M file(s)" or "N 处匹配" or "N 个文件"
+                hasFakeSearchResults =
+                    System.Text.RegularExpressions.Regex.IsMatch(text, @"[Ff]ound \d+ match") ||
+                    System.Text.RegularExpressions.Regex.IsMatch(text, @"\d+\s*处匹配") ||
+                    System.Text.RegularExpressions.Regex.IsMatch(text, @"匹配.*\d+.*文件");
+            }
+
+            return hasExecutionClaim || hasStructuredOutput || hasFakeExactStats || hasFakeSearchResults;
         }
 
         /// <summary>
@@ -1845,6 +1979,60 @@ namespace AICA.Core.Agent
         /// rather than a coding task. Used to prevent proactive tool execution on greetings.
         /// </summary>
         internal static bool IsLikelyConversational(string message)
+        {
+            // Forwarded below after IsToolPlanningText
+            return IsLikelyConversationalImpl(message);
+        }
+
+        /// <summary>
+        /// Detect if text is primarily about planning future tool usage
+        /// (as opposed to summarizing results or answering the user's question).
+        /// </summary>
+        internal static bool IsToolPlanningText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+
+            var lower = text.ToLowerInvariant().Trim();
+
+            var toolPlanningMarkers = new[]
+            {
+                "i will call", "i will use the", "i'll use the", "i'll call",
+                "let me use the", "let me call", "let me run the",
+                "i need to use the", "i need to call", "i need to run",
+                "i should use the", "i should call",
+                "我将调用", "我将使用工具", "让我调用", "让我使用工具",
+                "我需要调用", "我需要使用工具",
+                "接下来我将调用", "下一步我将使用",
+            };
+
+            foreach (var marker in toolPlanningMarkers)
+            {
+                if (lower.Contains(marker)) return true;
+            }
+
+            // Short text (<150 chars) starting with planning words
+            if (lower.Length < 150)
+            {
+                var planningStarts = new[]
+                {
+                    "i need to check", "i need to search", "i need to read",
+                    "i should check", "i should search", "i should read",
+                    "我需要查看", "我需要搜索", "我需要读取", "我需要检查",
+                    "我应该查看", "我应该搜索",
+                };
+                foreach (var start in planningStarts)
+                {
+                    if (lower.StartsWith(start)) return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Implementation of IsLikelyConversational.
+        /// </summary>
+        private static bool IsLikelyConversationalImpl(string message)
         {
             if (string.IsNullOrWhiteSpace(message)) return true;
             var trimmed = message.Trim();

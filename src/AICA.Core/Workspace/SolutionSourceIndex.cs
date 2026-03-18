@@ -279,15 +279,20 @@ namespace AICA.Core.Workspace
             if (FileNameIndex.TryGetValue(fileName, out var matches))
             {
                 // If the request includes directory components, try to match suffix
+                // Bug 6 fix: Use path-segment-aware matching instead of simple EndsWith
+                // to prevent "nonexistent/fake/path.cpp" from matching "Foundation/src/Path.cpp"
                 if (normalized.Contains("\\"))
                 {
+                    var suffixWithSep = "\\" + normalized;
                     var suffixMatch = matches
-                        .FirstOrDefault(m => m.EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
-                    if (suffixMatch != null)
-                        return suffixMatch;
+                        .FirstOrDefault(m => m.EndsWith(suffixWithSep, StringComparison.OrdinalIgnoreCase));
+                    // Bug 6 fix: If request has directory components but no suffix match,
+                    // return null instead of falling through to single-match shortcut.
+                    // The directory components indicate a specific path that doesn't exist.
+                    return suffixMatch; // null if no match found
                 }
 
-                // Single match → return directly
+                // Single match (filename-only request, no directory components) → return directly
                 if (matches.Count == 1)
                     return matches[0];
 

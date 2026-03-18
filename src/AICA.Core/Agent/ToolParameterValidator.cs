@@ -54,8 +54,14 @@ namespace AICA.Core.Agent
                 if (value is T typedValue)
                     return typedValue;
 
-                // Try Convert.ChangeType
-                return (T)Convert.ChangeType(value, typeof(T));
+                // Handle Nullable<T>: unwrap to underlying type before conversion
+                var targetType = typeof(T);
+                var underlyingType = Nullable.GetUnderlyingType(targetType);
+                if (underlyingType != null)
+                    return (T)Convert.ChangeType(value, underlyingType);
+
+                // Try Convert.ChangeType for non-nullable types
+                return (T)Convert.ChangeType(value, targetType);
             }
             catch (Exception ex) when (!(ex is ToolParameterException))
             {
@@ -102,12 +108,21 @@ namespace AICA.Core.Agent
                 if (value is T typedValue)
                     return typedValue;
 
-                // Try Convert.ChangeType
-                return (T)Convert.ChangeType(value, typeof(T));
+                // Handle Nullable<T>: unwrap to underlying type before conversion
+                var targetType = typeof(T);
+                var underlyingType = Nullable.GetUnderlyingType(targetType);
+                if (underlyingType != null)
+                    return (T)Convert.ChangeType(value, underlyingType);
+
+                // Try Convert.ChangeType for non-nullable types
+                return (T)Convert.ChangeType(value, targetType);
             }
-            catch
+            catch (Exception ex)
             {
-                // Return default on conversion failure for optional parameters
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] Optional parameter '{paramName}' conversion failed: " +
+                    $"cannot convert '{value}' ({value?.GetType().Name}) to {typeof(T).Name}. " +
+                    $"Using default: {defaultValue}. Error: {ex.Message}");
                 return defaultValue;
             }
         }

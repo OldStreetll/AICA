@@ -77,27 +77,33 @@ namespace AICA.Core.Prompt
 
         private static readonly string[] ReasoningStartPatterns = new[]
         {
-            // English planning/narration
-            "i need to", "i should", "i will", "i'm going to", "let me",
-            "i'll ", "first, i", "next, i", "then, i", "now i",
-            "i will call", "i will use", "let me check", "let me analyze",
-            "let me read", "let me search", "let me look", "let me summarize",
-            // Chinese planning/narration
-            "我需要", "我应该", "我将", "让我", "我来",
-            "首先，", "接下来，", "然后，", "现在我",
-            "我将调用", "我将使用", "让我总结",
+            // English planning/narration — only tool-specific patterns
+            "i need to check", "i need to search", "i need to read", "i need to look",
+            "i should check", "i should search", "i should read", "i should look",
+            "i will call", "i will use the", "i'm going to use",
+            "let me check", "let me search", "let me look at",
+            "let me read the", "let me find", "let me analyze the",
+            "i'll use the", "i'll check", "i'll search",
+            "first, i need to", "first, i should", "first, let me check",
+            "next, i need to", "next, i should",
+            // Chinese planning/narration — only tool-specific
+            "我需要查看", "我需要搜索", "我需要读取", "我需要检查",
+            "我应该查看", "我应该搜索",
+            "我将调用", "我将使用工具",
+            "让我查看", "让我搜索", "让我检查", "让我读取",
+            "首先，我需要", "首先，让我查",
+            "接下来，我需要", "接下来，让我",
         };
 
         private static readonly string[] MetaReasoningPatterns = new[]
         {
-            "the user is asking", "the user wants", "the user is requesting",
-            "the user might", "the user may", "the user probably",
-            "looking at the instructions", "actually,", "wait,",
-            "i think the user", "let me re-read",
-            "oh wait", "i see -", "this might be",
-            // Chinese meta
-            "用户想要", "用户在问", "用户在请求", "用户可能",
-            "看起来用户", "实际上，", "等等，",
+            "the user is asking me to", "the user wants me to", "the user is requesting",
+            "the user might want", "the user may want",
+            "looking at the instructions",
+            "i think the user wants me to", "let me re-read the",
+            // Chinese meta — only clear meta-reasoning
+            "用户想要我", "用户在请求我", "用户可能想让我",
+            "看起来用户想",
         };
 
         #endregion
@@ -192,6 +198,10 @@ namespace AICA.Core.Prompt
 
             // Skip if text is primarily a code block
             if (text.TrimStart().StartsWith("```"))
+                return false;
+
+            // Substantial text (>300 chars) is likely a real answer, not internal reasoning
+            if (text.Trim().Length > 300)
                 return false;
 
             var lower = text.ToLowerInvariant().Trim();

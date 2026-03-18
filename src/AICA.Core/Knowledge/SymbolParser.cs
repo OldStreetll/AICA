@@ -65,6 +65,7 @@ namespace AICA.Core.Knowledge
                 case ".cpp":
                 case ".cxx":
                 case ".c":
+                case ".cppm":
                     return ParseCpp(filePath, content);
                 case ".cs":
                     return ParseCSharp(filePath, content);
@@ -450,16 +451,24 @@ namespace AICA.Core.Knowledge
 
                 if (char.IsUpper(ch) && current.Length > 0)
                 {
-                    var prevIsLower = char.IsLower(identifier[i - 1]);
-                    // Also detect acronym-to-word transition: "HTTPRequest" → "HTTP", "Request"
+                    var prev = identifier[i - 1];
+                    var prevIsLower = char.IsLower(prev);
+                    var prevIsDigit = char.IsDigit(prev);
                     var nextIsLower = (i + 1 < identifier.Length) && char.IsLower(identifier[i + 1]);
-                    var prevIsUpper = char.IsUpper(identifier[i - 1]);
+                    var prevIsUpper = char.IsUpper(prev);
 
-                    if (prevIsLower || (prevIsUpper && nextIsLower))
+                    if (prevIsLower || prevIsDigit || (prevIsUpper && nextIsLower))
                     {
                         parts.Add(current.ToString());
                         current.Clear();
                     }
+                }
+                // Split on digit→letter transition (non-uppercase handled above)
+                else if (char.IsLetter(ch) && !char.IsUpper(ch) && current.Length > 0
+                    && char.IsDigit(identifier[i - 1]))
+                {
+                    parts.Add(current.ToString());
+                    current.Clear();
                 }
 
                 current.Append(ch);

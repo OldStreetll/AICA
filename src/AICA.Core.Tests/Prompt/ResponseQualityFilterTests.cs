@@ -167,36 +167,54 @@ namespace AICA.Core.Tests.Prompt
         #region IsInternalReasoning Tests
 
         [Theory]
-        [InlineData("I need to read the file first.")]
-        [InlineData("I should check the directory.")]
-        [InlineData("Let me analyze this code.")]
-        [InlineData("I'm going to search for the function.")]
+        [InlineData("I need to check the file first.")]
+        [InlineData("I should search the directory.")]
+        [InlineData("Let me check this code.")]
+        [InlineData("I'm going to use the read_file tool.")]
         [InlineData("I will call read_file now.")]
-        [InlineData("First, I'll check the project structure.")]
+        [InlineData("First, I need to check the project structure.")]
         public void IsInternalReasoning_EnglishPatterns_ReturnsTrue(string text)
         {
             Assert.True(ResponseQualityFilter.IsInternalReasoning(text));
         }
 
         [Theory]
-        [InlineData("我需要先读取文件。")]
-        [InlineData("我应该检查目录。")]
-        [InlineData("让我分析这段代码。")]
+        [InlineData("我需要读取这个文件。")]
+        [InlineData("我应该查看目录结构。")]
+        [InlineData("让我搜索这段代码。")]
         [InlineData("我将调用 read_file。")]
-        [InlineData("首先，我来查看项目结构。")]
-        [InlineData("接下来，我要搜索函数。")]
+        [InlineData("首先，我需要查看项目结构。")]
+        [InlineData("接下来，我需要搜索函数。")]
         public void IsInternalReasoning_ChinesePatterns_ReturnsTrue(string text)
         {
             Assert.True(ResponseQualityFilter.IsInternalReasoning(text));
         }
 
         [Theory]
-        [InlineData("The user is asking about the API.")]
+        [InlineData("The user is asking me to find the API.")]
         [InlineData("Looking at the instructions, I see...")]
-        [InlineData("Actually, the code already handles this.")]
+        [InlineData("The user wants me to analyze this.")]
         public void IsInternalReasoning_MetaPatterns_ReturnsTrue(string text)
         {
             Assert.True(ResponseQualityFilter.IsInternalReasoning(text));
+        }
+
+        [Theory]
+        [InlineData("Let me explain the Poco::Logger class. It provides...")]
+        [InlineData("让我为你介绍这个类的功能。Poco::Logger 是...")]
+        [InlineData("首先，Poco::Logger 继承自 Channel 接口...")]
+        [InlineData("Actually, the Logger class uses the strategy pattern...")]
+        [InlineData("The user is asking about the API.")]
+        public void IsInternalReasoning_ValidAnswers_ReturnsFalse(string text)
+        {
+            Assert.False(ResponseQualityFilter.IsInternalReasoning(text));
+        }
+
+        [Fact]
+        public void IsInternalReasoning_LongText_ReturnsFalse()
+        {
+            var longAnswer = "I need to check " + new string('x', 350);
+            Assert.False(ResponseQualityFilter.IsInternalReasoning(longAnswer));
         }
 
         [Fact]
@@ -258,9 +276,9 @@ namespace AICA.Core.Tests.Prompt
             var result = ResponseQualityFilter.MicroCompactToolResults(messages, keepRecent: 2);
 
             // Old results (tc1, tc2, tc3) should be compacted
-            Assert.Contains("[Previous tool result]", result[2].Content);
-            Assert.Contains("[Previous tool result]", result[3].Content);
-            Assert.Contains("[Previous tool result]", result[4].Content);
+            Assert.Contains("[Previous tool result", result[2].Content);
+            Assert.Contains("[Previous tool result", result[3].Content);
+            Assert.Contains("[Previous tool result", result[4].Content);
             // Recent results (tc4, tc5) should be preserved
             Assert.Equal("recent result 4", result[5].Content);
             Assert.Equal("recent result 5", result[6].Content);
@@ -284,7 +302,7 @@ namespace AICA.Core.Tests.Prompt
             Assert.Equal("system prompt", result[0].Content);
             Assert.Equal("request", result[1].Content);
             Assert.Equal("response", result[2].Content);
-            Assert.Contains("[Previous tool result]", result[3].Content);
+            Assert.Contains("[Previous tool result", result[3].Content);
             Assert.Equal("another request", result[4].Content);
             Assert.Equal("recent tool result", result[5].Content);
         }

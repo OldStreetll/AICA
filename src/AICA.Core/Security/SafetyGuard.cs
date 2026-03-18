@@ -33,7 +33,12 @@ namespace AICA.Core.Security
                 options?.CommandWhitelist ?? new[] { "dotnet", "npm", "git", "nuget" },
                 StringComparer.OrdinalIgnoreCase);
             _commandBlacklist = new HashSet<string>(
-                options?.CommandBlacklist ?? new[] { "rm", "del", "format", "shutdown", "restart" },
+                options?.CommandBlacklist ?? new[]
+                {
+                    "rm", "del", "format", "shutdown", "restart",
+                    "rmdir", "rd",
+                    "Remove-Item", "Stop-Process", "Stop-Service"
+                },
                 StringComparer.OrdinalIgnoreCase);
             _ignorePatterns = new List<Regex>();
 
@@ -166,6 +171,12 @@ namespace AICA.Core.Security
                 return CommandCheckResult.Denied($"Command '{executable}' is blacklisted");
             }
 
+            // Check for dangerous argument patterns in the full command
+            if (IsDangerousCommandPattern(command))
+            {
+                return CommandCheckResult.Denied($"Command contains dangerous pattern: '{command}'");
+            }
+
             // Check whitelist
             if (_commandWhitelist.Contains(executable))
             {
@@ -174,6 +185,20 @@ namespace AICA.Core.Security
 
             // Unknown command - requires approval
             return CommandCheckResult.RequiresApproval($"Command '{executable}' requires user approval");
+        }
+
+        private static bool IsDangerousCommandPattern(string command)
+        {
+            var lower = command.ToLowerInvariant();
+            if (lower.Contains("remove-item") && lower.Contains("-recurse"))
+                return true;
+            if (lower.Contains("rmdir") && lower.Contains("/s"))
+                return true;
+            if ((lower.Contains(" rd ") || lower.StartsWith("rd ")) && lower.Contains("/s"))
+                return true;
+            if (Regex.IsMatch(lower, @"format\s+[a-z]:"))
+                return true;
+            return false;
         }
 
         private string NormalizePath(string path)

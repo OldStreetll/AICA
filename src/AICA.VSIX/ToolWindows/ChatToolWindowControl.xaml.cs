@@ -280,7 +280,13 @@ namespace AICA.ToolWindows
             _currentConversationId = null;
             _globalIterationCounter = 0;
             _globalToolCallCounter = 0;
+            _planCreatedThisExecution = false;
+            // Bug 7 fix v3: First update content, then actively hide the panel.
+            // UpdateFloatingPlanPanel will call HideFloatingPlanPanel since _planHistory is empty.
             UpdateBrowserContent(string.Empty);
+            // Schedule panel hide after browser content is loaded
+            Dispatcher.BeginInvoke(new Action(() => HideFloatingPlanPanel()),
+                System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
         /// <summary>
@@ -878,6 +884,7 @@ namespace AICA.ToolWindows
         /// Plan card history for floating panel display (persists across tasks)
         /// </summary>
         private readonly List<string> _planHistory = new List<string>();
+        private bool _planCreatedThisExecution = false;
         private AICA.Core.Agent.TaskPlan _lastPlan;
 
         /// <summary>
@@ -940,16 +947,41 @@ namespace AICA.ToolWindows
             if (_lastPlan == null || newPlan?.Steps == null || _lastPlan.Steps == null)
                 return false;
 
-            if (newPlan.Steps.Count != _lastPlan.Steps.Count)
-                return false;
-
-            for (int i = 0; i < newPlan.Steps.Count; i++)
+            // Bug 5 fix: Consider it the same plan if majority of step descriptions overlap,
+            // even if step count changed (e.g., after condense LLM may adjust steps).
+            // This prevents creating a new Plan tab for minor plan adjustments.
+            if (newPlan.Steps.Count == _lastPlan.Steps.Count)
             {
-                if (newPlan.Steps[i].Description != _lastPlan.Steps[i].Description)
-                    return false;
+                // Same step count: check if descriptions match
+                bool allMatch = true;
+                for (int i = 0; i < newPlan.Steps.Count; i++)
+                {
+                    if (newPlan.Steps[i].Description != _lastPlan.Steps[i].Description)
+                    {
+                        allMatch = false;
+                        break;
+                    }
+                }
+                if (allMatch) return true;
             }
 
-            return true;
+            // Different step count: check if there's significant overlap (>50% of steps match)
+            var oldDescriptions = new HashSet<string>(
+                _lastPlan.Steps.Select(s => s.Description),
+                StringComparer.OrdinalIgnoreCase);
+            int matchCount = newPlan.Steps.Count(s => oldDescriptions.Contains(s.Description));
+            double overlapRatio = (double)matchCount / Math.Max(1, Math.Max(newPlan.Steps.Count, _lastPlan.Steps.Count));
+
+            return overlapRatio > 0.5;
+        }
+
+        /// <summary>
+        /// Hide the floating plan panel (Bug 7 fix: clear on new conversation)
+        /// </summary>
+        private void HideFloatingPlanPanel()
+        {
+            // Bug 7: Use the existing HidePlanPanel which has the correct element ID
+            HidePlanPanel();
         }
 
         /// <summary>
@@ -957,7 +989,11 @@ namespace AICA.ToolWindows
         /// </summary>
         private void UpdateFloatingPlanPanel()
         {
-            if (_planHistory.Count == 0) return;
+            if (_planHistory.Count == 0)
+            {
+                HideFloatingPlanPanel();
+                return;
+            }
 
             try
             {
@@ -1151,6 +1187,7 @@ namespace AICA.ToolWindows
 
             // Reset last plan reference for new execution (but preserve _planHistory for persistence)
             _lastPlan = null;
+            _planCreatedThisExecution = false;
 
             // Add user message to history BEFORE executing agent
             _llmHistory.Add(ChatMessage.User(userMessage));
@@ -1302,11 +1339,23 @@ namespace AICA.ToolWindows
 
                                 case AgentStepType.PlanUpdate:
                                     var planHtml = BuildPlanCardHtml(step.Plan, _planHistory.Count);
-                                    if (_planHistory.Count > 0 && IsSamePlanUpdate(step.Plan))
+                                    // Bug 5 fix v2: Within one user message execution, always update
+                                    // the same plan entry instead of creating new tabs.
+                                    if (_planCreatedThisExecution && _planHistory.Count > 0)
+                                    {
+                                        // Update existing plan (same execution)
                                         _planHistory[_planHistory.Count - 1] = planHtml;
+                                    }
+                                    else if (_planHistory.Count > 0 && IsSamePlanUpdate(step.Plan))
+                                    {
+                                        // Update existing plan (cross-execution, same steps)
+                                        _planHistory[_planHistory.Count - 1] = planHtml;
+                                    }
                                     else
                                     {
+                                        // Truly new plan (new user message)
                                         _planHistory.Add(planHtml);
+                                        _planCreatedThisExecution = true;
                                     }
                                     _lastPlan = step.Plan;
                                     UpdateFloatingPlanPanel();
@@ -1314,6 +1363,20 @@ namespace AICA.ToolWindows
                                     break;
 
                                 case AgentStepType.Complete:
+                                    // Auto-complete all plan steps when task completes
+                                    if (_lastPlan != null && _planHistory.Count > 0)
+                                    {
+                                        foreach (var ps in _lastPlan.Steps)
+                                        {
+                                            if (ps.Status != AICA.Core.Agent.PlanStepStatus.Completed
+                                                && ps.Status != AICA.Core.Agent.PlanStepStatus.Failed)
+                                                ps.Status = AICA.Core.Agent.PlanStepStatus.Completed;
+                                        }
+                                        var completedPlanHtml = BuildPlanCardHtml(_lastPlan, _planHistory.Count - 1);
+                                        _planHistory[_planHistory.Count - 1] = completedPlanHtml;
+                                        UpdateFloatingPlanPanel();
+                                    }
+
                                     CompletionResult completionResult = null;
                                     if (!string.IsNullOrEmpty(step.Text) && step.Text.StartsWith("TASK_COMPLETED:"))
                                     {

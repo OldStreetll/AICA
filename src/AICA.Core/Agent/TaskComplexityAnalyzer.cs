@@ -1,11 +1,22 @@
+using System;
 using System.Text.RegularExpressions;
 
 namespace AICA.Core.Agent
 {
     /// <summary>
+    /// Three-tier task complexity classification.
+    /// </summary>
+    public enum TaskComplexity
+    {
+        Simple,
+        Medium,
+        Complex
+    }
+
+    /// <summary>
     /// Heuristic analyzer that determines whether a user request is complex enough
-    /// to warrant automatic task planning. False positives are harmless (LLM just
-    /// creates a plan); false negatives degrade to existing single-step behavior.
+    /// to warrant automatic task planning. Uses a scoring system to classify requests
+    /// into Simple, Medium, or Complex tiers.
     /// </summary>
     public static class TaskComplexityAnalyzer
     {
@@ -29,38 +40,40 @@ namespace AICA.Core.Agent
             @"\b(?:read|write|create|delete|analyze|fix|test|search|implement|refactor|build|deploy|migrate|compare|optimize)\b|读取|写入|创建|删除|分析|修复|测试|搜索|实现|重构|构建|部署|迁移|比较|优化",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        private const int LengthThreshold = 80;
-        private const int MinActionVerbCount = 2;
+        /// <summary>
+        /// Classify request complexity using a scoring system.
+        /// </summary>
+        public static TaskComplexity AnalyzeComplexity(string userRequest)
+        {
+            if (string.IsNullOrWhiteSpace(userRequest))
+                return TaskComplexity.Simple;
+
+            var score = 0;
+
+            // Strong signals → +3 each
+            if (ChineseComplexPattern.IsMatch(userRequest)) score += 3;
+            if (EnglishComplexPattern.IsMatch(userRequest)) score += 3;
+            if (NumberedStepsPattern.IsMatch(userRequest)) score += 3;
+
+            // Moderate signals → +1 each (capped at 3)
+            var verbCount = ActionVerbPattern.Matches(userRequest).Count;
+            score += Math.Min(verbCount, 3);
+
+            // Length signal (scaled thresholds)
+            if (userRequest.Length > 200) score += 2;
+            else if (userRequest.Length > 120) score += 1;
+
+            if (score >= 4) return TaskComplexity.Complex;
+            if (score >= 2) return TaskComplexity.Medium;
+            return TaskComplexity.Simple;
+        }
 
         /// <summary>
-        /// Determines whether a user request is complex enough to require task planning.
+        /// Backward-compatible wrapper. Returns true only for Complex requests.
         /// </summary>
         public static bool IsComplexRequest(string userRequest)
         {
-            if (string.IsNullOrWhiteSpace(userRequest))
-                return false;
-
-            // Rule 1: Chinese multi-step keywords
-            if (ChineseComplexPattern.IsMatch(userRequest))
-                return true;
-
-            // Rule 2: English multi-step keywords
-            if (EnglishComplexPattern.IsMatch(userRequest))
-                return true;
-
-            // Rule 3: Explicit numbered steps or step markers
-            if (NumberedStepsPattern.IsMatch(userRequest))
-                return true;
-
-            // Rule 4: Long request with multiple action verbs
-            if (userRequest.Length > LengthThreshold)
-            {
-                var verbMatches = ActionVerbPattern.Matches(userRequest);
-                if (verbMatches.Count >= MinActionVerbCount)
-                    return true;
-            }
-
-            return false;
+            return AnalyzeComplexity(userRequest) == TaskComplexity.Complex;
         }
     }
 }
