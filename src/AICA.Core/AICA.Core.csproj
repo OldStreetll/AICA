@@ -9,9 +9,24 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!-- Suppress warnings for SK experimental APIs (VectorStore, Agents) -->
+    <NoWarn>$(NoWarn);SKEXP0001;SKEXP0010;SKEXP0020;SKEXP0110</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AICA.Core.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="9.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+    <!-- Semantic Kernel - Phase 0: Core + Chat Completion -->
+    <!-- pinned to 1.54.0: last version whose full dependency chain requires System.Text.Json >= 8.0.5 -->
+    <!-- VS2022 hosts extensions in .NET Framework 4.8 with System.Text.Json 8.x already loaded; -->
+    <!-- SK >= 1.55 pulls System.Text.Json 10.x which causes runtime MissingMethodException -->
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.54.0" />
   </ItemGroup>
 
 </Project>

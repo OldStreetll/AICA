@@ -474,6 +474,20 @@ namespace AICA.Core.Prompt
             return this;
         }
 
+        /// <summary>
+        /// Add auto-indexed project knowledge context to the prompt.
+        /// Knowledge is injected with Normal priority so it can be shed under token pressure.
+        /// </summary>
+        public SystemPromptBuilder AddKnowledgeContext(string knowledgeContext)
+        {
+            if (!string.IsNullOrWhiteSpace(knowledgeContext))
+            {
+                _builder.AppendLine();
+                _builder.AppendLine(knowledgeContext);
+            }
+            return this;
+        }
+
         public SystemPromptBuilder AddGuidelines()
         {
             _builder.AppendLine("## Guidelines");
@@ -560,11 +574,25 @@ namespace AICA.Core.Prompt
             }
             sections.Add(new PromptSection("workspace", wsSb.ToString(), ContextPriority.High, 2));
 
+            // Project knowledge — normal priority, can be shed under token pressure
+            var knowledgeStore = Knowledge.ProjectKnowledgeStore.Instance;
+            if (knowledgeStore.HasIndex)
+            {
+                var provider = knowledgeStore.CreateProvider();
+                if (provider != null)
+                {
+                    var summary = provider.GetIndexSummary();
+                    sections.Add(new PromptSection("project_knowledge",
+                        "## Project Knowledge (auto-indexed)\n" + summary,
+                        ContextPriority.Normal, 3));
+                }
+            }
+
             // Custom instructions — high priority, user-specified
             if (!string.IsNullOrWhiteSpace(customInstructions))
             {
                 sections.Add(new PromptSection("custom_instructions",
-                    "## Custom Instructions\n" + customInstructions, ContextPriority.High, 3));
+                    "## Custom Instructions\n" + customInstructions, ContextPriority.High, 4));
             }
 
             return sections;

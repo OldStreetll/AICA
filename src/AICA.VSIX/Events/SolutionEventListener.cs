@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell.Interop;
+using AICA.Core.Knowledge;
 using AICA.Core.Rules;
 
 namespace AICA.VSIX.Events
@@ -75,6 +76,25 @@ namespace AICA.VSIX.Events
                     System.Diagnostics.Debug.WriteLine(
                         $"[AICA] FAILED: {result.Error}");
                 }
+
+                // 后台构建项目知识索引
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var indexer = new ProjectIndexer();
+                        var index = await indexer.IndexDirectoryAsync(solutionPath);
+                        ProjectKnowledgeStore.Instance.SetIndex(index);
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Project indexed: {index.FileCount} files, " +
+                            $"{index.Symbols.Count} symbols in {index.IndexDuration.TotalSeconds:F1}s");
+                    }
+                    catch (Exception indexEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Indexing failed: {indexEx.Message}");
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -123,6 +143,8 @@ namespace AICA.VSIX.Events
 
         public int OnAfterCloseSolution(object pUnkReserved)
         {
+            ProjectKnowledgeStore.Instance.Clear();
+            System.Diagnostics.Debug.WriteLine("[AICA] Project knowledge index cleared (solution closed)");
             return Microsoft.VisualStudio.VSConstants.S_OK;
         }
 

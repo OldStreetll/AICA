@@ -10,6 +10,7 @@ using AICA.Core.LLM;
 using AICA.Core.Prompt;
 using AICA.Core.Rules;
 using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
 
 namespace AICA.Core.Agent
 {
@@ -24,6 +25,7 @@ namespace AICA.Core.Agent
         private readonly int _maxIterations;
         private readonly int _maxTokenBudget;
         private readonly string _customInstructions;
+        private readonly Kernel _kernel;
         private TaskState _taskState;
 
         /// <summary>
@@ -49,7 +51,8 @@ namespace AICA.Core.Agent
             ILogger<AgentExecutor> logger = null,
             int maxIterations = 50,
             int maxTokenBudget = 32000,
-            string customInstructions = null)
+            string customInstructions = null,
+            Kernel kernel = null)
         {
             _llmClient = llmClient ?? throw new ArgumentNullException(nameof(llmClient));
             _toolDispatcher = toolDispatcher ?? throw new ArgumentNullException(nameof(toolDispatcher));
@@ -57,7 +60,13 @@ namespace AICA.Core.Agent
             _maxIterations = maxIterations;
             _maxTokenBudget = maxTokenBudget;
             _customInstructions = customInstructions;
+            _kernel = kernel;
         }
+
+        /// <summary>
+        /// The SK Kernel instance (if configured). Available for future SK-based strategies.
+        /// </summary>
+        public Kernel Kernel => _kernel;
 
         /// <summary>
         /// Execute a user request through the Agent loop
@@ -100,6 +109,18 @@ namespace AICA.Core.Agent
 
             // Add custom instructions
             builder.AddCustomInstructions(_customInstructions);
+
+            // Add project knowledge context if available
+            var knowledgeStore = Knowledge.ProjectKnowledgeStore.Instance;
+            if (knowledgeStore.HasIndex)
+            {
+                var provider = knowledgeStore.CreateProvider();
+                if (provider != null)
+                {
+                    var knowledgeContext = provider.RetrieveContext(userRequest);
+                    builder.AddKnowledgeContext(knowledgeContext);
+                }
+            }
 
             var systemPrompt = builder.Build();
 
