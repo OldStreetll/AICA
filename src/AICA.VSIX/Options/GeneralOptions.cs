@@ -53,6 +53,12 @@ namespace AICA.Options
         [DefaultValue(0)]
         public int TopK { get; set; } = 0;
 
+        [Category("LLM Configuration")]
+        [DisplayName("Bypass Proxy")]
+        [Description("Bypass system/global proxy for LLM requests (enable this if you use Clash/VPN and need direct connection to the LLM endpoint)")]
+        [DefaultValue(false)]
+        public bool BypassProxy { get; set; } = false;
+
         [Category("Agent Configuration")]
         [DisplayName("Enable Tool Calling")]
         [Description("Enable AI to use tools (read/write files, etc.). Requires LLM server to support function calling. Disable if you see 'tool choice' errors.")]

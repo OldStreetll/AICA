@@ -49,5 +49,10 @@ namespace AICA.Core.LLM
         /// Enable streaming responses
         /// </summary>
         public bool Stream { get; set; } = true;
+
+        /// <summary>
+        /// When true, bypass system/global proxy and connect directly
+        /// </summary>
+        public bool BypassProxy { get; set; } = false;
     }
 }

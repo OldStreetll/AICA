@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
@@ -30,7 +31,10 @@ namespace AICA.Core.LLM
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _logger = logger;
 
-            _httpClient = new HttpClient
+            var handler = options.BypassProxy
+                ? new HttpClientHandler { UseProxy = false }
+                : new HttpClientHandler();
+            _httpClient = new HttpClient(handler)
             {
                 // Use infinite timeout for streaming; we control cancellation via CancellationToken
                 Timeout = options.Stream ? System.Threading.Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(options.TimeoutSeconds)

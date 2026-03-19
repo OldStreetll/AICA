@@ -326,7 +326,8 @@ namespace AICA.ToolWindows
                 TopP = options.TopP,
                 TopK = options.TopK,
                 TimeoutSeconds = options.RequestTimeoutSeconds,
-                Stream = true
+                Stream = true,
+                BypassProxy = options.BypassProxy
             };
             _llmClient = new OpenAIClient(clientOptions);
 
