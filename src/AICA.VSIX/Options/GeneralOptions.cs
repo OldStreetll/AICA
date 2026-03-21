@@ -32,8 +32,14 @@ namespace AICA.Options
         [Category("LLM Configuration")]
         [DisplayName("Max Tokens")]
         [Description("Maximum number of tokens for LLM response")]
-        [DefaultValue(4096)]
-        public int MaxTokens { get; set; } = 4096;
+        [DefaultValue(16384)]
+        public int MaxTokens { get; set; } = 16384;
+
+        [Category("LLM Configuration")]
+        [DisplayName("Context Window Size")]
+        [Description("模型的上下文窗口大小（输入+输出 token 总和）。MiniMax-M2.5=192000, GPT-4=128000, Claude=200000")]
+        [DefaultValue(196608)]
+        public int ContextWindowSize { get; set; } = 196608;
 
         [Category("LLM Configuration")]
         [DisplayName("Temperature")]

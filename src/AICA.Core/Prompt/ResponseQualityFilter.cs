@@ -7,12 +7,87 @@ using AICA.Core.LLM;
 namespace AICA.Core.Prompt
 {
     /// <summary>
-    /// Stateless response quality filter that post-processes LLM output
+    /// Response quality filter that post-processes LLM output
     /// to remove verbosity, internal reasoning leaks, and conversational filler.
+    /// Supports configuration via ResponseQualityConfig for per-model customization.
     /// Inspired by Cline's forbidden phrases and learn-claude-code's micro-compaction.
     /// </summary>
     public static class ResponseQualityFilter
     {
+        /// <summary>
+        /// Active configuration. Defaults to hardcoded patterns.
+        /// Call Configure() to override with custom/model-specific patterns.
+        /// </summary>
+        private static ResponseQualityConfig _config;
+
+        /// <summary>
+        /// Compiled regex patterns from config, lazily built on first use after Configure().
+        /// </summary>
+        private static Regex[] _configuredTrailingPatterns;
+        private static (string phrase, bool isCaseSensitive)[] _configuredOpeners;
+        private static string[] _configuredReasoningPatterns;
+        private static string[] _configuredMetaPatterns;
+
+        /// <summary>
+        /// Apply a custom configuration. Call this at startup or when switching models.
+        /// Pass null to reset to defaults.
+        /// </summary>
+        public static void Configure(ResponseQualityConfig config)
+        {
+            _config = config;
+            // Invalidate compiled patterns
+            _configuredTrailingPatterns = null;
+            _configuredOpeners = null;
+            _configuredReasoningPatterns = null;
+            _configuredMetaPatterns = null;
+        }
+
+        /// <summary>
+        /// Get the active forbidden openers (from config or defaults).
+        /// </summary>
+        private static (string phrase, bool isCaseSensitive)[] GetForbiddenOpeners()
+        {
+            if (_config == null) return ForbiddenOpeners;
+            if (_configuredOpeners != null) return _configuredOpeners;
+            _configuredOpeners = _config.ForbiddenOpeners
+                .ConvertAll(e => (e.Phrase, e.IsCaseSensitive)).ToArray();
+            return _configuredOpeners;
+        }
+
+        /// <summary>
+        /// Get the active trailing offer patterns (from config or defaults).
+        /// </summary>
+        private static Regex[] GetTrailingOfferPatterns()
+        {
+            if (_config == null) return TrailingOfferPatterns;
+            if (_configuredTrailingPatterns != null) return _configuredTrailingPatterns;
+            _configuredTrailingPatterns = _config.TrailingOfferPatterns
+                .ConvertAll(p => new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled)).ToArray();
+            return _configuredTrailingPatterns;
+        }
+
+        /// <summary>
+        /// Get the active reasoning start patterns (from config or defaults).
+        /// </summary>
+        private static string[] GetReasoningStartPatterns()
+        {
+            if (_config == null) return ReasoningStartPatterns;
+            if (_configuredReasoningPatterns != null) return _configuredReasoningPatterns;
+            _configuredReasoningPatterns = _config.ReasoningStartPatterns.ToArray();
+            return _configuredReasoningPatterns;
+        }
+
+        /// <summary>
+        /// Get the active meta-reasoning patterns (from config or defaults).
+        /// </summary>
+        private static string[] GetMetaReasoningPatterns()
+        {
+            if (_config == null) return MetaReasoningPatterns;
+            if (_configuredMetaPatterns != null) return _configuredMetaPatterns;
+            _configuredMetaPatterns = _config.MetaReasoningPatterns.ToArray();
+            return _configuredMetaPatterns;
+        }
+
         private static readonly Regex ThinkingTagRegex = new Regex(
             @"<thinking>(.*?)</thinking>",
             RegexOptions.Singleline | RegexOptions.Compiled);
@@ -69,6 +144,10 @@ namespace AICA.Core.Prompt
             new Regex(@"(?<=[。！？])\s*还需要我.*[?？]?\s*$", RegexOptions.Compiled),
             new Regex(@"(?<=[。！？])\s*要我继续.*[?？]?\s*$", RegexOptions.Compiled),
             new Regex(@"(?<=[。！？])\s*需要其他帮助.*[?？]?\s*$", RegexOptions.Compiled),
+            // BF-02 fix: catch "请问...帮助/需要" trailing offers
+            new Regex(@"\s*请问.*帮助.*[?？]?\s*$", RegexOptions.Compiled),
+            new Regex(@"\s*请问.*需要.*[?？]?\s*$", RegexOptions.Compiled),
+            new Regex(@"\s*请问有什么.*[?？]?\s*$", RegexOptions.Compiled),
         };
 
         #endregion
@@ -88,11 +167,15 @@ namespace AICA.Core.Prompt
             "next, i need to", "next, i should",
             // Chinese planning/narration — only tool-specific
             "我需要查看", "我需要搜索", "我需要读取", "我需要检查",
+            "我需要使用", "我需要调用",
             "我应该查看", "我应该搜索",
             "我将调用", "我将使用工具",
             "让我查看", "让我搜索", "让我检查", "让我读取",
             "首先，我需要", "首先，让我查",
             "接下来，我需要", "接下来，让我",
+            // BF-02 fix: catch LLM reasoning about user intent
+            "用户要求", "用户只是", "用户用", "用户在",
+            "用户想要", "用户希望",
         };
 
         private static readonly string[] MetaReasoningPatterns = new[]
@@ -104,6 +187,19 @@ namespace AICA.Core.Prompt
             // Chinese meta — only clear meta-reasoning
             "用户想要我", "用户在请求我", "用户可能想让我",
             "看起来用户想",
+            // BF-02/TC-01 fix: catch LLM meta-reasoning about instructions/rules
+            "let me re-read", "let me reconsider", "let me think about",
+            "according to the rules", "based on the instructions",
+            "根据规则", "让我重新阅读", "让我重新考虑",
+            "the user asked me to read", "the user asked me to search",
+            "the user asked me to analyze", "the user asked me to check",
+            "the user is asking me to",
+            // BF-02 iterative fix: catch MiniMax self-referential meta statements
+            "我不需要调用", "不需要执行", "不需要调用任何工具",
+            "由于这是一个简单", "这是一个简单的问候",
+            "根据自定义指令", "根据我的指导",
+            "i should respond", "i don't need to call", "i should not call",
+            "since this is a simple", "no tools are needed",
         };
 
         #endregion
@@ -148,7 +244,7 @@ namespace AICA.Core.Prompt
             if (string.IsNullOrEmpty(text))
                 return text;
 
-            foreach (var (phrase, isCaseSensitive) in ForbiddenOpeners)
+            foreach (var (phrase, isCaseSensitive) in GetForbiddenOpeners())
             {
                 var comparison = isCaseSensitive
                     ? StringComparison.Ordinal
@@ -172,7 +268,7 @@ namespace AICA.Core.Prompt
             if (string.IsNullOrEmpty(text))
                 return text;
 
-            foreach (var pattern in TrailingOfferPatterns)
+            foreach (var pattern in GetTrailingOfferPatterns())
             {
                 var match = pattern.Match(text);
                 if (match.Success && match.Index > 0)
@@ -190,6 +286,11 @@ namespace AICA.Core.Prompt
         /// <summary>
         /// Detect if text is internal reasoning/planning that should not be shown to the user.
         /// Returns false for code blocks and legitimate user-facing content.
+        ///
+        /// BF-02 fix: MiniMax model outputs reasoning and answer in one text block (no thinking tags).
+        /// The old 300-char threshold skipped all pattern checks for mixed content.
+        /// New approach: check the BEGINNING of text for reasoning patterns regardless of total length.
+        /// Meta-reasoning (Contains match) still uses length threshold to avoid false positives.
         /// </summary>
         public static bool IsInternalReasoning(string text)
         {
@@ -200,27 +301,119 @@ namespace AICA.Core.Prompt
             if (text.TrimStart().StartsWith("```"))
                 return false;
 
-            // Substantial text (>300 chars) is likely a real answer, not internal reasoning
-            if (text.Trim().Length > 300)
-                return false;
+            var trimmed = text.Trim();
+            var lower = trimmed.ToLowerInvariant();
 
-            var lower = text.ToLowerInvariant().Trim();
+            // Check if text STARTS with reasoning patterns.
+            // Only check the first 200 chars for StartsWith — this works regardless of total length,
+            // catching MiniMax's mixed reasoning+answer output.
+            var checkPortion = lower.Length > 200 ? lower.Substring(0, 200) : lower;
 
-            // Check if starts with reasoning patterns
-            foreach (var pattern in ReasoningStartPatterns)
+            foreach (var pattern in GetReasoningStartPatterns())
             {
-                if (lower.StartsWith(pattern))
+                if (checkPortion.StartsWith(pattern))
                     return true;
             }
 
-            // Check for meta-reasoning patterns anywhere in text
-            foreach (var pattern in MetaReasoningPatterns)
+            // Meta-reasoning patterns use Contains — keep the length threshold
+            // to avoid false positives on long legitimate answers.
+            if (trimmed.Length <= 500)
             {
-                if (lower.Contains(pattern))
-                    return true;
+                foreach (var pattern in GetMetaReasoningPatterns())
+                {
+                    if (lower.Contains(pattern))
+                        return true;
+                }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Apply all quality filters to a response: strip reasoning prefix, forbidden openers, trailing offers.
+        /// Single entry point for the conversational message path in AgentExecutor.
+        /// </summary>
+        public static string ApplyAllFilters(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            var result = text;
+
+            // Strip reasoning prefix if detected (MiniMax mixed output)
+            if (IsInternalReasoning(result))
+            {
+                result = StripReasoningPrefix(result);
+            }
+
+            result = StripForbiddenOpeners(result);
+            result = StripTrailingOffers(result);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Strip internal reasoning prefix from mixed reasoning+answer text.
+        /// MiniMax may output multiple reasoning paragraphs before the actual answer.
+        /// Iteratively strips paragraphs that start with reasoning patterns until
+        /// a non-reasoning paragraph is found.
+        /// </summary>
+        public static string StripReasoningPrefix(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            var current = text.Trim();
+            var maxStrips = 5; // Safety limit
+
+            for (int i = 0; i < maxStrips; i++)
+            {
+                var splitIdx = current.IndexOf("\n\n");
+                if (splitIdx <= 0 || splitIdx >= current.Length - 20)
+                    break;
+
+                var afterSplit = current.Substring(splitIdx).Trim();
+                if (string.IsNullOrWhiteSpace(afterSplit))
+                    break;
+
+                // Check if the remaining text still starts with reasoning
+                var lower = afterSplit.ToLowerInvariant();
+                var checkPortion = lower.Length > 200 ? lower.Substring(0, 200) : lower;
+
+                bool stillReasoning = false;
+
+                // Check reasoning-start patterns (StartsWith)
+                foreach (var pattern in GetReasoningStartPatterns())
+                {
+                    if (checkPortion.StartsWith(pattern))
+                    {
+                        stillReasoning = true;
+                        break;
+                    }
+                }
+
+                // Also check meta-reasoning patterns (Contains) for short paragraphs
+                // MiniMax often has multiple meta-reasoning paragraphs before the answer
+                if (!stillReasoning && afterSplit.Length < 200)
+                {
+                    foreach (var pattern in GetMetaReasoningPatterns())
+                    {
+                        if (lower.Contains(pattern))
+                        {
+                            stillReasoning = true;
+                            break;
+                        }
+                    }
+                }
+
+                current = afterSplit;
+
+                // If the remaining text is NOT reasoning, we found the answer
+                if (!stillReasoning)
+                    break;
+            }
+
+            return current;
         }
 
         /// <summary>

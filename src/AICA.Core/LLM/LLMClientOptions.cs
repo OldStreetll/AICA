@@ -23,7 +23,14 @@ namespace AICA.Core.LLM
         /// <summary>
         /// Maximum tokens for response
         /// </summary>
-        public int MaxTokens { get; set; } = 4096;
+        public int MaxTokens { get; set; } = 16384;
+
+        /// <summary>
+        /// Total context window size of the model (input + output tokens).
+        /// This is independent of MaxTokens which only controls output length.
+        /// Common values: MiniMax-M2.5=192000, GPT-4=128000, Claude=200000
+        /// </summary>
+        public int ContextWindowSize { get; set; } = 196608;
 
         /// <summary>
         /// Temperature for response randomness (0.0 - 2.0)

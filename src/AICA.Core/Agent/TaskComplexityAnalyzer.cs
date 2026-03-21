@@ -40,6 +40,18 @@ namespace AICA.Core.Agent
             @"\b(?:read|write|create|delete|analyze|fix|test|search|implement|refactor|build|deploy|migrate|compare|optimize)\b|读取|写入|创建|删除|分析|修复|测试|搜索|实现|重构|构建|部署|迁移|比较|优化",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // Context menu request templates (Explain/Refactor/GenerateTest)
+        // These are single-purpose tasks that should NOT be classified as Complex
+        // even though they contain long code snippets.
+        private static readonly Regex ContextMenuPattern = new Regex(
+            @"^请用中文(?:详细)?(?:解释|重构|.*生成.*(?:单元)?测试)|^(?:explain|refactor|generate\s*tests?\s*for)\s",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Code block pattern — content after ``` should not affect complexity scoring
+        private static readonly Regex CodeBlockPattern = new Regex(
+            @"```[\s\S]*$",
+            RegexOptions.Compiled);
+
         /// <summary>
         /// Classify request complexity using a scoring system.
         /// </summary>
@@ -48,24 +60,42 @@ namespace AICA.Core.Agent
             if (string.IsNullOrWhiteSpace(userRequest))
                 return TaskComplexity.Simple;
 
+            // BF-06 fix: Context menu requests (Explain/Refactor/GenerateTest) are
+            // single-purpose tasks. They should be Medium at most, not Complex.
+            bool isContextMenuRequest = ContextMenuPattern.IsMatch(userRequest.TrimStart());
+
+            // Strip code blocks before scoring — embedded code should not inflate
+            // the action verb count or length signal.
+            var textForScoring = CodeBlockPattern.Replace(userRequest, "").Trim();
+
             var score = 0;
 
             // Strong signals → +3 each
-            if (ChineseComplexPattern.IsMatch(userRequest)) score += 3;
-            if (EnglishComplexPattern.IsMatch(userRequest)) score += 3;
-            if (NumberedStepsPattern.IsMatch(userRequest)) score += 3;
+            if (ChineseComplexPattern.IsMatch(textForScoring)) score += 3;
+            if (EnglishComplexPattern.IsMatch(textForScoring)) score += 3;
+            if (NumberedStepsPattern.IsMatch(textForScoring)) score += 3;
 
             // Moderate signals → +1 each (capped at 3)
-            var verbCount = ActionVerbPattern.Matches(userRequest).Count;
+            var verbCount = ActionVerbPattern.Matches(textForScoring).Count;
             score += Math.Min(verbCount, 3);
 
-            // Length signal (scaled thresholds)
-            if (userRequest.Length > 200) score += 2;
-            else if (userRequest.Length > 120) score += 1;
+            // Length signal (scaled thresholds) — use stripped text
+            if (textForScoring.Length > 200) score += 2;
+            else if (textForScoring.Length > 120) score += 1;
 
-            if (score >= 4) return TaskComplexity.Complex;
-            if (score >= 2) return TaskComplexity.Medium;
-            return TaskComplexity.Simple;
+            var complexity = TaskComplexity.Simple;
+            if (score >= 4) complexity = TaskComplexity.Complex;
+            else if (score >= 2) complexity = TaskComplexity.Medium;
+
+            // Cap context menu requests at Medium — they are never truly Complex
+            if (isContextMenuRequest && complexity == TaskComplexity.Complex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] Context menu request capped from Complex to Medium (score={score})");
+                complexity = TaskComplexity.Medium;
+            }
+
+            return complexity;
         }
 
         /// <summary>

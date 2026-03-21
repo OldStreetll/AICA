@@ -109,6 +109,10 @@ namespace AICA.Core.Agent
             if (!string.IsNullOrEmpty(error.Details))
                 message += $"\n\nDetails: {error.Details}";
 
+            // Use SecurityDenied for access denied errors so dedup logic won't allow retry
+            if (error.Type == ToolErrorType.AccessDenied)
+                return ToolResult.SecurityDenied(message);
+
             return ToolResult.Fail(message);
         }
 

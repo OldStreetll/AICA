@@ -66,7 +66,7 @@ namespace AICA.Core.Tools
                 relativePath = ".";
 
             if (!context.IsPathAccessible(relativePath))
-                return Task.FromResult(ToolResult.Fail($"Access denied: {relativePath}"));
+                return Task.FromResult(ToolResult.SecurityDenied($"Access denied: {relativePath}"));
 
             string fullPath;
             if (relativePath == "." || relativePath == "./")

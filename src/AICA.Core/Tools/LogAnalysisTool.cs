@@ -85,12 +85,12 @@ namespace AICA.Core.Tools
             if (resolvedPath != null)
             {
                 if (!context.IsPathAccessible(resolvedPath))
-                    return ToolResult.Fail($"Access denied: {path}");
+                    return ToolResult.SecurityDenied($"Access denied: {path}");
             }
             else
             {
                 if (!context.IsPathAccessible(path))
-                    return ToolResult.Fail($"Access denied: {path}");
+                    return ToolResult.SecurityDenied($"Access denied: {path}");
 
                 if (!await context.FileExistsAsync(path, ct))
                     return ToolResult.Fail($"File not found: {path}");

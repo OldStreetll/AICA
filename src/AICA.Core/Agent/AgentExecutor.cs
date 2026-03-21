@@ -84,11 +84,14 @@ namespace AICA.Core.Agent
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             // Build system prompt with tool definitions
-            var toolDefinitions = _toolDispatcher.GetToolDefinitions();
+            // R3: Dynamic tool selection — reduce token usage for simple requests
+            var allToolDefinitions = _toolDispatcher.GetToolDefinitions().ToList();
+            var complexity = TaskComplexityAnalyzer.AnalyzeComplexity(userRequest);
+            var toolDefinitions = DynamicToolSelector.SelectTools(userRequest, complexity, allToolDefinitions);
             var builder = new SystemPromptBuilder()
                 .AddTools(toolDefinitions)
                 .AddToolDescriptions()
-                .AddRules()
+                .AddComplexityGuidance(complexity)
                 .AddWorkspaceContext(
                     context?.WorkingDirectory ?? Environment.CurrentDirectory,
                     context?.SourceRoots);
@@ -124,7 +127,7 @@ namespace AICA.Core.Agent
 
             var systemPrompt = builder.Build();
 
-            var isComplexRequest = TaskComplexityAnalyzer.IsComplexRequest(userRequest);
+            var isComplexRequest = complexity == TaskComplexity.Complex;
             if (isComplexRequest)
             {
                 System.Diagnostics.Debug.WriteLine($"[AICA] Complex request detected, will inject planning message");
@@ -236,7 +239,7 @@ namespace AICA.Core.Agent
                             System.Diagnostics.Debug.WriteLine(
                                 $"[AICA] Token usage at {tokenUsageRatio:P0}, LLM ignored condense hint, performing auto-condense");
 
-                            var summary = BuildAutoCondenseSummary(conversationHistory);
+                            var summary = TokenBudgetManager.BuildAutoCondenseSummary(conversationHistory);
 
                             LastCondenseSummary = summary;
                             CondenseUpToMessageCount = conversationHistory.Count;
@@ -284,45 +287,24 @@ namespace AICA.Core.Agent
                     }
                 }
 
-                // ── Bug 4 fix: Message count-based proactive condense ──
-                // MiniMax-M2.5 function calling reliability degrades at messages ≥ 8.
-                // Auto-condense when message count gets high to keep context short.
-                if (!_taskState.HasAutoCondensed && conversationHistory.Count >= 10)
+                // ── Message count-based proactive condense ──
+                // Delegates to TokenBudgetManager for threshold constants and history building.
+                if (!_taskState.HasAutoCondensed
+                    && conversationHistory.Count >= TokenBudgetManager.ComputeCondenseMessageThreshold(_maxTokenBudget))
                 {
                     int compressibleMessages = conversationHistory
                         .Count(m => m.Role != ChatRole.System);
 
-                    if (compressibleMessages >= 6)
+                    if (compressibleMessages >= TokenBudgetManager.ComputeCondenseCompressibleThreshold(_maxTokenBudget))
                     {
                         System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Message count at {conversationHistory.Count}, performing proactive condense to prevent function calling degradation");
+                            $"[AICA] Message count at {conversationHistory.Count}, performing proactive condense");
 
-                        var summary = BuildAutoCondenseSummary(conversationHistory);
+                        var summary = TokenBudgetManager.BuildAutoCondenseSummary(conversationHistory);
                         LastCondenseSummary = summary;
                         CondenseUpToMessageCount = conversationHistory.Count;
 
-                        var condensed = new List<ChatMessage>();
-                        if (conversationHistory.Count > 0)
-                            condensed.Add(conversationHistory[0]);
-
-                        condensed.Add(ChatMessage.System(
-                            "[Conversation auto-condensed] The following is a summary of all previous work:\n" + summary));
-
-                        for (int i = conversationHistory.Count - 1; i >= 0; i--)
-                        {
-                            if (conversationHistory[i].Role == ChatRole.User)
-                            {
-                                condensed.Add(conversationHistory[i]);
-                                break;
-                            }
-                        }
-
-                        condensed.Add(ChatMessage.System(
-                            "[Post-condense instruction] The conversation was condensed to save context space. " +
-                            "You MUST answer the user's LATEST message based on the summary above. " +
-                            "Do NOT start a new task or replay old tasks unless the user asks."));
-
-                        conversationHistory = condensed;
+                        conversationHistory = TokenBudgetManager.BuildCondensedHistory(conversationHistory, summary);
                         _taskState.HasAutoCondensed = true;
 
                         currentTokens = conversationHistory.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
@@ -497,14 +479,14 @@ namespace AICA.Core.Agent
                 // Skip text-based parsing in force-completion mode (LLM should only produce text)
                 if (!forceCompletion && toolCalls.Count == 0 && !string.IsNullOrEmpty(assistantResponse))
                 {
-                    var parsedCalls = TryParseTextToolCalls(assistantResponse);
+                    var parsedCalls = ToolCallProcessor.TryParseTextToolCalls(assistantResponse);
                     if (parsedCalls.Count > 0)
                     {
                         System.Diagnostics.Debug.WriteLine($"[AICA] Parsed {parsedCalls.Count} text-based tool call(s) from response");
                         toolCalls.AddRange(parsedCalls);
 
                         // Remove the text-based tool call syntax from assistantResponse to avoid leaking it
-                        assistantResponse = RemoveTextToolCallSyntax(assistantResponse);
+                        assistantResponse = ToolCallProcessor.RemoveTextToolCallSyntax(assistantResponse);
                     }
                 }
 
@@ -515,12 +497,20 @@ namespace AICA.Core.Agent
                 if (_taskState.Iteration == 1 && !hasToolCalls && IsLikelyConversational(userRequest))
                 {
                     System.Diagnostics.Debug.WriteLine($"[AICA] Conversational message on iteration 1, yielding text and completing (toolCalls={toolCalls.Count})");
-                    foreach (var text in pendingTextChunks)
-                        yield return AgentStep.TextChunk(text);
 
-                    var convMsg = ChatMessage.Assistant(assistantResponse ?? string.Empty);
+                    // BF-02 fix: Apply quality filters even on conversational path.
+                    // Delegates to ResponseQualityFilter.ApplyAllFilters() per R1 principle.
+                    var filteredResponse = Prompt.ResponseQualityFilter.ApplyAllFilters(assistantResponse ?? string.Empty);
+                    if (filteredResponse != assistantResponse)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Conversational response filtered ({(assistantResponse?.Length ?? 0) - filteredResponse.Length} chars removed)");
+                    }
+
+                    yield return AgentStep.TextChunk(filteredResponse);
+
+                    var convMsg = ChatMessage.Assistant(filteredResponse);
                     conversationHistory.Add(convMsg);
-                    yield return AgentStep.Complete(assistantResponse);
+                    yield return AgentStep.Complete(filteredResponse);
                     yield break;
                 }
 
@@ -722,7 +712,7 @@ namespace AICA.Core.Agent
 
                     // ── Hallucination detection ──
                     // Detect if the model claims to have executed a tool but didn't actually call it
-                    if (!string.IsNullOrWhiteSpace(assistantResponse) && DetectToolExecutionClaim(assistantResponse))
+                    if (!string.IsNullOrWhiteSpace(assistantResponse) && ResponseProcessor.DetectToolExecutionClaim(assistantResponse))
                     {
                         _taskState.HallucinationCount++;
                         System.Diagnostics.Debug.WriteLine(
@@ -758,7 +748,7 @@ namespace AICA.Core.Agent
                     }
 
                     // ── Conflict detection: modification request but already compliant ──
-                    if (DetectModificationConflict(userRequest, assistantResponse, conversationHistory, _taskState))
+                    if (CompletionHandler.DetectModificationConflict(userRequest, assistantResponse, conversationHistory, _taskState))
                     {
                         System.Diagnostics.Debug.WriteLine($"[AICA] Detected modification conflict - user requested modification but code is already compliant");
 
@@ -808,7 +798,7 @@ namespace AICA.Core.Agent
 
                 // ── Conflict detection: prevent direct completion when modification was requested but nothing needs changing ──
                 if (toolCalls.Any(tc => tc.Name == "attempt_completion") &&
-                    DetectModificationConflict(userRequest, assistantResponse, conversationHistory, _taskState))
+                    CompletionHandler.DetectModificationConflict(userRequest, assistantResponse, conversationHistory, _taskState))
                 {
                     System.Diagnostics.Debug.WriteLine("[AICA] Preventing direct attempt_completion because modification conflict requires ask_followup_question");
 
@@ -823,7 +813,7 @@ namespace AICA.Core.Agent
 
                 // ── Parameter augmentation ──
                 // Auto-add missing parameters when user intent is clear but LLM omitted them
-                AugmentToolCallParameters(toolCalls, userRequest);
+                ToolCallProcessor.AugmentToolCallParameters(toolCalls, userRequest);
 
                 System.Diagnostics.Debug.WriteLine($"[AICA] Executing {toolCalls.Count} tool calls");
 
@@ -833,13 +823,13 @@ namespace AICA.Core.Agent
                     // ── Duplicate tool call detection ──
                     // Skip tools that were already called with identical arguments
                     // (exempt attempt_completion, condense, and read_file after edit)
-                    var toolSignature = GetToolCallSignature(toolCall);
+                    var toolSignature = ToolCallProcessor.GetToolCallSignature(toolCall);
 
                     // Allow read_file to be called again only if that specific file was edited
                     bool allowDuplicate = false;
                     if (toolCall.Name == "read_file" && _taskState.EditedFiles.Count > 0)
                     {
-                        var readPath = ExtractPathFromToolCall(toolCall);
+                        var readPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
                         if (readPath != null && _taskState.EditedFiles.Contains(readPath.TrimEnd('/', '\\')))
                         {
                             allowDuplicate = true;
@@ -857,14 +847,14 @@ namespace AICA.Core.Agent
                             $"Duplicate call: {toolCall.Name} was already called with these arguments. " +
                             $"The result is in your conversation history — use it directly. " +
                             $"Do NOT retry this call.");
-                        yield return AgentStep.ActionStart(BuildActionDescription(toolCall));
+                        yield return AgentStep.ActionStart(ToolCallProcessor.BuildActionDescription(toolCall));
                         yield return AgentStep.ToolStart(toolCall);
                         yield return AgentStep.WithToolResult(toolCall, dupResult);
                         conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, $"Error: {dupResult.Error}"));
                         continue;
                     }
 
-                    yield return AgentStep.ActionStart(BuildActionDescription(toolCall));
+                    yield return AgentStep.ActionStart(ToolCallProcessor.BuildActionDescription(toolCall));
                     yield return AgentStep.ToolStart(toolCall);
 
                     _taskState.LastToolName = toolCall.Name;
@@ -893,7 +883,7 @@ namespace AICA.Core.Agent
                         // Track file edits by path
                         if (toolCall.Name == "edit" || toolCall.Name == "write_to_file")
                         {
-                            var editPath = ExtractPathFromToolCall(toolCall);
+                            var editPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
                             if (!string.IsNullOrEmpty(editPath))
                                 _taskState.EditedFiles.Add(editPath.TrimEnd('/', '\\'));
                         }
@@ -903,6 +893,18 @@ namespace AICA.Core.Agent
                         if (_taskState.RecordToolFailure(ToolFailureKind.Blocking))
                         {
                             System.Diagnostics.Debug.WriteLine($"[AICA] Consecutive mistake threshold reached ({_taskState.ConsecutiveBlockingFailureCount})");
+                        }
+
+                        // R5: Failed tool calls should not block retry with identical arguments.
+                        // BUT: Security denials are permanent — use ToolCallProcessor.ShouldAllowRetry().
+                        if (ToolCallProcessor.ShouldAllowRetry(result))
+                        {
+                            executedToolSignatures.Remove(toolSignature);
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Tool '{toolCall.Name}' failed, removed from dedup set (allows retry)");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Tool '{toolCall.Name}' security denied, keeping in dedup set (no retry)");
                         }
                     }
 
@@ -954,7 +956,7 @@ namespace AICA.Core.Agent
                         // P1-013 fix: Augment LLM summary with programmatic tool call history
                         // The LLM's summary may omit tool call details. Programmatic extraction ensures
                         // tool call records survive condense regardless of LLM summary quality.
-                        var toolHistory = ExtractToolCallHistory(conversationHistory);
+                        var toolHistory = TokenBudgetManager.ExtractToolCallHistory(conversationHistory);
                         if (!string.IsNullOrEmpty(toolHistory))
                         {
                             summary = summary + "\n\n" + toolHistory;
@@ -1145,981 +1147,59 @@ namespace AICA.Core.Agent
         /// Build a summary from conversation history for auto-condense.
         /// Extracts key information without relying on LLM.
         /// </summary>
-        private static string BuildAutoCondenseSummary(List<ChatMessage> conversationHistory)
-        {
-            var sb = new System.Text.StringBuilder();
-            var filesRead = new List<string>();
-            var filesCreated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var filesModified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var toolsUsed = new HashSet<string>();
-            var userRequests = new List<string>();
-            var keyFindings = new List<string>();
-            var searchResults = new List<string>();
-
-            // Pass 1: Extract structured info from tool calls and results
-            for (int i = 0; i < conversationHistory.Count; i++)
-            {
-                var msg = conversationHistory[i];
-
-                if (msg.Role == ChatRole.User && msg.Content != null
-                    && !msg.Content.StartsWith("[System") && !msg.Content.StartsWith("[CONTEXT_PRESSURE")
-                    && !msg.Content.StartsWith("⚠️") && !msg.Content.StartsWith("Context was condensed"))
-                {
-                    var text = msg.Content.Length > 300 ? msg.Content.Substring(0, 300) + "..." : msg.Content;
-                    userRequests.Add(text);
-                }
-                else if (msg.Role == ChatRole.Assistant && msg.ToolCalls != null)
-                {
-                    foreach (var tc in msg.ToolCalls)
-                    {
-                        var toolName = tc.Function?.Name ?? "unknown";
-                        toolsUsed.Add(toolName);
-
-                        // Extract file paths from tool call arguments (JSON string)
-                        var argsJson = tc.Function?.Arguments;
-                        if (!string.IsNullOrEmpty(argsJson))
-                        {
-                            var args = TryParseJsonArgs(argsJson);
-                            if (args != null)
-                            {
-                                string filePath = null;
-                                if (args.TryGetValue("path", out var pathVal) && pathVal != null)
-                                    filePath = pathVal;
-                                else if (args.TryGetValue("file_path", out var fpVal) && fpVal != null)
-                                    filePath = fpVal;
-
-                                if (!string.IsNullOrEmpty(filePath))
-                                {
-                                    switch (toolName)
-                                    {
-                                        case "read_file":
-                                            filesRead.Add(filePath);
-                                            break;
-                                        case "write_to_file":
-                                            filesCreated.Add(filePath);
-                                            break;
-                                        case "edit":
-                                            filesModified.Add(filePath);
-                                            break;
-                                    }
-                                }
-
-                                // Extract search queries for context
-                                if (toolName == "grep_search" && args.TryGetValue("query", out var queryVal) && queryVal != null)
-                                {
-                                    var searchPath = args.TryGetValue("path", out var sp) && sp != null ? sp : "workspace";
-                                    searchResults.Add($"grep '{queryVal}' in {searchPath}");
-                                }
-                                if (toolName == "find_by_name" && args.TryGetValue("pattern", out var patVal) && patVal != null)
-                                {
-                                    searchResults.Add($"find '{patVal}'");
-                                }
-                            }
-                        }
-                    }
-                }
-                else if (msg.Role == ChatRole.Tool && msg.Content != null && !msg.Content.StartsWith("Error:"))
-                {
-                    // Extract meaningful findings from successful tool results (keep more context)
-                    if (msg.Content.Length > 200)
-                    {
-                        keyFindings.Add(msg.Content.Substring(0, 200) + "...");
-                    }
-                    else if (msg.Content.Length > 20)
-                    {
-                        keyFindings.Add(msg.Content);
-                    }
-                }
-            }
-
-            // Pass 2: Also scan assistant text for file references (fallback)
-            foreach (var msg in conversationHistory)
-            {
-                if (msg.Role != ChatRole.Assistant || msg.Content == null) continue;
-
-                var content = msg.Content;
-                var pathMatches = Regex.Matches(
-                    content, @"[\w/\\.-]+\.(?:cs|ts|js|py|json|xml|md|txt|cpp|h|hpp|java|go|sln|csproj|vcxproj)");
-                foreach (Match m in pathMatches)
-                {
-                    // Only add paths not already captured from tool calls
-                    var path = m.Value;
-                    if (!filesRead.Any(f => string.Equals(f, path, StringComparison.OrdinalIgnoreCase))
-                        && !filesModified.Contains(path) && !filesCreated.Contains(path))
-                    {
-                        filesRead.Add(path);
-                    }
-                }
-            }
-
-            // Build structured summary
-            sb.AppendLine("## Conversation Summary (auto-generated)");
-            sb.AppendLine();
-
-            // Section 1: File operations (most important for P1-013)
-            sb.AppendLine("### File Operations");
-            if (filesRead.Count > 0)
-            {
-                var dedupedFilesRead = filesRead.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                sb.AppendLine($"- **Files read ({filesRead.Count} calls, {dedupedFilesRead.Count} unique):** {string.Join(", ", dedupedFilesRead)}");
-            }
-            if (filesCreated.Count > 0)
-                sb.AppendLine($"- **Files created ({filesCreated.Count}):** {string.Join(", ", filesCreated)}");
-            if (filesModified.Count > 0)
-                sb.AppendLine($"- **Files modified ({filesModified.Count}):** {string.Join(", ", filesModified)}");
-            if (filesRead.Count == 0 && filesCreated.Count == 0 && filesModified.Count == 0)
-                sb.AppendLine("- (no file operations recorded)");
-            sb.AppendLine();
-
-            // Section 2: Searches performed
-            if (searchResults.Count > 0)
-            {
-                sb.AppendLine("### Searches Performed");
-                foreach (var sr in searchResults.Count > 10 ? searchResults.GetRange(searchResults.Count - 10, 10) : searchResults)
-                    sb.AppendLine($"- {sr}");
-                sb.AppendLine();
-            }
-
-            // Section 3: User requests (all of them, for context)
-            if (userRequests.Count > 0)
-            {
-                sb.AppendLine("### User Requests (chronological)");
-                for (int i = 0; i < userRequests.Count; i++)
-                    sb.AppendLine($"{i + 1}. {userRequests[i]}");
-                sb.AppendLine();
-            }
-
-            // Section 4: Key findings (more generous allocation)
-            if (keyFindings.Count > 0)
-            {
-                sb.AppendLine("### Key Tool Results");
-                var recent = keyFindings.Count > 12
-                    ? keyFindings.GetRange(keyFindings.Count - 12, 12)
-                    : keyFindings;
-                foreach (var finding in recent)
-                    sb.AppendLine($"- {finding}");
-                sb.AppendLine();
-            }
-
-            // Section 5: Tools and progress
-            if (toolsUsed.Count > 0)
-                sb.AppendLine($"### Tools Used: {string.Join(", ", toolsUsed)}");
-
-            sb.AppendLine($"### Progress: {conversationHistory.Count} messages processed.");
-
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Extract a structured tool call history from conversation for condense augmentation.
-        /// This ensures tool call records survive condense regardless of LLM summary quality.
-        /// </summary>
-        private static string ExtractToolCallHistory(List<ChatMessage> conversationHistory)
-        {
-            var toolCalls = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-
-            for (int msgIdx = 0; msgIdx < conversationHistory.Count; msgIdx++)
-            {
-                var msg = conversationHistory[msgIdx];
-                if (msg.Role != ChatRole.Assistant || msg.ToolCalls == null) continue;
-
-                foreach (var tc in msg.ToolCalls)
-                {
-                    var toolName = tc.Function?.Name ?? "unknown";
-                    var argsJson = tc.Function?.Arguments;
-                    string summary = null;
-
-                    if (!string.IsNullOrEmpty(argsJson))
-                    {
-                        var args = TryParseJsonArgs(argsJson);
-                        if (args != null)
-                        {
-                            switch (toolName)
-                            {
-                                case "read_file":
-                                    args.TryGetValue("path", out summary);
-                                    if (summary == null) args.TryGetValue("file_path", out summary);
-                                    break;
-                                case "grep_search":
-                                    if (args.TryGetValue("query", out var q))
-                                    {
-                                        var searchPath = args.TryGetValue("path", out var sp) ? sp : "workspace";
-                                        summary = $"\"{q}\" in {searchPath}";
-                                    }
-                                    break;
-                                case "find_by_name":
-                                    if (args.TryGetValue("pattern", out var p))
-                                        summary = $"\"{p}\"";
-                                    break;
-                                case "list_dir":
-                                    args.TryGetValue("path", out summary);
-                                    if (summary == null) summary = "workspace root";
-                                    break;
-                                case "write_to_file":
-                                case "edit":
-                                    args.TryGetValue("path", out summary);
-                                    if (summary == null) args.TryGetValue("file_path", out summary);
-                                    break;
-                                case "list_code_definition_names":
-                                    args.TryGetValue("path", out summary);
-                                    break;
-                                case "list_projects":
-                                    summary = "(solution)";
-                                    break;
-                                case "run_command":
-                                    args.TryGetValue("command", out summary);
-                                    if (summary != null && summary.Length > 60)
-                                        summary = summary.Substring(0, 60) + "...";
-                                    break;
-                            }
-                        }
-                    }
-
-                    // Look forward for the corresponding Tool result message to get a result hint
-                    string resultHint = null;
-                    if (tc.Id != null)
-                    {
-                        for (int j = msgIdx + 1; j < conversationHistory.Count; j++)
-                        {
-                            if (conversationHistory[j].Role == ChatRole.Tool
-                                && conversationHistory[j].ToolCallId == tc.Id)
-                            {
-                                var resultContent = conversationHistory[j].Content ?? "";
-                                if (resultContent.Length > 100)
-                                    resultHint = resultContent.Substring(0, 80) + "...";
-                                else if (resultContent.Length > 0)
-                                    resultHint = resultContent;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!toolCalls.ContainsKey(toolName))
-                        toolCalls[toolName] = new List<string>();
-
-                    var entry = summary ?? "(no args)";
-                    if (resultHint != null)
-                        entry = $"{entry} → ({resultHint})";
-
-                    toolCalls[toolName].Add(entry);
-                }
-            }
-
-            if (toolCalls.Count == 0) return null;
-
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("## Tool Call History (auto-extracted, factual)");
-
-            int totalChars = 0;
-            const int maxChars = 3000;
-
-            foreach (var kvp in toolCalls)
-            {
-                var dedupedArgs = kvp.Value.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                var line = $"### {kvp.Key} ({kvp.Value.Count} calls)";
-                sb.AppendLine(line);
-                totalChars += line.Length;
-
-                foreach (var arg in dedupedArgs)
-                {
-                    if (totalChars > maxChars)
-                    {
-                        sb.AppendLine("- ... (truncated for space)");
-                        break;
-                    }
-                    var argLine = $"- {arg}";
-                    sb.AppendLine(argLine);
-                    totalChars += argLine.Length;
-                }
-
-                if (totalChars > maxChars) break;
-            }
-
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Try to parse a JSON arguments string into a simple string dictionary.
-        /// Used by BuildAutoCondenseSummary and ExtractToolCallHistory to extract parameters from tool call arguments.
-        /// Returns null on parse failure.
-        /// </summary>
-        private static Dictionary<string, string> TryParseJsonArgs(string json)
-        {
-            try
-            {
-                var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                // Simple JSON parsing using System.Text.Json
-                using (var doc = System.Text.Json.JsonDocument.Parse(json))
-                {
-                    foreach (var prop in doc.RootElement.EnumerateObject())
-                    {
-                        if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.String)
-                        {
-                            result[prop.Name] = prop.Value.GetString();
-                        }
-                        else if (prop.Value.ValueKind != System.Text.Json.JsonValueKind.Null)
-                        {
-                            result[prop.Name] = prop.Value.GetRawText();
-                        }
-                    }
-                }
-                return result;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Auto-add missing parameters when user intent is clear but LLM omitted them.
-        /// For example, auto-add recursive=true to list_dir when user asks for "完整结构".
-        /// </summary>
-        private void AugmentToolCallParameters(List<ToolCall> toolCalls, string userRequest)
-        {
-            if (string.IsNullOrEmpty(userRequest)) return;
-
-            var lower = userRequest.ToLowerInvariant();
-
-            foreach (var tc in toolCalls)
-            {
-                // list_dir: auto-add recursive=true when user asks for full structure
-                if (tc.Name == "list_dir" && tc.Arguments != null)
-                {
-                    bool hasRecursive = tc.Arguments.ContainsKey("recursive");
-                    if (!hasRecursive)
-                    {
-                        var recursiveKeywords = new[] { "完整", "全部", "递归", "目录树", "结构", "树形", "所有",
-                            "full", "complete", "recursive", "tree", "entire", "all" };
-
-                        foreach (var kw in recursiveKeywords)
-                        {
-                            if (lower.Contains(kw))
-                            {
-                                tc.Arguments["recursive"] = "true";
-                                System.Diagnostics.Debug.WriteLine($"[AICA] Auto-augmented list_dir with recursive=true (matched '{kw}')");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        private List<ToolCall> TryParseTextToolCalls(string text)
-        {
-            var result = new List<ToolCall>();
-
-            // Pattern 1: <function=NAME> <parameter=KEY> VALUE ... </tool_call>
-            var funcPattern = new Regex(
-                @"<function=(\w+)>(.*?)</tool_call>",
-                RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-            foreach (Match match in funcPattern.Matches(text))
-            {
-                var funcName = match.Groups[1].Value.Trim();
-                var body = match.Groups[2].Value.Trim();
-
-                var args = new Dictionary<string, object>();
-                var paramPattern = new Regex(
-                    @"<parameter=(\w+)>\s*(.*?)(?=<parameter=|$)",
-                    RegexOptions.Singleline);
-
-                foreach (Match paramMatch in paramPattern.Matches(body))
-                {
-                    var key = paramMatch.Groups[1].Value.Trim();
-                    var value = SanitizeParameterValue(paramMatch.Groups[2].Value);
-                    args[key] = value;
-                }
-
-                if (!string.IsNullOrEmpty(funcName) && args.Count > 0)
-                {
-                    result.Add(new ToolCall
-                    {
-                        Id = "text_" + Guid.NewGuid().ToString("N").Substring(0, 8),
-                        Name = funcName,
-                        Arguments = args
-                    });
-                }
-            }
-
-            // Pattern 2: minimax:tool_call format
-            // MiniMax model outputs tool calls without explicit tool name, need to infer from context
-            // Format: minimax:tool_call\n\n<content>\n\n</minimax:tool_call>
-            if (result.Count == 0)
-            {
-                var minimaxPattern = new Regex(
-                    @"minimax:tool_call\s+(.*?)\s*</minimax:tool_call>",
-                    RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-                foreach (Match match in minimaxPattern.Matches(text))
-                {
-                    var content = match.Groups[1].Value.Trim();
-
-                    // Skip empty matches
-                    if (string.IsNullOrWhiteSpace(content))
-                    {
-                        System.Diagnostics.Debug.WriteLine("[AICA] Skipping empty minimax:tool_call match");
-                        continue;
-                    }
-
-                    var lines = content.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-
-                    if (lines.Length == 0)
-                    {
-                        System.Diagnostics.Debug.WriteLine("[AICA] No lines found in minimax:tool_call content");
-                        continue;
-                    }
-
-                    // Infer tool name from content
-                    string toolName = null;
-                    var args = new Dictionary<string, object>();
-
-                    var firstLine = lines[0].Trim();
-                    System.Diagnostics.Debug.WriteLine($"[AICA] Parsing minimax:tool_call with first line: {firstLine}");
-
-                    // Check if first line looks like a command
-                    if (firstLine.StartsWith("dotnet ") || firstLine.StartsWith("msbuild ") ||
-                        firstLine.StartsWith("git ") || firstLine.StartsWith("npm ") ||
-                        firstLine.StartsWith("make ") || firstLine.Contains(".exe") ||
-                        firstLine.Contains("&&") || firstLine.Contains("|"))
-                    {
-                        toolName = "run_command";
-                        args["command"] = firstLine;
-                        if (lines.Length > 1 && int.TryParse(lines[1].Trim(), out var timeout))
-                        {
-                            args["timeout"] = timeout;
-                        }
-                        System.Diagnostics.Debug.WriteLine($"[AICA] Inferred tool: run_command");
-                    }
-                    // Check if it looks like a file path
-                    else if (firstLine.Contains("/") || firstLine.Contains("\\") || firstLine.Contains("."))
-                    {
-                        // Could be read_file, list_dir, or find_by_name
-                        // Default to read_file if it looks like a file
-                        if (firstLine.EndsWith(".cs") || firstLine.EndsWith(".txt") ||
-                            firstLine.EndsWith(".json") || firstLine.EndsWith(".xml") ||
-                            firstLine.EndsWith(".md") || firstLine.EndsWith(".cpp") ||
-                            firstLine.EndsWith(".h") || firstLine.EndsWith(".py") ||
-                            firstLine.EndsWith(".js") || firstLine.EndsWith(".ts") ||
-                            firstLine.EndsWith(".java") || firstLine.EndsWith(".go"))
-                        {
-                            toolName = "read_file";
-                            args["path"] = firstLine;
-                            if (lines.Length > 1 && int.TryParse(lines[1].Trim(), out var offset))
-                            {
-                                args["offset"] = offset;
-                            }
-                            if (lines.Length > 2 && int.TryParse(lines[2].Trim(), out var limit))
-                            {
-                                args["limit"] = limit;
-                            }
-                            System.Diagnostics.Debug.WriteLine($"[AICA] Inferred tool: read_file, path: {firstLine}");
-                        }
-                        else
-                        {
-                            toolName = "list_dir";
-                            args["path"] = firstLine;
-                            System.Diagnostics.Debug.WriteLine($"[AICA] Inferred tool: list_dir");
-                        }
-                    }
-                    // Otherwise treat as grep_search query
-                    else
-                    {
-                        toolName = "grep_search";
-                        args["query"] = firstLine;
-                        if (lines.Length > 1) args["path"] = lines[1].Trim();
-                        if (lines.Length > 2) args["includes"] = lines[2].Trim();
-                        System.Diagnostics.Debug.WriteLine($"[AICA] Inferred tool: grep_search");
-                    }
-
-                    if (!string.IsNullOrEmpty(toolName) && args.Count > 0)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[AICA] Successfully parsed minimax:tool_call as {toolName}");
-                        result.Add(new ToolCall
-                        {
-                            Id = "text_" + Guid.NewGuid().ToString("N").Substring(0, 8),
-                            Name = toolName,
-                            Arguments = args
-                        });
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[AICA] Failed to parse minimax:tool_call - toolName: {toolName}, args count: {args.Count}");
-                    }
-                }
-            }
-
-            // Pattern 3: JSON-style tool calls in text
-            // Uses balanced brace extraction to handle nested JSON objects correctly
-            if (result.Count == 0)
-            {
-                var jsonBlocks = ExtractBalancedJsonBlocks(text);
-                foreach (var block in jsonBlocks)
-                {
-                    try
-                    {
-                        using (var doc = System.Text.Json.JsonDocument.Parse(block))
-                        {
-                            var root = doc.RootElement;
-                            if (root.TryGetProperty("name", out var nameProp))
-                            {
-                                var name = nameProp.GetString();
-                                var args = new Dictionary<string, object>();
-
-                                if (root.TryGetProperty("arguments", out var argsProp))
-                                {
-                                    args = System.Text.Json.JsonSerializer
-                                        .Deserialize<Dictionary<string, object>>(
-                                            argsProp.GetRawText());
-                                }
-
-                                if (!string.IsNullOrEmpty(name))
-                                {
-                                    result.Add(new ToolCall
-                                    {
-                                        Id = "text_" + Guid.NewGuid().ToString("N").Substring(0, 8),
-                                        Name = name,
-                                        Arguments = args ?? new Dictionary<string, object>()
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Failed to parse JSON tool call block: {ex.Message}");
-                    }
-                }
-            }
-
-            return result;
-        }
-
-        /// <summary>
-        /// Extract top-level balanced JSON objects from text.
-        /// Uses brace counting to handle nested objects correctly.
-        /// </summary>
-        private static List<string> ExtractBalancedJsonBlocks(string text)
-        {
-            var blocks = new List<string>();
-            var i = 0;
-            while (i < text.Length)
-            {
-                if (text[i] == '{')
-                {
-                    var depth = 0;
-                    var start = i;
-                    var inString = false;
-                    var escape = false;
-
-                    for (; i < text.Length; i++)
-                    {
-                        if (escape) { escape = false; continue; }
-                        if (text[i] == '\\' && inString) { escape = true; continue; }
-                        if (text[i] == '"') { inString = !inString; continue; }
-                        if (inString) continue;
-                        if (text[i] == '{') depth++;
-                        else if (text[i] == '}') { depth--; if (depth == 0) break; }
-                    }
-
-                    if (depth == 0 && i < text.Length)
-                    {
-                        var block = text.Substring(start, i - start + 1);
-                        if (block.Contains("\"name\"") && block.Contains("\"arguments\""))
-                            blocks.Add(block);
-                    }
-                    i++;
-                }
-                else
-                {
-                    i++;
-                }
-            }
-            return blocks;
-        }
-
-        /// <summary>
-        /// Remove text-based tool call syntax from response to avoid leaking it to the user.
-        /// Removes patterns like <function=...>...</tool_call> and minimax:tool_call tags.
-        /// </summary>
-        private static string RemoveTextToolCallSyntax(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-                return text;
-
-            // Remove <function=NAME>...</tool_call> patterns
-            text = Regex.Replace(text, @"<function=\w+>.*?</tool_call>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-            // Remove minimax:tool_call patterns (with or without angle brackets)
-            // Use the same pattern as parsing to ensure consistency
-            text = Regex.Replace(text, @"minimax:tool_call\s+.*?\s*</minimax:tool_call>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-            // Pattern 2: <minimax:tool_call>...</minimax:tool_call>
-            text = Regex.Replace(text, @"<minimax:tool_call>.*?</minimax:tool_call>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-            // Clean up excess whitespace
-            text = Regex.Replace(text, @"\n{3,}", "\n\n", RegexOptions.None);
-            text = text.Trim();
-
-            return text;
-        }
-
-        /// <summary>
-        /// Detect if the model claims to have executed a tool but didn't actually call it.
-        /// This is a common hallucination pattern where the model describes what it "did"
-        /// instead of actually calling the tool.
-        /// </summary>
-        private static bool DetectToolExecutionClaim(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                return false;
-
-            var lowerText = text.ToLowerInvariant();
-
-            // Patterns indicating the model claims to have executed something
-            var executionClaimPatterns = new[]
-            {
-                // English patterns
-                "i have executed", "i've executed", "i executed",
-                "i have run", "i've run", "i ran",
-                "i have called", "i've called", "i called",
-                "already executed", "already run", "already called",
-                "the command has been", "command was executed",
-                "successfully executed", "execution complete",
-
-                // Chinese patterns
-                "已执行", "已运行", "已调用",
-                "执行了", "运行了", "调用了",
-                "执行完成", "运行完成",
-                "成功执行", "成功运行",
-
-                // Result presentation patterns (claiming to show results without actually getting them)
-                "here are the results", "here is the result",
-                "the results are", "the result is",
-                "结果如下", "结果为", "结果是",
-                "以下是结果", "查看结果"
-            };
-
-            // Check if text contains execution claims
-            bool hasExecutionClaim = executionClaimPatterns.Any(p => lowerText.Contains(p));
-
-            // Additional check: if text contains structured output that looks like tool results
-            // (tables, formatted data) but no actual tool was called
-            bool hasStructuredOutput =
-                (lowerText.Contains("exit code:") || lowerText.Contains("stdout:") || lowerText.Contains("stderr:")) ||
-                (lowerText.Contains("状态") && lowerText.Contains("文件")) ||
-                (text.Contains("|") && text.Contains("---")); // Markdown table
-
-            // Bug 4 fix: Detect fabricated TOOL_EXACT_STATS in text.
-            // Real EXACT_STATS are injected by tools into tool results, never in assistant text.
-            // If assistant text contains this pattern, the LLM fabricated search results.
-            bool hasFakeExactStats = text.Contains("[TOOL_EXACT_STATS:");
-
-            // Bug 4 fix: Detect fabricated search result patterns
-            // LLM sometimes generates formatted search results without calling grep_search/find_by_name
-            bool hasFakeSearchResults = false;
-            if (lowerText.Contains("match") && lowerText.Contains("file"))
-            {
-                // Pattern: "Found N match(es) in M file(s)" or "N 处匹配" or "N 个文件"
-                hasFakeSearchResults =
-                    System.Text.RegularExpressions.Regex.IsMatch(text, @"[Ff]ound \d+ match") ||
-                    System.Text.RegularExpressions.Regex.IsMatch(text, @"\d+\s*处匹配") ||
-                    System.Text.RegularExpressions.Regex.IsMatch(text, @"匹配.*\d+.*文件");
-            }
-
-            return hasExecutionClaim || hasStructuredOutput || hasFakeExactStats || hasFakeSearchResults;
-        }
-
-        /// <summary>
-        /// Detect conflict where user requested a modification but the LLM concludes
-        /// the code is already in the desired state (no changes needed).
-        /// </summary>
-        private static bool DetectModificationConflict(
-            string userRequest,
-            string assistantResponse,
-            List<ChatMessage> conversationHistory,
-            TaskState taskState)
-        {
-            if (string.IsNullOrWhiteSpace(userRequest) || string.IsNullOrWhiteSpace(assistantResponse))
-                return false;
-
-            var lowerRequest = userRequest.ToLowerInvariant();
-            var lowerResponse = assistantResponse.ToLowerInvariant();
-
-            // Check if user explicitly requested a modification
-            var modificationKeywords = new[]
-            {
-                "修改", "更改", "改为", "替换", "重构", "重写", "添加", "删除", "移除",
-                "modify", "change", "replace", "refactor", "rewrite", "add", "remove", "delete",
-                "update", "fix", "改成", "换成", "调整", "优化"
-            };
-
-            bool userRequestedModification = modificationKeywords.Any(k => lowerRequest.Contains(k));
-            if (!userRequestedModification)
-                return false;
-
-            // Check if assistant response indicates no changes are needed
-            var alreadyCompliantPatterns = new[]
-            {
-                "already", "已经是", "已经符合", "无需修改", "不需要修改", "no changes needed",
-                "no modification needed", "already in the desired state", "already correct",
-                "already implemented", "已经实现", "代码已经", "当前代码已",
-                "no changes are necessary", "nothing to change"
-            };
-
-            bool responseIndicatesNoChange = alreadyCompliantPatterns.Any(p => lowerResponse.Contains(p));
-
-            // Also check if no file edits were made despite modification request
-            bool noEditsPerformed = !taskState.DidEditFile && !taskState.HasEverUsedTools;
-
-            return responseIndicatesNoChange || (noEditsPerformed && taskState.Iteration > 0);
-        }
-
-        /// <summary>
-        /// Clean up parameter values extracted from text-based tool calls.
-        /// Removes control characters, XML remnants, and excess whitespace.
-        /// </summary>
-        private static string SanitizeParameterValue(string raw)
-        {
-            if (string.IsNullOrEmpty(raw))
-                return string.Empty;
-
-            // Remove any remaining XML/HTML tags
-            var cleaned = Regex.Replace(raw, @"<[^>]+>", " ");
-
-            // Remove control characters (newlines, tabs, etc.) - replace with space
-            cleaned = Regex.Replace(cleaned, @"[\x00-\x1F\x7F]+", " ");
-
-            // Collapse multiple spaces into one
-            cleaned = Regex.Replace(cleaned, @"\s{2,}", " ");
-
-            // Trim
-            cleaned = cleaned.Trim();
-
-            // Remove surrounding quotes if present
-            if (cleaned.Length >= 2 &&
-                ((cleaned[0] == '"' && cleaned[cleaned.Length - 1] == '"') ||
-                 (cleaned[0] == '\'' && cleaned[cleaned.Length - 1] == '\'')))
-            {
-                cleaned = cleaned.Substring(1, cleaned.Length - 2).Trim();
-            }
-
-            return cleaned;
-        }
+        // BuildAutoCondenseSummary, ExtractToolCallHistory, TryParseJsonArgs
+        // extracted to TokenBudgetManager.cs
+
+        // AugmentToolCallParameters extracted to ToolCallProcessor.cs
+
+        // TryParseTextToolCalls, ExtractBalancedJsonBlocks, RemoveTextToolCallSyntax,
+        // DetectToolExecutionClaim, DetectModificationConflict, SanitizeParameterValue,
+        // GetToolCallSignature, ExtractPathFromToolCall, IsLikelyConversational,
+        // IsToolPlanningText, IsLikelyConversationalImpl, BuildActionDescription,
+        // GetFirstArgValue, Shorten
+        // extracted to ToolCallProcessor.cs, ResponseProcessor.cs, CompletionHandler.cs, PlanManager.cs
+
+        // All methods below this line have been extracted to separate files.
+        // See: ToolCallProcessor.cs, ResponseProcessor.cs, CompletionHandler.cs, PlanManager.cs
+
+        #region Delegating methods (backward compatibility)
+
+        internal static bool IsLikelyConversational(string message) => ResponseProcessor.IsLikelyConversational(message);
+        internal static bool IsToolPlanningText(string text) => ResponseProcessor.IsToolPlanningText(text);
+
+        #endregion
+
+        // === OLD METHODS REMOVED (extracted to ToolCallProcessor, ResponseProcessor, CompletionHandler, PlanManager) ===
+        // TryParseTextToolCalls → ToolCallProcessor.TryParseTextToolCalls
+        // ExtractBalancedJsonBlocks → ToolCallProcessor.ExtractBalancedJsonBlocks
+        // RemoveTextToolCallSyntax → ToolCallProcessor.RemoveTextToolCallSyntax
+        // SanitizeParameterValue → ToolCallProcessor.SanitizeParameterValue
+        // GetToolCallSignature → ToolCallProcessor.GetToolCallSignature
+        // ExtractPathFromToolCall → ToolCallProcessor.ExtractPathFromToolCall
+        // BuildActionDescription → ToolCallProcessor.BuildActionDescription
+        // GetFirstArgValue → ToolCallProcessor.GetFirstArgValue
+        // Shorten → ToolCallProcessor.Shorten
+        // DetectToolExecutionClaim → ResponseProcessor.DetectToolExecutionClaim
+        // IsToolPlanningText → ResponseProcessor.IsToolPlanningText
+        // IsLikelyConversationalImpl → ResponseProcessor.IsLikelyConversational
+        // DetectModificationConflict → CompletionHandler.DetectModificationConflict
+        // ==================================================================================
 
         public void Abort()
         {
             _llmClient.Abort();
         }
 
-        /// <summary>
-        /// Detect transient exceptions worth retrying (timeouts, network issues).
-        /// </summary>
         private static bool IsTransientException(Exception ex)
         {
             if (ex is System.Net.Http.HttpRequestException) return true;
-            if (ex is TaskCanceledException tce && tce.CancellationToken == default) return true; // timeout, not user cancel
+            if (ex is TaskCanceledException tce && tce.CancellationToken == default) return true;
             if (ex is System.IO.IOException) return true;
             if (ex.InnerException is System.Net.Sockets.SocketException) return true;
             if (ex.InnerException is System.IO.IOException) return true;
             return false;
         }
 
-        /// <summary>
-        /// Generate a stable signature for a tool call (name + sorted args) for dedup.
-        /// </summary>
-        private static string GetToolCallSignature(ToolCall call)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append(call.Name ?? "");
-            if (call.Arguments != null)
-            {
-                var sortedKeys = new List<string>(call.Arguments.Keys);
-                sortedKeys.Sort(StringComparer.Ordinal);
-                foreach (var key in sortedKeys)
-                {
-                    // Skip parameters that don't affect the operation's identity
-                    if (call.Name == "read_file" && (key == "offset" || key == "limit")) continue;
-                    if (call.Name == "grep_search" && key == "max_results") continue;
-
-                    sb.Append('|').Append(key).Append('=');
-                    var val = call.Arguments[key];
-                    var strVal = val?.ToString() ?? "";
-                    // Normalize values for dedup: trim whitespace, lowercase paths and queries
-                    if (key == "path" || key == "file_path" || key == "directory")
-                    {
-                        strVal = strVal.TrimEnd('/', '\\').ToLowerInvariant();
-                    }
-                    else if (key == "query" || key == "pattern" || key == "name" || key == "command")
-                    {
-                        strVal = strVal.Trim().ToLowerInvariant();
-                    }
-                    sb.Append(strVal);
-                }
-            }
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Extract the file path from a tool call's arguments.
-        /// Checks common parameter names: "path", "file_path".
-        /// </summary>
-        private static string ExtractPathFromToolCall(ToolCall toolCall)
-        {
-            if (toolCall.Arguments == null) return null;
-            if (toolCall.Arguments.TryGetValue("path", out var path)) return path?.ToString();
-            if (toolCall.Arguments.TryGetValue("file_path", out var filePath)) return filePath?.ToString();
-            return null;
-        }
-
-        /// <summary>
-        /// Detect if a user message is likely conversational (greeting, thanks, acknowledgment)
-        /// rather than a coding task. Used to prevent proactive tool execution on greetings.
-        /// </summary>
-        internal static bool IsLikelyConversational(string message)
-        {
-            // Forwarded below after IsToolPlanningText
-            return IsLikelyConversationalImpl(message);
-        }
-
-        /// <summary>
-        /// Detect if text is primarily about planning future tool usage
-        /// (as opposed to summarizing results or answering the user's question).
-        /// </summary>
-        internal static bool IsToolPlanningText(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return false;
-
-            var lower = text.ToLowerInvariant().Trim();
-
-            var toolPlanningMarkers = new[]
-            {
-                "i will call", "i will use the", "i'll use the", "i'll call",
-                "let me use the", "let me call", "let me run the",
-                "i need to use the", "i need to call", "i need to run",
-                "i should use the", "i should call",
-                "我将调用", "我将使用工具", "让我调用", "让我使用工具",
-                "我需要调用", "我需要使用工具",
-                "接下来我将调用", "下一步我将使用",
-            };
-
-            foreach (var marker in toolPlanningMarkers)
-            {
-                if (lower.Contains(marker)) return true;
-            }
-
-            // Short text (<150 chars) starting with planning words
-            if (lower.Length < 150)
-            {
-                var planningStarts = new[]
-                {
-                    "i need to check", "i need to search", "i need to read",
-                    "i should check", "i should search", "i should read",
-                    "我需要查看", "我需要搜索", "我需要读取", "我需要检查",
-                    "我应该查看", "我应该搜索",
-                };
-                foreach (var start in planningStarts)
-                {
-                    if (lower.StartsWith(start)) return true;
-                }
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Implementation of IsLikelyConversational.
-        /// </summary>
-        private static bool IsLikelyConversationalImpl(string message)
-        {
-            if (string.IsNullOrWhiteSpace(message)) return true;
-            var trimmed = message.Trim();
-
-            // Long messages are likely tasks
-            if (trimmed.Length > 20) return false;
-
-            // Check for task-related keywords — if present, it's a task even if short
-            var taskKeywords = new[]
-            {
-                // Chinese
-                "文件", "代码", "读", "写", "编辑", "修改", "创建", "删除", "搜索", "查找", "查看",
-                "运行", "执行", "构建", "编译", "测试", "分析", "重构", "调试", "打开", "关闭",
-                "添加", "移除", "更新", "生成", "实现", "修复", "优化", "部署", "安装", "配置",
-                "项目", "目录", "函数", "类", "方法", "变量", "错误", "bug", "报错",
-                "是什么", "怎么", "哪些", "有多少", "在哪", "为什么", "如何",
-                // English
-                "file", "code", "read", "write", "edit", "create", "delete", "search", "find",
-                "run", "exec", "build", "compile", "test", "debug", "refactor", "fix",
-                "list", "grep", "dir", "open", "close", "add", "remove", "update", "generate",
-                "implement", "deploy", "install", "config", "project", "class", "function",
-                "method", "variable", "error", "help me", "帮我", "请帮"
-            };
-
-            var lower = trimmed.ToLowerInvariant();
-            foreach (var keyword in taskKeywords)
-            {
-                if (lower.Contains(keyword)) return false;
-            }
-
-            // Short message without task keywords → likely conversational
-            return true;
-        }
-
-        /// <summary>
-        /// Build a human-readable action description from a tool call for UI display.
-        /// </summary>
-        private static string BuildActionDescription(ToolCall toolCall)
-        {
-            var name = toolCall.Name?.ToLowerInvariant() ?? "";
-            var args = toolCall.Arguments;
-
-            string target = GetFirstArgValue(args, "path", "file_path", "directory");
-            string query = GetFirstArgValue(args, "pattern", "query", "search_term", "name");
-            string command = GetFirstArgValue(args, "command");
-
-            if (name.Contains("read")) return $"📖 正在读取 {Shorten(target)}...";
-            if (name.Contains("write") || name.Contains("create")) return $"✏️ 正在写入 {Shorten(target)}...";
-            if (name.Contains("edit")) return $"📝 正在编辑 {Shorten(target)}...";
-            if (name.Contains("grep") || name.Contains("search")) return $"🔍 正在搜索 {Shorten(query)}...";
-            if (name.Contains("list_dir")) return $"📂 正在列出 {Shorten(target ?? ".")} 目录...";
-            if (name.Contains("find")) return $"🔍 正在查找 {Shorten(query)}...";
-            if (name.Contains("command") || name.Contains("run")) return $"⚡ 正在执行命令 {Shorten(command)}...";
-            if (name.Contains("list_project")) return "📁 正在列出项目信息...";
-            if (name.Contains("list_code")) return "📋 正在分析代码定义...";
-            if (name.Contains("condense")) return "📝 正在压缩上下文...";
-            if (name.Contains("attempt_completion")) return "✅ 正在完成任务...";
-            if (name.Contains("ask_followup")) return "❓ 正在向用户提问...";
-            if (name.Contains("update_plan")) return "📋 正在更新计划...";
-            if (name.Contains("log_analysis")) return "📊 正在分析日志...";
-            return $"🔧 正在执行 {toolCall.Name}...";
-        }
-
-        private static string GetFirstArgValue(Dictionary<string, object> args, params string[] keys)
-        {
-            if (args == null) return null;
-            foreach (var key in keys)
-            {
-                if (args.TryGetValue(key, out var val) && val != null)
-                {
-                    var s = val.ToString();
-                    if (!string.IsNullOrWhiteSpace(s)) return s;
-                }
-            }
-            return null;
-        }
-
-        private static string Shorten(string text, int maxLen = 60)
-        {
-            if (string.IsNullOrEmpty(text)) return "";
-            text = text.Replace("\r", "").Replace("\n", " ").Trim();
-            return text.Length <= maxLen ? text : text.Substring(0, maxLen) + "...";
-        }
-
-        /// <summary>
-        /// Extract potential file paths from user request for rule context.
-        /// </summary>
         private List<string> ExtractPathCandidates(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -2130,52 +1210,7 @@ namespace AICA.Core.Agent
         }
     }
 
-    /// <summary>
-    /// Interface for the Agent executor
-    /// </summary>
-    public interface IAgentExecutor
-    {
-        IAsyncEnumerable<AgentStep> ExecuteAsync(
-            string userRequest,
-            IAgentContext context,
-            IUIContext uiContext,
-            List<ChatMessage> previousMessages = null,
-            CancellationToken ct = default);
-
-        void Abort();
-    }
-
-    /// <summary>
-    /// Represents a step in the Agent execution
-    /// </summary>
-    public class AgentStep
-    {
-        public AgentStepType Type { get; set; }
-        public string Text { get; set; }
-        public ToolCall ToolCall { get; set; }
-        public ToolResult Result { get; set; }
-        public string ErrorMessage { get; set; }
-        public TaskPlan Plan { get; set; }
-
-        public static AgentStep TextChunk(string text) => new AgentStep { Type = AgentStepType.TextChunk, Text = text };
-        public static AgentStep ThinkingChunk(string text) => new AgentStep { Type = AgentStepType.ThinkingChunk, Text = text };
-        public static AgentStep ActionStart(string text) => new AgentStep { Type = AgentStepType.ActionStart, Text = text };
-        public static AgentStep ToolStart(ToolCall call) => new AgentStep { Type = AgentStepType.ToolStart, ToolCall = call };
-        public static AgentStep WithToolResult(ToolCall call, ToolResult result) => new AgentStep { Type = AgentStepType.ToolResult, ToolCall = call, Result = result };
-        public static AgentStep PlanUpdated(TaskPlan plan) => new AgentStep { Type = AgentStepType.PlanUpdate, Plan = plan };
-        public static AgentStep Complete(string finalText) => new AgentStep { Type = AgentStepType.Complete, Text = finalText };
-        public static AgentStep WithError(string error) => new AgentStep { Type = AgentStepType.Error, ErrorMessage = error };
-    }
-
-    public enum AgentStepType
-    {
-        TextChunk,
-        ThinkingChunk,
-        ActionStart,
-        ToolStart,
-        ToolResult,
-        PlanUpdate,
-        Complete,
-        Error
-    }
+    // AgentStep, AgentStepType, and IAgentExecutor extracted to separate files:
+    // - AgentStep.cs
+    // - IAgentExecutor.cs
 }

@@ -15,7 +15,7 @@ namespace AICA.Core.Context
         private readonly int _maxTokenBudget;
         private readonly List<ContextItem> _items = new List<ContextItem>();
 
-        public ContextManager(int maxTokenBudget = 32000)
+        public ContextManager(int maxTokenBudget = 177224)
         {
             _maxTokenBudget = maxTokenBudget;
         }

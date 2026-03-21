@@ -71,7 +71,18 @@ namespace AICA.Core.Tools
 
             if (!context.IsPathAccessible(relativePath))
             {
-                return Task.FromResult(ToolResult.Fail($"Access denied: {relativePath}"));
+                return Task.FromResult(ToolResult.SecurityDenied($"Access denied: {relativePath}"));
+            }
+
+            // Block direct listing of protected directories (consistent with read_file protection)
+            var dirName = Path.GetFileName(relativePath.TrimEnd('/', '\\'));
+            if (!string.IsNullOrEmpty(dirName) && ExcludedDirs.Contains(dirName)
+                && relativePath != "." && relativePath != "./")
+            {
+                return Task.FromResult(ToolResult.SecurityDenied(
+                    $"Access denied: '{relativePath}' is a protected directory. " +
+                    "Files in protected directories (.git, .vs, node_modules, etc.) cannot be accessed. " +
+                    "Do NOT attempt to access it through other tools."));
             }
 
             // Resolve full path (supports source roots)
@@ -157,7 +168,7 @@ namespace AICA.Core.Tools
             }
             catch (System.UnauthorizedAccessException)
             {
-                return Task.FromResult(ToolResult.Fail($"Access denied to directory contents: {relativePath}"));
+                return Task.FromResult(ToolResult.SecurityDenied($"Access denied to directory contents: {relativePath}"));
             }
 
             return Task.FromResult(ToolResult.Ok(sb.ToString()));

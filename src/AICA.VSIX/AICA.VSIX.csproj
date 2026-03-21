@@ -64,6 +64,8 @@
     <Compile Include="Dialogs\NonModalConfirmDialog.xaml.cs">
       <DependentUpon>NonModalConfirmDialog.xaml</DependentUpon>
     </Compile>
+    <Compile Include="ToolWindows\ChatModels.cs" />
+    <Compile Include="ToolWindows\HtmlRenderer.cs" />
     <Compile Include="ToolWindows\ChatToolWindow.cs" />
     <Compile Include="ToolWindows\ChatToolWindowControl.xaml.cs">
       <DependentUpon>ChatToolWindowControl.xaml</DependentUpon>

@@ -24,6 +24,7 @@ namespace AICA.ToolWindows
     public partial class ChatToolWindowControl : UserControl
     {
         private readonly MarkdownPipeline _markdownPipeline;
+        private readonly HtmlRenderer _htmlRenderer;
         private readonly List<ConversationMessage> _conversation = new List<ConversationMessage>();
         private readonly List<ChatMessage> _llmHistory = new List<ChatMessage>();
         private bool _isBrowserReady;
@@ -54,6 +55,7 @@ namespace AICA.ToolWindows
                 .UseAdvancedExtensions()
                 .UseSoftlineBreakAsHardlineBreak()
                 .Build();
+            _htmlRenderer = new HtmlRenderer(_markdownPipeline);
 
             ChatBrowser.LoadCompleted += ChatBrowser_LoadCompleted;
             ChatBrowser.Navigating += ChatBrowser_Navigating;
@@ -322,6 +324,7 @@ namespace AICA.ToolWindows
                 ApiKey = options.ApiKey,
                 Model = options.ModelName,
                 MaxTokens = options.MaxTokens,
+                ContextWindowSize = options.ContextWindowSize,
                 Temperature = options.Temperature,
                 TopP = options.TopP,
                 TopK = options.TopK,
@@ -422,8 +425,8 @@ namespace AICA.ToolWindows
             });
 
             // Initialize Agent executor with custom instructions and token budget from options
-            // Token budget: maxTokens * 8 gives rough context window size (response tokens vs context tokens)
-            int tokenBudget = Math.Max(8000, options.MaxTokens * 8);
+            // Token budget derived from model's actual context window, reserving space for output and system prompt
+            int tokenBudget = Math.Max(8000, options.ContextWindowSize - options.MaxTokens - 3000);
             _agentExecutor = new AgentExecutor(
                 _llmClient,
                 _toolDispatcher,
@@ -466,7 +469,7 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
                         }
 
-                        bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+                        bodyBuilder.AppendLine(_htmlRenderer.BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
                         bodyBuilder.AppendLine("</div>");
                         continue;
                     }
@@ -517,29 +520,6 @@ namespace AICA.ToolWindows
             UpdateBrowserContent(bodyBuilder.ToString());
         }
 
-        /// <summary>
-        /// Build final HTML from interleaved tool call blocks (for persisting to conversation)
-        /// </summary>
-        private string BuildInterleavedToolLogsHtml(List<ToolCallBlock> toolCallBlocks)
-        {
-            var html = new StringBuilder();
-
-            foreach (var block in toolCallBlocks)
-            {
-                // Add tool call HTML
-                html.AppendLine(block.ToolHtml);
-
-                // Add text that came after this tool call
-                if (block.TextAfter.Length > 0)
-                {
-                    var textHtml = Markdig.Markdown.ToHtml(block.TextAfter.ToString(), _markdownPipeline);
-                    html.AppendLine(textHtml);
-                }
-            }
-
-            return html.ToString();
-        }
-
         private void RenderConversationStreaming(string toolLogsHtml, string streamingMarkdown)
         {
             var bodyBuilder = new StringBuilder();
@@ -575,7 +555,7 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
                         }
 
-                        bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+                        bodyBuilder.AppendLine(_htmlRenderer.BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
                         bodyBuilder.AppendLine("</div>");
                         continue;
                     }
@@ -652,7 +632,7 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
                         }
 
-                        bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+                        bodyBuilder.AppendLine(_htmlRenderer.BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
                         bodyBuilder.AppendLine("</div>");
                         continue;
                     }
@@ -860,26 +840,7 @@ namespace AICA.ToolWindows
         /// <summary>
         /// Represents a tool call block with its associated text response
         /// </summary>
-        private class ToolCallBlock
-        {
-            public string ToolHtml { get; set; }
-            public StringBuilder TextAfter { get; set; } = new StringBuilder();
-            public int ToolId { get; set; }
-            public string ToolCallId { get; set; }
-        }
-
-        /// <summary>
-        /// Represents one iteration of the agent loop for structured rendering:
-        /// [thinking + action] → [tool call] → [conclusion text]
-        /// </summary>
-        private class IterationBlock
-        {
-            public string ThinkingContent { get; set; }
-            public string ActionText { get; set; }
-            public ToolCallBlock ToolBlock { get; set; }
-            public StringBuilder ConclusionText { get; set; } = new StringBuilder();
-            public int IterationId { get; set; }
-        }
+        // ToolCallBlock, IterationBlock extracted to ChatModels.cs
 
         /// <summary>
         /// Plan card history for floating panel display (persists across tasks)
@@ -1132,44 +1093,7 @@ namespace AICA.ToolWindows
         /// <summary>
         /// View model for conversation list item
         /// </summary>
-        internal class ConversationViewModel : System.ComponentModel.INotifyPropertyChanged
-        {
-            private string _title;
-
-            public string Id { get; set; }
-
-            public string Title
-            {
-                get => _title;
-                set
-                {
-                    if (_title != value)
-                    {
-                        _title = value;
-                        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Title)));
-                        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(DisplayInfo)));
-                    }
-                }
-            }
-
-            public string TimeAgo { get; set; }
-            public DateTimeOffset UpdatedAt { get; set; }
-            public string ProjectName { get; set; } // For /allresume mode
-
-            public string DisplayInfo
-            {
-                get
-                {
-                    if (!string.IsNullOrEmpty(ProjectName))
-                    {
-                        return $"{ProjectName} | {TimeAgo}";
-                    }
-                    return TimeAgo;
-                }
-            }
-
-            public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
-        }
+        // ConversationViewModel extracted to ChatModels.cs
 
         private async System.Threading.Tasks.Task ExecuteAgentModeAsync(string userMessage)
         {
@@ -1281,7 +1205,7 @@ namespace AICA.ToolWindows
                                         var toolId = _globalToolCallCounter++;
                                         pendingToolCalls[step.ToolCall.Id] = (step.ToolCall, toolId);
 
-                                        var toolHtml = BuildToolCallHtml(
+                                        var toolHtml = _htmlRenderer.BuildToolCallHtml(
                                             step.ToolCall.Name,
                                             step.ToolCall.Arguments,
                                             null,
@@ -1317,7 +1241,7 @@ namespace AICA.ToolWindows
                                     {
                                         var resultText = step.Result.Success ? step.Result.Content : step.Result.Error;
 
-                                        var toolHtml = BuildToolCallHtml(
+                                        var toolHtml = _htmlRenderer.BuildToolCallHtml(
                                             toolInfo.call.Name,
                                             toolInfo.call.Arguments,
                                             resultText,
@@ -1390,7 +1314,7 @@ namespace AICA.ToolWindows
                                     if (hasToolCalls && iterationBlocks.Count > 0)
                                     {
                                         // Use structured tool logs (includes thinking, actions, tools, conclusions)
-                                        finalToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+                                        finalToolLogs = _htmlRenderer.BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
 
                                         // Save independent streaming content from responseBuilder (part 3)
                                         // This is content that appeared outside of iteration blocks
@@ -1402,7 +1326,7 @@ namespace AICA.ToolWindows
                                     }
                                     else if (hasToolCalls && toolCallBlocks.Count > 0)
                                     {
-                                        finalToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
+                                        finalToolLogs = _htmlRenderer.BuildInterleavedToolLogsHtml(toolCallBlocks);
 
                                         // Save independent streaming content
                                         var independentContent = responseBuilder.ToString().Trim();
@@ -1474,11 +1398,11 @@ namespace AICA.ToolWindows
                                     string errorToolLogs = null;
                                     if (hasToolCalls && iterationBlocks.Count > 0)
                                     {
-                                        errorToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+                                        errorToolLogs = _htmlRenderer.BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
                                     }
                                     else if (hasToolCalls && toolCallBlocks.Count > 0)
                                     {
-                                        errorToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
+                                        errorToolLogs = _htmlRenderer.BuildInterleavedToolLogsHtml(toolCallBlocks);
                                     }
 
                                     var errorContent = responseBuilder.ToString().Trim();
@@ -1519,11 +1443,11 @@ namespace AICA.ToolWindows
                         string partialToolLogs = null;
                         if (hasToolCalls && iterationBlocks.Count > 0)
                         {
-                            partialToolLogs = BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
+                            partialToolLogs = _htmlRenderer.BuildStructuredToolLogsHtml(iterationBlocks, toolCallBlocks);
                         }
                         else if (hasToolCalls && toolCallBlocks.Count > 0)
                         {
-                            partialToolLogs = BuildInterleavedToolLogsHtml(toolCallBlocks);
+                            partialToolLogs = _htmlRenderer.BuildInterleavedToolLogsHtml(toolCallBlocks);
                         }
 
                         var pausedContent = string.IsNullOrWhiteSpace(partialContent)
@@ -1620,46 +1544,6 @@ namespace AICA.ToolWindows
             }
         }
 
-        private string TruncateForDisplay(string text, int maxLength)
-        {
-            if (string.IsNullOrEmpty(text)) return "(empty)";
-            if (text.Length <= maxLength) return text.Replace("\n", " ").Replace("\r", "");
-            return text.Substring(0, maxLength).Replace("\n", " ").Replace("\r", "") + "...";
-        }
-
-        /// <summary>
-        /// Build HTML for thinking block with collapsible content
-        /// </summary>
-        private string BuildThinkingBlockHtml(string thinkingContent, string actionText, int iterationId)
-        {
-            var html = new StringBuilder();
-
-            // Only render the collapsible thinking block if there's actual thinking content
-            if (!string.IsNullOrEmpty(thinkingContent))
-            {
-                html.AppendLine("<div class=\"thinking-container\">");
-                html.AppendLine($"  <input type=\"checkbox\" id=\"thinking-toggle-{iterationId}\" class=\"thinking-toggle\" />");
-                html.AppendLine($"  <label for=\"thinking-toggle-{iterationId}\" class=\"thinking-header\">");
-                html.AppendLine("    <span class=\"thinking-icon\">💭</span>");
-                html.AppendLine("    <span class=\"thinking-label\">Thought</span>");
-                html.AppendLine("    <span class=\"thinking-expand\">▶</span>");
-                html.AppendLine("  </label>");
-                html.AppendLine("  <div class=\"thinking-body\">");
-                var thinkingHtml = Markdig.Markdown.ToHtml(thinkingContent, _markdownPipeline);
-                html.AppendLine($"    {thinkingHtml}");
-                html.AppendLine("  </div>");
-                html.AppendLine("</div>");
-            }
-
-            // Action text always visible below thinking block
-            if (!string.IsNullOrEmpty(actionText))
-            {
-                html.AppendLine($"<div class=\"action-text\">{System.Web.HttpUtility.HtmlEncode(actionText)}</div>");
-            }
-
-            return html.ToString();
-        }
-
         /// <summary>
         /// Render conversation with structured iteration blocks during streaming
         /// </summary>
@@ -1694,7 +1578,7 @@ namespace AICA.ToolWindows
                             bodyBuilder.AppendLine($"<div class=\"content\">{contentHtml}</div>");
                         }
 
-                        bodyBuilder.AppendLine(BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+                        bodyBuilder.AppendLine(_htmlRenderer.BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
                         bodyBuilder.AppendLine("</div>");
                         continue;
                     }
@@ -1723,7 +1607,7 @@ namespace AICA.ToolWindows
                     // 1. Thinking + Action
                     if (!string.IsNullOrEmpty(iteration.ThinkingContent) || !string.IsNullOrEmpty(iteration.ActionText))
                     {
-                        bodyBuilder.AppendLine(BuildThinkingBlockHtml(iteration.ThinkingContent, iteration.ActionText, iteration.IterationId));
+                        bodyBuilder.AppendLine(_htmlRenderer.BuildThinkingBlockHtml(iteration.ThinkingContent, iteration.ActionText, iteration.IterationId));
                     }
 
                     // 2. Tool call
@@ -1751,117 +1635,6 @@ namespace AICA.ToolWindows
             }
 
             UpdateBrowserContent(bodyBuilder.ToString(), preserveScroll);
-        }
-
-        /// <summary>
-        /// Build final HTML from structured iteration blocks for persistence
-        /// </summary>
-        private string BuildStructuredToolLogsHtml(List<IterationBlock> iterationBlocks, List<ToolCallBlock> toolCallBlocks)
-        {
-            var html = new StringBuilder();
-
-            foreach (var iteration in iterationBlocks)
-            {
-                // 1. Thinking + Action
-                if (!string.IsNullOrEmpty(iteration.ThinkingContent) || !string.IsNullOrEmpty(iteration.ActionText))
-                {
-                    html.AppendLine(BuildThinkingBlockHtml(iteration.ThinkingContent, iteration.ActionText, iteration.IterationId));
-                }
-
-                // 2. Tool call
-                if (iteration.ToolBlock != null)
-                {
-                    html.AppendLine(iteration.ToolBlock.ToolHtml);
-                }
-
-                // 3. Conclusion text
-                if (iteration.ConclusionText.Length > 0)
-                {
-                    var conclusionHtml = Markdig.Markdown.ToHtml(iteration.ConclusionText.ToString(), _markdownPipeline);
-                    html.AppendLine($"<div class=\"conclusion-text\">{conclusionHtml}</div>");
-                }
-            }
-
-            return html.ToString();
-        }
-
-        /// <summary>
-        /// Build enhanced HTML for tool call visualization
-        /// </summary>
-        private string BuildToolCallHtml(string toolName, Dictionary<string, object> arguments, string result, bool success, int toolCallId)
-        {
-            var html = new StringBuilder();
-            var toolIcon = GetToolIcon(toolName);
-
-            html.AppendLine($"<div class=\"tool-call-container\">");
-            html.AppendLine($"  <input type=\"checkbox\" id=\"tool-call-toggle-{toolCallId}\" class=\"tool-call-toggle\" />");
-            html.AppendLine($"  <label for=\"tool-call-toggle-{toolCallId}\" class=\"tool-call-header\">");
-            html.AppendLine($"    <span class=\"tool-call-icon\">{toolIcon}</span>");
-            html.AppendLine($"    <span class=\"tool-call-name\">{System.Web.HttpUtility.HtmlEncode(toolName)}</span>");
-            html.AppendLine($"    <span class=\"tool-call-expand\">▶</span>");
-            html.AppendLine($"  </label>");
-            html.AppendLine($"  <div class=\"tool-call-body\">");
-
-            // Parameters section
-            if (arguments != null && arguments.Count > 0)
-            {
-                html.AppendLine("    <div class=\"tool-call-params\">");
-                foreach (var arg in arguments.Take(5)) // Limit to 5 params for display
-                {
-                    var valueStr = arg.Value?.ToString() ?? "(null)";
-                    var displayValue = TruncateForDisplay(valueStr, 100);
-                    html.AppendLine("      <div class=\"tool-call-param\">");
-                    html.AppendLine($"        <span class=\"tool-call-param-name\">{System.Web.HttpUtility.HtmlEncode(arg.Key)}:</span>");
-                    html.AppendLine($"        <span class=\"tool-call-param-value\">{System.Web.HttpUtility.HtmlEncode(displayValue)}</span>");
-                    html.AppendLine("      </div>");
-                }
-                if (arguments.Count > 5)
-                {
-                    html.AppendLine($"      <div class=\"tool-call-param\" style=\"color: #9ca3af; font-size: 11px;\">... and {arguments.Count - 5} more parameters</div>");
-                }
-                html.AppendLine("    </div>");
-            }
-
-            // Result section
-            if (!string.IsNullOrEmpty(result))
-            {
-                var resultClass = success ? "success" : "error";
-                var resultIcon = success ? "✅" : "❌";
-                var resultLabel = success ? "Result" : "Error";
-
-                html.AppendLine($"    <div class=\"tool-call-result {(success ? "" : "error")}\">");
-                html.AppendLine($"      <div class=\"tool-call-result-header {resultClass}\">");
-                html.AppendLine($"        <span>{resultIcon}</span>");
-                html.AppendLine($"        <span>{resultLabel}</span>");
-                html.AppendLine("      </div>");
-                html.AppendLine($"      <div class=\"tool-call-result-content\">{System.Web.HttpUtility.HtmlEncode(TruncateForDisplay(result, 500))}</div>");
-                html.AppendLine("    </div>");
-            }
-
-            html.AppendLine("  </div>");
-            html.AppendLine("</div>");
-
-            return html.ToString();
-        }
-
-        /// <summary>
-        /// Get icon for tool based on tool name
-        /// </summary>
-        private string GetToolIcon(string toolName)
-        {
-            if (string.IsNullOrEmpty(toolName)) return "🔧";
-
-            var lowerName = toolName.ToLowerInvariant();
-            if (lowerName.Contains("read") || lowerName.Contains("list")) return "📖";
-            if (lowerName.Contains("write") || lowerName.Contains("create")) return "✏️";
-            if (lowerName.Contains("edit") || lowerName.Contains("modify")) return "📝";
-            if (lowerName.Contains("delete") || lowerName.Contains("remove")) return "🗑️";
-            if (lowerName.Contains("search") || lowerName.Contains("find") || lowerName.Contains("grep")) return "🔍";
-            if (lowerName.Contains("command") || lowerName.Contains("run") || lowerName.Contains("execute")) return "⚡";
-            if (lowerName.Contains("git")) return "🔀";
-            if (lowerName.Contains("project")) return "📁";
-
-            return "🔧";
         }
 
         private bool ContainsToolIntentLanguage(string text)
@@ -3177,47 +2950,7 @@ namespace AICA.ToolWindows
 </html>";
         }
 
-        private class ConversationMessage
-        {
-            public string Role { get; set; }
-            public string Content { get; set; }
-            public string ToolLogsHtml { get; set; }
-            public string CompletionData { get; set; } // Stores serialized CompletionResult
-            public List<IterationBlock> IterationBlocks { get; set; } // For post-completion thinking toggles
-            public List<ToolCallBlock> ToolCallBlocks { get; set; }   // For post-completion thinking toggles
-        }
-
-        /// <summary>
-        /// Build HTML for a completion card with feedback buttons
-        /// </summary>
-        private string BuildCompletionCardHtml(string summary, string command, int messageIndex)
-        {
-            var html = new StringBuilder();
-            html.AppendLine("<div class=\"completion-card\">");
-            html.AppendLine("  <div class=\"completion-header\">");
-            html.AppendLine("    <span class=\"completion-icon\">✅</span>");
-            html.AppendLine("    <span>Task Completed</span>");
-            html.AppendLine("  </div>");
-            html.AppendLine($"  <div class=\"content\">{Markdown.ToHtml(summary, _markdownPipeline)}</div>");
-
-            if (!string.IsNullOrWhiteSpace(command))
-            {
-                html.AppendLine("  <div class=\"completion-command\">");
-                html.AppendLine($"    <strong>Suggested command:</strong> <code>{System.Web.HttpUtility.HtmlEncode(command)}</code>");
-                html.AppendLine("  </div>");
-            }
-
-            html.AppendLine("  <div class=\"feedback-section\">");
-            html.AppendLine("    <div class=\"feedback-label\">Was this helpful?</div>");
-            html.AppendLine("    <div class=\"feedback-buttons\">");
-            html.AppendLine($"      <button class=\"feedback-btn\" data-message-id=\"{messageIndex}\" data-feedback=\"satisfied\" onclick=\"provideFeedback({messageIndex}, 'satisfied')\">👍 Yes</button>");
-            html.AppendLine($"      <button class=\"feedback-btn unsatisfied\" data-message-id=\"{messageIndex}\" data-feedback=\"unsatisfied\" onclick=\"provideFeedback({messageIndex}, 'unsatisfied')\">👎 No</button>");
-            html.AppendLine("    </div>");
-            html.AppendLine("  </div>");
-            html.AppendLine("</div>");
-
-            return html.ToString();
-        }
+        // ConversationMessage extracted to ChatModels.cs
 
         /// <summary>
         /// Record user feedback on task completion

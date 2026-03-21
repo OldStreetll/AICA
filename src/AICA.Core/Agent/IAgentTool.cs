@@ -91,8 +91,29 @@ namespace AICA.Core.Agent
         public string Error { get; set; }
         public bool RequiresConfirmation { get; set; }
 
+        /// <summary>
+        /// Type of failure. Used by dedup logic to distinguish retryable vs permanent failures.
+        /// </summary>
+        public ToolResultFailureKind FailureKind { get; set; }
+
         public static ToolResult Ok(string content) => new ToolResult { Success = true, Content = content };
-        public static ToolResult Fail(string error) => new ToolResult { Success = false, Error = error };
+        public static ToolResult Fail(string error) => new ToolResult { Success = false, Error = error, FailureKind = ToolResultFailureKind.Transient };
+        public static ToolResult SecurityDenied(string error) => new ToolResult { Success = false, Error = error, FailureKind = ToolResultFailureKind.SecurityDenied };
         public static ToolResult NeedsConfirm(string content) => new ToolResult { Success = true, Content = content, RequiresConfirmation = true };
+    }
+
+    /// <summary>
+    /// Classifies tool failure type for dedup and retry decisions.
+    /// </summary>
+    public enum ToolResultFailureKind
+    {
+        /// <summary>No failure (success)</summary>
+        None,
+        /// <summary>Transient failure — retry may succeed (network, timeout)</summary>
+        Transient,
+        /// <summary>Security denial — retry will never succeed (access denied, protected path)</summary>
+        SecurityDenied,
+        /// <summary>Permanent failure — resource doesn't exist</summary>
+        NotFound
     }
 }

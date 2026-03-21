@@ -83,11 +83,50 @@ namespace AICA.Core.Prompt
         /// <summary>
         /// Add tool calling rules, behavioral rules, and safety rules
         /// </summary>
+        /// <summary>
+        /// Add rules based on task complexity. Simple tasks get fewer rules (saves ~40% tokens).
+        /// </summary>
+        public SystemPromptBuilder AddComplexityGuidance(TaskComplexity complexity)
+        {
+            _builder.AppendLine("## Rules");
+            _builder.AppendLine();
+
+            // Core rules — always included regardless of complexity
+            AddCoreRules();
+
+            if (complexity == TaskComplexity.Medium || complexity == TaskComplexity.Complex)
+            {
+                // Advanced rules — Medium + Complex
+                AddAdvancedRules();
+            }
+
+            if (complexity == TaskComplexity.Complex)
+            {
+                // Complex-only rules — planning, analysis format, number consistency
+                AddComplexRules();
+            }
+
+            return this;
+        }
+
         public SystemPromptBuilder AddRules()
         {
             _builder.AppendLine("## Rules");
             _builder.AppendLine();
 
+            // Full rules for backward compatibility (all categories)
+            AddCoreRules();
+            AddAdvancedRules();
+            AddComplexRules();
+
+            return this;
+        }
+
+        /// <summary>
+        /// Core rules — always included: tool calling, completion, safety, anti-hallucination, code editing, response quality.
+        /// </summary>
+        private void AddCoreRules()
+        {
             // Tool calling rules
             _builder.AppendLine("### Tool Calling");
             _builder.AppendLine("- ALWAYS use the function calling API to invoke tools. NEVER output tool calls as text, XML, or JSON in your response.");
@@ -124,6 +163,13 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **IMPORTANT: Numbers must be accurate.** If you count 45 methods, say 45. Do not round to 48 or 44. If unsure, say 'approximately N' rather than stating an incorrect number.");
             _builder.AppendLine("- **TOOL_EXACT_STATS**: Tool results include a `[TOOL_EXACT_STATS: ...]` footer with authoritative counts. ALWAYS use these numbers when reporting results. Never estimate or count manually when exact stats are provided.");
             _builder.AppendLine();
+        }
+
+        /// <summary>
+        /// Complex-only rules — planning, number consistency, complex analysis format.
+        /// </summary>
+        private void AddComplexRules()
+        {
             _builder.AppendLine("### Task Planning");
             _builder.AppendLine("- For complex multi-step tasks, use `update_plan` to create a task plan BEFORE executing tools.");
             _builder.AppendLine("- A good plan has 3-7 concrete, actionable steps.");
@@ -165,7 +211,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("  - Offer to read other files if relevant: 'I read the root README.md. Would you like me to read any of the other X README files?'");
             _builder.AppendLine();
 
-            // Tool usage tips
+            // Tool usage tips (core — always needed)
             _builder.AppendLine("### Tool Usage Tips");
             _builder.AppendLine("- `list_projects`: **ALWAYS use this when the user asks about projects or solution structure.** Trigger keywords: 'projects', 'solution', '项目', '解决方案', 'list projects', '列出项目'. This tool parses .vcxproj/.csproj files and shows project metadata, types, file counts, filters, and dependencies. DO NOT use `list_dir` for project queries.");
             _builder.AppendLine("- `list_dir`: Use for file system directory listings. Use `recursive=true` when the user asks for 'full structure', 'complete tree', '完整结构', '目录树' etc. Set `max_depth` to control depth (default 3, max 10). DO NOT use this for project/solution queries.");
@@ -229,6 +275,13 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- When summarizing tool results, only include information that was actually returned by the tool. Do not add extra details from your training knowledge.");
             _builder.AppendLine();
 
+        }
+
+        /// <summary>
+        /// Advanced rules — Medium + Complex: evidence-based analysis, search scope, efficiency, code generation quality.
+        /// </summary>
+        private void AddAdvancedRules()
+        {
             // Evidence-based analysis (P1-014, P1-015)
             _builder.AppendLine("### Evidence-Based Analysis (CRITICAL)");
             _builder.AppendLine("- When identifying design patterns, EACH pattern MUST be backed by concrete code evidence: file name + class name + method name.");
@@ -363,8 +416,6 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- If the user's request is ambiguous, make reasonable assumptions and proceed. State your assumptions briefly.");
             _builder.AppendLine("- When explaining code or providing analysis, use Markdown formatting.");
             _builder.AppendLine();
-
-            return this;
         }
 
         public SystemPromptBuilder AddWorkspaceContext(

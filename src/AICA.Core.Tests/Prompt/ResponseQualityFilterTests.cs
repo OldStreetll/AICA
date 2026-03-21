@@ -211,9 +211,19 @@ namespace AICA.Core.Tests.Prompt
         }
 
         [Fact]
-        public void IsInternalReasoning_LongText_ReturnsFalse()
+        public void IsInternalReasoning_LongText_StartingWithPattern_ReturnsTrue()
         {
+            // BF-02 fix: Long text starting with reasoning pattern IS internal reasoning
+            // (MiniMax mixes reasoning + answer in one block)
             var longAnswer = "I need to check " + new string('x', 350);
+            Assert.True(ResponseQualityFilter.IsInternalReasoning(longAnswer));
+        }
+
+        [Fact]
+        public void IsInternalReasoning_LongText_NotStartingWithPattern_ReturnsFalse()
+        {
+            // Long text NOT starting with reasoning pattern is valid content
+            var longAnswer = "The Logger class provides " + new string('x', 350);
             Assert.False(ResponseQualityFilter.IsInternalReasoning(longAnswer));
         }
 

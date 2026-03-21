@@ -14,6 +14,8 @@ namespace AICA.Core.Tools
     /// </summary>
     public class RunCommandTool : IAgentTool
     {
+        private readonly Security.ICommandSandbox _sandbox;
+
         public string Name => "run_command";
         public string Description => "Execute a terminal/shell command (e.g., 'dotnet build', 'git status', 'npm install'). Returns stdout, stderr, and exit code. Commands require user approval. Use timeout_seconds parameter for long-running commands.";
 
@@ -21,6 +23,14 @@ namespace AICA.Core.Tools
         /// Optional external command safety checker (injected by VS layer)
         /// </summary>
         public Func<string, CommandSafetyInfo> CommandSafetyChecker { get; set; }
+
+        /// <summary>
+        /// Create RunCommandTool with optional sandbox for isolated execution.
+        /// </summary>
+        public RunCommandTool(Security.ICommandSandbox sandbox = null)
+        {
+            _sandbox = sandbox;
+        }
 
         public ToolMetadata GetMetadata()
         {
@@ -125,7 +135,17 @@ namespace AICA.Core.Tools
                 if (!confirmed)
                     return ToolResult.Fail("Command execution cancelled by user.");
 
-                // Execute the command
+                // Execute the command — use sandbox if available, otherwise direct process
+                if (_sandbox != null)
+                {
+                    var sandboxResult = await _sandbox.ExecuteAsync(command, cwd, timeoutSeconds * 1000, ct);
+                    if (sandboxResult.TimedOut)
+                        return ToolResult.Fail($"Command timed out after {timeoutSeconds} seconds.");
+
+                    var output = FormatCommandOutput(sandboxResult.ExitCode, sandboxResult.Stdout, sandboxResult.Stderr);
+                    return sandboxResult.Success ? ToolResult.Ok(output) : ToolResult.Fail(output);
+                }
+
                 var result = await ExecuteCommandAsync(command, cwd, timeoutSeconds, ct);
                 return result;
             }
@@ -228,6 +248,23 @@ namespace AICA.Core.Tools
         {
             if (string.IsNullOrEmpty(text) || text.Length <= maxLength) return text;
             return text.Substring(0, maxLength) + "\n... (truncated)";
+        }
+
+        private string FormatCommandOutput(int exitCode, string stdout, string stderr)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"Exit code: {exitCode}");
+            if (!string.IsNullOrWhiteSpace(stdout))
+            {
+                sb.AppendLine("\nstdout:");
+                sb.AppendLine(Truncate(stdout, 6000));
+            }
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                sb.AppendLine("\nstderr:");
+                sb.AppendLine(Truncate(stderr, 3000));
+            }
+            return sb.ToString();
         }
 
         public Task HandlePartialAsync(ToolCall call, IUIContext ui, CancellationToken ct = default)

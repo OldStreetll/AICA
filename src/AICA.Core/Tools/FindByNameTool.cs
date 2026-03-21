@@ -101,7 +101,7 @@ namespace AICA.Core.Tools
                 fullPath = Path.Combine(context.WorkingDirectory, searchPath);
 
             if (!context.IsPathAccessible(searchPath))
-                return ToolResult.Fail($"Access denied: {searchPath}");
+                return ToolResult.SecurityDenied($"Access denied: {searchPath}");
 
             if (!Directory.Exists(fullPath))
                 return ToolResult.Fail($"Directory not found: {searchPath}");

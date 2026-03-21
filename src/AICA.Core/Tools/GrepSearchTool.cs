@@ -145,7 +145,7 @@ namespace AICA.Core.Tools
             {
                 // Also check if the resolved path is accessible
                 if (fullPath == null || !context.IsPathAccessible(fullPath))
-                    return ToolResult.Fail($"Access denied: {searchPath}");
+                    return ToolResult.SecurityDenied($"Access denied: {searchPath}");
             }
 
             // Build regex
