@@ -12,7 +12,7 @@ namespace AICA.Core.Tools
     public class EditFileTool : IAgentTool
     {
         public string Name => "edit";
-        public string Description => "Edit an EXISTING file by replacing text. CRITICAL: The old_string must match EXACTLY (including all whitespace, line breaks, and indentation). Use read_file first to see the exact content. Set full_replace=true to replace entire file content.";
+        public string Description => "Edit a file by replacing text, or create a new file with full_replace=true. CRITICAL: The old_string must match EXACTLY (including all whitespace, line breaks, and indentation). Use read_file first to see the exact content. Set full_replace=true to replace entire file content or create a new file if it does not exist.";
 
         public ToolMetadata GetMetadata()
         {
@@ -64,7 +64,7 @@ namespace AICA.Core.Tools
                         ["full_replace"] = new ToolParameterProperty
                         {
                             Type = "boolean",
-                            Description = "If true, replace the entire file content with new_string. When using this mode, old_string is ignored and can be set to any value (e.g., empty string). This is useful for completely rewriting a file. Default is false.",
+                            Description = "If true, replace the entire file content with new_string. If the file does not exist, it will be created. When using this mode, old_string is ignored and can be set to any value (e.g., empty string). Default is false.",
                             Default = false
                         }
                     },
@@ -94,9 +94,18 @@ namespace AICA.Core.Tools
                 if (!context.IsPathAccessible(path))
                     return ToolErrorHandler.HandleError(ToolErrorHandler.AccessDenied(path));
 
-                // Check file exists
+                // Check file exists — full_replace on a new file creates it (with user confirmation)
                 if (!await context.FileExistsAsync(path, ct))
+                {
+                    if (fullReplace && !string.IsNullOrEmpty(newString))
+                    {
+                        var createResult = await context.ShowDiffAndApplyAsync(path, string.Empty, newString, ct);
+                        if (!createResult.Applied)
+                            return ToolResult.Ok("File creation cancelled by user.");
+                        return ToolResult.Ok($"Created new file: {path}");
+                    }
                     return ToolErrorHandler.HandleError(ToolErrorHandler.NotFound(path));
+                }
 
                 // Read current content
                 var content = await context.ReadFileAsync(path, ct);

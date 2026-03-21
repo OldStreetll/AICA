@@ -614,24 +614,40 @@ namespace AICA.Agent
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
 
+            var fullPath = GetFullPath(filePath);
+            System.Diagnostics.Debug.WriteLine($"[AICA] ShowDiffAndApplyAsync called for: {fullPath}");
+
+            // For new files, atomically create an empty placeholder so Tools.DiffFiles can open it
+            bool isNewFile = false;
             try
             {
-                var fullPath = GetFullPath(filePath);
-                System.Diagnostics.Debug.WriteLine($"[AICA] ShowDiffAndApplyAsync called for: {fullPath}");
+                var dir = Path.GetDirectoryName(fullPath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+                using (new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write)) { }
+                isNewFile = true;
+                System.Diagnostics.Debug.WriteLine($"[AICA] Created empty placeholder for new file: {fullPath}");
+            }
+            catch (IOException)
+            {
+                // File already exists — not a new file, proceed normally
+            }
 
-                // Create a temporary file for the new content
-                var tempFile = Path.Combine(Path.GetTempPath(), $"{Path.GetFileName(fullPath)}.new");
+            // Use unique temp file names to avoid collisions across concurrent sessions
+            var tempId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var tempFile = Path.Combine(Path.GetTempPath(), $"{Path.GetFileNameWithoutExtension(fullPath)}_{tempId}{Path.GetExtension(fullPath)}.new");
+            var backupFile = fullPath + $".{tempId}.backup";
+
+            try
+            {
                 File.WriteAllText(tempFile, newContent);
                 System.Diagnostics.Debug.WriteLine($"[AICA] Created temp file: {tempFile}");
 
-                // Save original content to a backup file
-                var backupFile = fullPath + ".backup";
                 File.WriteAllText(backupFile, originalContent);
 
                 // Use VS diff command to show the comparison
                 if (_dte != null)
                 {
-                    // Use Tools.DiffFiles command to open diff view
                     _dte.ExecuteCommand("Tools.DiffFiles", $"\"{fullPath}\" \"{tempFile}\"");
                     System.Diagnostics.Debug.WriteLine($"[AICA] Diff view opened");
                 }
@@ -649,7 +665,6 @@ namespace AICA.Agent
                 // Wait for user to review and confirm using non-modal dialog
                 await Task.Delay(2000, ct); // Give user time to see the diff
 
-                // Use non-modal confirmation dialog
                 bool confirmed = false;
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
 
@@ -671,9 +686,8 @@ namespace AICA.Agent
 
                 if (!confirmed)
                 {
-                    // Clean up temp files
-                    try { File.Delete(tempFile); } catch { }
-                    try { File.Delete(backupFile); } catch { }
+                    // Remove the empty placeholder if user cancels new file creation
+                    if (isNewFile) { try { File.Delete(fullPath); } catch { } }
                     System.Diagnostics.Debug.WriteLine($"[AICA] User cancelled");
                     return DiffApplyResult.Cancelled();
                 }
@@ -685,18 +699,31 @@ namespace AICA.Agent
                 File.WriteAllText(fullPath, finalContent);
                 System.Diagnostics.Debug.WriteLine($"[AICA] Changes applied to file");
 
-                // Clean up temp files
-                try { File.Delete(tempFile); } catch { }
-                try { File.Delete(backupFile); } catch { }
+                // Open the file in VS editor so user can see the result
+                try { await OpenFileInEditorAsync(fullPath, ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[AICA] OpenFileInEditor failed: {ex.Message}"); }
 
                 System.Diagnostics.Debug.WriteLine($"[AICA] Changes applied successfully");
                 return DiffApplyResult.Success();
             }
+            catch (OperationCanceledException)
+            {
+                if (isNewFile) { try { File.Delete(fullPath); } catch { } }
+                throw;
+            }
             catch (Exception ex)
             {
+                if (isNewFile) { try { File.Delete(fullPath); } catch { } }
                 System.Diagnostics.Debug.WriteLine($"[AICA] ShowDiffAndApplyAsync error: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"[AICA] Stack trace: {ex.StackTrace}");
                 return DiffApplyResult.Cancelled();
+            }
+            finally
+            {
+                // Always clean up temp files regardless of outcome
+                try { File.Delete(tempFile); } catch { }
+                try { File.Delete(backupFile); } catch { }
             }
         }
 

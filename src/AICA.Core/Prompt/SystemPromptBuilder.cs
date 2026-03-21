@@ -244,7 +244,8 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("  - Trailing whitespace");
             _builder.AppendLine("- If `edit` fails with 'old_string not found', call `read_file` again to see the current content, then retry with the exact string.");
             _builder.AppendLine("- To make `old_string` unique, include surrounding context (lines before/after).");
-            _builder.AppendLine("- To create a NEW file: use `run_command` to create an empty file (e.g., `type nul > path\\to\\file.cs`), then use `edit` to write content.");
+            _builder.AppendLine("- To create a NEW file with code or structured content: use `edit` with `full_replace=true` — this shows a diff preview so the user can review and modify the content before saving.");
+            _builder.AppendLine("- To create a simple file or run a shell operation: use `run_command` (e.g., `echo text > file.txt`).");
             _builder.AppendLine("- Preserve the existing code style, naming conventions, and indentation.");
             _builder.AppendLine("- Do not add or remove comments unless explicitly asked.");
             _builder.AppendLine("- Add necessary imports/using statements when adding new code.");

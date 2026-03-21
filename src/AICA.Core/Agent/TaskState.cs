@@ -21,6 +21,7 @@ namespace AICA.Core.Agent
         // Tool execution flags
         public bool DidRejectTool { get; set; }
         public System.Collections.Generic.HashSet<string> EditedFiles { get; } = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        public System.Collections.Generic.HashSet<string> TruncatedFiles { get; } = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
         public bool DidEditFile => EditedFiles.Count > 0;
         public bool HasEverUsedTools { get; set; }
         public string LastToolName { get; set; } = string.Empty;

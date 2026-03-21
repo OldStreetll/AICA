@@ -829,14 +829,25 @@ namespace AICA.Core.Agent
                     // (exempt attempt_completion, condense, and read_file after edit)
                     var toolSignature = ToolCallProcessor.GetToolCallSignature(toolCall);
 
-                    // Allow read_file to be called again only if that specific file was edited
+                    // Allow read_file to be called again if the file was edited,
+                    // or if the file was auto-truncated and this is a targeted follow-up with offset/limit
                     bool allowDuplicate = false;
-                    if (toolCall.Name == "read_file" && _taskState.EditedFiles.Count > 0)
+                    if (toolCall.Name == "read_file")
                     {
                         var readPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
-                        if (readPath != null && _taskState.EditedFiles.Contains(readPath.TrimEnd('/', '\\')))
+                        if (readPath != null)
                         {
-                            allowDuplicate = true;
+                            var normalizedPath = readPath.TrimEnd('/', '\\');
+                            if (_taskState.EditedFiles.Contains(normalizedPath))
+                            {
+                                allowDuplicate = true;
+                            }
+                            else if (_taskState.TruncatedFiles.Contains(normalizedPath))
+                            {
+                                var hasOffsetOrLimit = (toolCall.Arguments != null) &&
+                                    (toolCall.Arguments.ContainsKey("offset") || toolCall.Arguments.ContainsKey("limit"));
+                                if (hasOffsetOrLimit) allowDuplicate = true;
+                            }
                         }
                     }
 
@@ -890,6 +901,14 @@ namespace AICA.Core.Agent
                             var editPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
                             if (!string.IsNullOrEmpty(editPath))
                                 _taskState.EditedFiles.Add(editPath.TrimEnd('/', '\\'));
+                        }
+
+                        // Track auto-truncated files so subsequent offset reads are not blocked by dedup
+                        if (toolCall.Name == "read_file" && result.Content != null && result.Content.StartsWith("[AUTO_TRUNCATED]"))
+                        {
+                            var readPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
+                            if (!string.IsNullOrEmpty(readPath))
+                                _taskState.TruncatedFiles.Add(readPath.TrimEnd('/', '\\'));
                         }
                     }
                     else

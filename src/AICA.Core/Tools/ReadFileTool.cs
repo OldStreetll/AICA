@@ -125,7 +125,7 @@ namespace AICA.Core.Tools
                     if (allLines.Length > autoTruncateThreshold)
                     {
                         var truncated = new System.Text.StringBuilder();
-                        truncated.AppendLine($"[File has {allLines.Length} lines. Showing first {autoTruncateLimit}. Use offset/limit parameters to read specific sections.]");
+                        truncated.AppendLine($"[AUTO_TRUNCATED] [File has {allLines.Length} lines. Showing first {autoTruncateLimit}. Use offset/limit parameters to read specific sections.]");
                         truncated.AppendLine();
                         for (int i = 0; i < autoTruncateLimit && i < allLines.Length; i++)
                         {

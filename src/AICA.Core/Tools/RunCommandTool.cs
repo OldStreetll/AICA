@@ -166,12 +166,21 @@ namespace AICA.Core.Tools
 
         private async Task<ToolResult> ExecuteCommandAsync(string command, string workingDirectory, int timeoutSeconds, CancellationToken ct)
         {
-            // Parse command safely to prevent injection
-            var (executable, arguments) = ParseCommandSafely(command);
+            // Use shell wrapper so redirections (>, |, &&) work correctly.
+            // SECURITY: CommandSafetyChecker (injected by VS layer) and user confirmation
+            // in ExecuteAsync are the safety gates — they run BEFORE this method is called.
+            string executable;
+            string arguments;
 
-            if (string.IsNullOrEmpty(executable))
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
             {
-                return ToolResult.Fail("Invalid command: executable not found");
+                executable = "cmd.exe";
+                arguments = $"/c {command}";
+            }
+            else
+            {
+                executable = "/bin/bash";
+                arguments = $"-c \"{command.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
             }
 
             var startInfo = new ProcessStartInfo
@@ -272,114 +281,6 @@ namespace AICA.Core.Tools
             return Task.CompletedTask;
         }
 
-        /// <summary>
-        /// Safely parse command to prevent injection attacks
-        /// </summary>
-        private (string executable, string arguments) ParseCommandSafely(string command)
-        {
-            if (string.IsNullOrWhiteSpace(command))
-                return (null, null);
-
-            command = command.Trim();
-
-            // Split command into executable and arguments
-            var parts = SplitCommandLine(command);
-            if (parts.Length == 0)
-                return (null, null);
-
-            var executable = parts[0];
-            var arguments = parts.Length > 1 ? string.Join(" ", parts.Skip(1).Select(EscapeArgument)) : "";
-
-            // Validate executable name (no path traversal, no shell metacharacters)
-            if (!IsValidExecutableName(executable))
-                return (null, null);
-
-            return (executable, arguments);
-        }
-
-        /// <summary>
-        /// Split command line respecting quotes
-        /// </summary>
-        private string[] SplitCommandLine(string commandLine)
-        {
-            var result = new List<string>();
-            var current = new StringBuilder();
-            bool inQuotes = false;
-            bool escapeNext = false;
-
-            for (int i = 0; i < commandLine.Length; i++)
-            {
-                char c = commandLine[i];
-
-                if (escapeNext)
-                {
-                    current.Append(c);
-                    escapeNext = false;
-                }
-                else if (c == '\\')
-                {
-                    escapeNext = true;
-                }
-                else if (c == '"')
-                {
-                    inQuotes = !inQuotes;
-                }
-                else if (char.IsWhiteSpace(c) && !inQuotes)
-                {
-                    if (current.Length > 0)
-                    {
-                        result.Add(current.ToString());
-                        current.Clear();
-                    }
-                }
-                else
-                {
-                    current.Append(c);
-                }
-            }
-
-            if (current.Length > 0)
-                result.Add(current.ToString());
-
-            return result.ToArray();
-        }
-
-        /// <summary>
-        /// Validate executable name to prevent injection
-        /// </summary>
-        private bool IsValidExecutableName(string executable)
-        {
-            if (string.IsNullOrWhiteSpace(executable))
-                return false;
-
-            // Prevent path traversal
-            if (executable.Contains("..") || executable.Contains("/") || executable.Contains("\\"))
-                return false;
-
-            // Prevent shell metacharacters
-            var dangerousChars = new[] { '|', '&', ';', '>', '<', '`', '$', '(', ')', '{', '}', '[', ']', '*', '?' };
-            if (executable.Any(c => dangerousChars.Contains(c)))
-                return false;
-
-            return true;
-        }
-
-        /// <summary>
-        /// Properly escape command line arguments
-        /// </summary>
-        private string EscapeArgument(string argument)
-        {
-            if (string.IsNullOrEmpty(argument))
-                return "\"\"";
-
-            // If argument contains spaces or special characters, quote it
-            if (argument.Any(c => char.IsWhiteSpace(c) || c == '"'))
-            {
-                return "\"" + argument.Replace("\"", "\\\"") + "\"";
-            }
-
-            return argument;
-        }
     }
 
     /// <summary>
