@@ -229,7 +229,6 @@ namespace AICA.Core.Agent
                                     switch (toolName)
                                     {
                                         case "read_file": filesReadRaw.Add(filePath); break;
-                                        case "write_to_file": summary.FilesCreated.Add(filePath); break;
                                         case "edit": summary.FilesModified.Add(filePath); break;
                                     }
                                 }
@@ -312,9 +311,6 @@ namespace AICA.Core.Agent
                                     {
                                         case "read_file":
                                             filesRead.Add(filePath);
-                                            break;
-                                        case "write_to_file":
-                                            filesCreated.Add(filePath);
                                             break;
                                         case "edit":
                                             filesModified.Add(filePath);
@@ -473,7 +469,6 @@ namespace AICA.Core.Agent
                                     args.TryGetValue("path", out summary);
                                     if (summary == null) summary = "workspace root";
                                     break;
-                                case "write_to_file":
                                 case "edit":
                                     args.TryGetValue("path", out summary);
                                     if (summary == null) args.TryGetValue("file_path", out summary);

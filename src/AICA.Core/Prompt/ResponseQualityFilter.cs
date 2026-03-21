@@ -148,6 +148,9 @@ namespace AICA.Core.Prompt
             new Regex(@"\s*请问.*帮助.*[?？]?\s*$", RegexOptions.Compiled),
             new Regex(@"\s*请问.*需要.*[?？]?\s*$", RegexOptions.Compiled),
             new Regex(@"\s*请问有什么.*[?？]?\s*$", RegexOptions.Compiled),
+            // BF-02 fix: catch variants without "请问" prefix
+            new Regex(@"(?<=[。！？])\s*有什么.*帮助.*[?？吗]?\s*$", RegexOptions.Compiled),
+            new Regex(@"(?<=[。！？])\s*我可以.*帮助.*[?？吗]?\s*$", RegexOptions.Compiled),
         };
 
         #endregion
@@ -522,7 +525,6 @@ namespace AICA.Core.Prompt
                 }
 
                 case "edit":
-                case "write_to_file":
                 {
                     var path = GetArg(args, "path") ?? GetArg(args, "file_path") ?? "unknown";
                     return $"[Previously edited: {path}]";

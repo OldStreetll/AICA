@@ -28,7 +28,7 @@ namespace AICA.Core.Agent
         // Write tools for modification tasks
         private static readonly HashSet<string> WriteTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "edit", "write_to_file", "run_command"
+            "edit", "run_command"
         };
 
         // Context management tools

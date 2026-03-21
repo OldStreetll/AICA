@@ -113,15 +113,19 @@ namespace AICA.Core.Agent
             // Add custom instructions
             builder.AddCustomInstructions(_customInstructions);
 
-            // Add project knowledge context if available
-            var knowledgeStore = Knowledge.ProjectKnowledgeStore.Instance;
-            if (knowledgeStore.HasIndex)
+            // Add project knowledge context only for knowledge-hungry intents
+            var intent = DynamicToolSelector.ClassifyIntent(userRequest);
+            if (intent == "read" || intent == "analyze" || intent == "command")
             {
-                var provider = knowledgeStore.CreateProvider();
-                if (provider != null)
+                var knowledgeStore = Knowledge.ProjectKnowledgeStore.Instance;
+                if (knowledgeStore.HasIndex)
                 {
-                    var knowledgeContext = provider.RetrieveContext(userRequest);
-                    builder.AddKnowledgeContext(knowledgeContext);
+                    var provider = knowledgeStore.CreateProvider();
+                    if (provider != null)
+                    {
+                        var knowledgeContext = provider.RetrieveContext(userRequest);
+                        builder.AddKnowledgeContext(knowledgeContext);
+                    }
                 }
             }
 
@@ -881,7 +885,7 @@ namespace AICA.Core.Agent
                     {
                         _taskState.ResetFailureCounts();
                         // Track file edits by path
-                        if (toolCall.Name == "edit" || toolCall.Name == "write_to_file")
+                        if (toolCall.Name == "edit")
                         {
                             var editPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
                             if (!string.IsNullOrEmpty(editPath))
@@ -1065,7 +1069,7 @@ namespace AICA.Core.Agent
 
                 // ── Check if task should be completed ──
                 // If files were edited/created but attempt_completion was not called, remind the AI
-                bool hadFileOperations = toolCalls.Any(tc => tc.Name == "write_to_file" || tc.Name == "edit");
+                bool hadFileOperations = toolCalls.Any(tc => tc.Name == "edit");
                 bool hadAttemptCompletion = toolCalls.Any(tc => tc.Name == "attempt_completion");
 
                 if (hadFileOperations && !hadAttemptCompletion)

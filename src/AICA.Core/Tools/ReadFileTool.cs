@@ -116,6 +116,25 @@ namespace AICA.Core.Tools
                     content = numberedLines.ToString();
                 }
 
+                // Auto-truncate large files when no offset/limit was requested
+                const int autoTruncateThreshold = 500;
+                const int autoTruncateLimit = 200;
+                if (!offset.HasValue && !limit.HasValue)
+                {
+                    var allLines = content.Split('\n');
+                    if (allLines.Length > autoTruncateThreshold)
+                    {
+                        var truncated = new System.Text.StringBuilder();
+                        truncated.AppendLine($"[File has {allLines.Length} lines. Showing first {autoTruncateLimit}. Use offset/limit parameters to read specific sections.]");
+                        truncated.AppendLine();
+                        for (int i = 0; i < autoTruncateLimit && i < allLines.Length; i++)
+                        {
+                            truncated.AppendLine($"{i + 1,6}: {allLines[i]}");
+                        }
+                        content = truncated.ToString();
+                    }
+                }
+
                 return ToolResult.Ok(content);
             }
             catch (ToolParameterException ex)

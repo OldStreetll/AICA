@@ -161,61 +161,7 @@ namespace AICA.Core.Tests.Agent
             Assert.Contains("not found", result.Error.ToLower());
         }
 
-        [Fact]
-        public async Task WriteFileTool_WithNewFile_CreatesFile()
-        {
-            // Arrange
-            var tool = new WriteFileTool();
-            var context = CreateMockContext();
-            context.Setup(c => c.FileExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(false);
-            var uiContext = CreateMockUIContext();
-            var call = new ToolCall
-            {
-                Id = "1",
-                Name = "write_to_file",
-                Arguments = new Dictionary<string, object>
-                {
-                    ["path"] = "new_file.txt",
-                    ["content"] = "file content"
-                }
-            };
-
-            // Act
-            var result = await tool.ExecuteAsync(call, context.Object, uiContext.Object);
-
-            // Assert
-            Assert.True(result.Success);
-            context.Verify(c => c.WriteFileAsync("new_file.txt", "file content", It.IsAny<CancellationToken>()), Times.Once);
-        }
-
-        [Fact]
-        public async Task WriteFileTool_WithExistingFile_ReturnsFail()
-        {
-            // Arrange
-            var tool = new WriteFileTool();
-            var context = CreateMockContext();
-            context.Setup(c => c.FileExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(true);
-            var uiContext = CreateMockUIContext();
-            var call = new ToolCall
-            {
-                Id = "1",
-                Name = "write_to_file",
-                Arguments = new Dictionary<string, object>
-                {
-                    ["path"] = "existing_file.txt",
-                    ["content"] = "file content"
-                }
-            };
-
-            // Act
-            var result = await tool.ExecuteAsync(call, context.Object, uiContext.Object);
-
-            // Assert
-            Assert.False(result.Success);
-            Assert.Contains("already exists", result.Error);
-        }
+        // WriteFileTool tests removed — tool deleted in favor of run_command + edit flow
 
         [Fact]
         public async Task ToolDispatcher_WithRegisteredTools_ExecutesTool()
@@ -286,7 +232,7 @@ namespace AICA.Core.Tests.Agent
             var registry = new ToolRegistry();
             registry.Register(new ReadFileTool());
             registry.Register(new EditFileTool());
-            registry.Register(new WriteFileTool());
+            registry.Register(new RunCommandTool());
 
             // Act
             var fileReadTools = registry.GetByCategory(ToolCategory.FileRead);

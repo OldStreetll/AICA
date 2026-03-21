@@ -30,7 +30,7 @@ namespace AICA.Core.Tools
                         {
                             Type = "string",
                             Description = "A structured summary of all work done so far. MUST include these sections:\n" +
-                                "1. **Tool Call Log**: List EVERY tool call made, grouped by tool name. For read_file, list ALL file paths. For grep_search, list ALL queries. For edit/write_to_file, list ALL files modified/created.\n" +
+                                "1. **Tool Call Log**: List EVERY tool call made, grouped by tool name. For read_file, list ALL file paths. For grep_search, list ALL queries. For edit, list ALL files modified.\n" +
                                 "2. **Key Findings**: Important analysis results, class/method names discovered, counts, patterns identified\n" +
                                 "3. **Searches Performed**: What was searched for and key results\n" +
                                 "4. **Current Task Status**: The user's latest request and current progress\n" +

@@ -304,7 +304,6 @@ namespace AICA.ToolWindows
             // Initialize tool dispatcher with available tools
             _toolDispatcher = new ToolDispatcher();
             _toolDispatcher.RegisterTool(new ReadFileTool());
-            _toolDispatcher.RegisterTool(new WriteFileTool());
             _toolDispatcher.RegisterTool(new EditFileTool());
             _toolDispatcher.RegisterTool(new ListDirTool());
             _toolDispatcher.RegisterTool(new GrepSearchTool());

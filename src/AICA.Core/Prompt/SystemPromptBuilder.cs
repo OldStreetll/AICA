@@ -142,7 +142,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **Do NOT over-explore.** If you already have a good answer, call `attempt_completion` promptly. Quality over quantity.");
             _builder.AppendLine("- **DO NOT mention internal tool decisions to the user.** Never write text like 'I should call attempt_completion', 'I will call a tool now', '我应该调用 attempt_completion', or similar meta-reasoning. Only present user-facing results.");
             _builder.AppendLine("- Tasks that require `attempt_completion`:");
-            _builder.AppendLine("  - Creating any file (write_to_file)");
+            _builder.AppendLine("  - Creating any file (run_command to create + edit to write content)");
             _builder.AppendLine("  - Editing any file (edit)");
             _builder.AppendLine("  - Completing any user request that involves code/file operations");
             _builder.AppendLine("  - Finishing any analysis or investigation");
@@ -244,7 +244,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("  - Trailing whitespace");
             _builder.AppendLine("- If `edit` fails with 'old_string not found', call `read_file` again to see the current content, then retry with the exact string.");
             _builder.AppendLine("- To make `old_string` unique, include surrounding context (lines before/after).");
-            _builder.AppendLine("- Use `write_to_file` ONLY for creating new files. Never use it to overwrite existing files.");
+            _builder.AppendLine("- To create a NEW file: use `run_command` to create an empty file (e.g., `type nul > path\\to\\file.cs`), then use `edit` to write content.");
             _builder.AppendLine("- Preserve the existing code style, naming conventions, and indentation.");
             _builder.AppendLine("- Do not add or remove comments unless explicitly asked.");
             _builder.AppendLine("- Add necessary imports/using statements when adding new code.");
@@ -538,7 +538,7 @@ namespace AICA.Core.Prompt
         /// Add auto-indexed project knowledge context to the prompt.
         /// Knowledge is injected with Normal priority so it can be shed under token pressure.
         /// </summary>
-        private const int DefaultKnowledgeMaxTokens = 3000;
+        private const int DefaultKnowledgeMaxTokens = 6000;
 
         public SystemPromptBuilder AddKnowledgeContext(string knowledgeContext, int maxTokens = DefaultKnowledgeMaxTokens)
         {

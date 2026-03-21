@@ -89,17 +89,18 @@ namespace AICA.Core.Tests.Agent
             var pipeline = new ToolExecutionPipeline();
             pipeline.Use(middleware);
 
-            var tool = new WriteFileTool();
+            var tool = new EditFileTool();
             var context = CreateMockContext();
             var uiContext = CreateMockUIContext();
             var call = new ToolCall
             {
                 Id = "1",
-                Name = "write_to_file",
+                Name = "edit",
                 Arguments = new Dictionary<string, object>
                 {
                     ["path"] = "test.txt",
-                    ["content"] = "content"
+                    ["old_string"] = "old",
+                    ["new_string"] = "new"
                 }
             };
 
