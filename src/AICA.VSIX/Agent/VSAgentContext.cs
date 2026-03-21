@@ -207,7 +207,10 @@ namespace AICA.Agent
                         .Select(p => p.Trim()).ToArray(),
                     CommandBlacklist = secOptions.CommandBlacklist?
                         .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(p => p.Trim()).ToArray()
+                        .Select(p => p.Trim()).ToArray(),
+                    AicaIgnorePath = secOptions.RespectAicaIgnore
+                        ? null  // null = auto-detect .aicaignore in working directory
+                        : ""    // empty = skip loading (no ignore patterns)
                 });
 
                 // Initialize AutoApproveManager
@@ -228,6 +231,23 @@ namespace AICA.Agent
                     WorkingDirectory = WorkingDirectory
                 });
             }
+        }
+
+        private void RefreshAutoApproveSettings()
+        {
+            try
+            {
+                var secOptions = SecurityOptions.Instance;
+                _autoApproveManager = new AutoApproveManager(new AutoApproveOptions
+                {
+                    AutoApproveFileRead = secOptions.AutoApproveReadOperations,
+                    AutoApproveFileCreate = secOptions.AutoApproveFileCreation,
+                    AutoApproveFileEdit = secOptions.AutoApproveFileEdits,
+                    AutoApproveFileDelete = false,
+                    AutoApproveSafeCommands = secOptions.AutoApproveSafeCommands
+                });
+            }
+            catch { /* keep existing _autoApproveManager on failure */ }
         }
 
         private string GetSolutionDirectory()
@@ -469,6 +489,9 @@ namespace AICA.Agent
 
         public async Task<bool> RequestConfirmationAsync(string operation, string details, CancellationToken ct = default)
         {
+            // Refresh auto-approve settings from current options (ensures settings changes apply immediately)
+            RefreshAutoApproveSettings();
+
             // Check if operation should be auto-approved
             if (_autoApproveManager != null && _autoApproveManager.ShouldAutoApprove(operation, details))
             {

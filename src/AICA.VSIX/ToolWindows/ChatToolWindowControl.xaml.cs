@@ -2905,15 +2905,15 @@ namespace AICA.ToolWindows
 
         function showPlan(index) {{
             var tabs = document.querySelectorAll('.plan-tab');
-            var cards = document.querySelectorAll('#plan-content .plan-card');
+            var wrappers = document.querySelectorAll('#plan-content > div');
             for (var i = 0; i < tabs.length; i++) {{
                 removeClass(tabs[i], 'active');
             }}
-            for (var i = 0; i < cards.length; i++) {{
-                cards[i].style.display = 'none';
+            for (var i = 0; i < wrappers.length; i++) {{
+                wrappers[i].style.display = 'none';
             }}
             if (tabs[index]) addClass(tabs[index], 'active');
-            if (cards[index]) cards[index].style.display = 'block';
+            if (wrappers[index]) wrappers[index].style.display = 'block';
         }}
 
         function toggleToolCall(toolCallId) {{

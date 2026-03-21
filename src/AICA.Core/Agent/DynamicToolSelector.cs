@@ -51,6 +51,13 @@ namespace AICA.Core.Agent
             "改", "加", "替换", "实现", "插入"
         };
 
+        private static readonly string[] CommandKeywords = new[]
+        {
+            "run", "execute", "command", "shell", "terminal", "cmd",
+            "运行", "执行", "命令", "终端",
+            "dotnet", "npm", "pip", "git", "nuget", "node", "python"
+        };
+
         private static readonly string[] AnalyzeKeywords = new[]
         {
             "analyze", "analysis", "overview", "architecture", "structure", "investigate",
@@ -101,6 +108,10 @@ namespace AICA.Core.Agent
             if (ModifyKeywords.Any(k => lower.Contains(k)))
                 return "modify";
 
+            // Command execution intent
+            if (CommandKeywords.Any(k => lower.Contains(k)))
+                return "command";
+
             // Analysis intent
             if (AnalyzeKeywords.Any(k => lower.Contains(k)))
                 return "analyze";
@@ -123,6 +134,12 @@ namespace AICA.Core.Agent
                     var readSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
                     foreach (var t in ReadTools) readSet.Add(t);
                     return readSet;
+
+                case "command":
+                    var commandSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
+                    foreach (var t in ReadTools) commandSet.Add(t);
+                    commandSet.Add("run_command");
+                    return commandSet;
 
                 case "analyze":
                     var analyzeSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);

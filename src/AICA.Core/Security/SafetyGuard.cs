@@ -47,6 +47,9 @@ namespace AICA.Core.Security
 
         private void LoadIgnorePatterns(string aicaIgnorePath)
         {
+            // Empty string = explicitly disabled (RespectAicaIgnore=false)
+            if (aicaIgnorePath != null && aicaIgnorePath.Length == 0) return;
+
             var ignoreFile = aicaIgnorePath ?? Path.Combine(_workingDirectory, ".aicaignore");
             if (!File.Exists(ignoreFile)) return;
 
@@ -68,9 +71,25 @@ namespace AICA.Core.Security
 
         private string ConvertGlobToRegex(string glob)
         {
-            var regex = "^" + Regex.Escape(glob)
+            // Normalize directory separators to match NormalizePath behavior
+            var normalized = glob.Replace('/', Path.DirectorySeparatorChar)
+                                 .Replace('\\', Path.DirectorySeparatorChar);
+
+            // Trailing separator = directory pattern (match dir and everything inside, like .gitignore)
+            var sep = Path.DirectorySeparatorChar;
+            if (normalized.EndsWith(sep.ToString()))
+            {
+                normalized = normalized.TrimEnd(sep);
+                var escaped = Regex.Escape(normalized);
+                var sepEscaped = sep == '\\' ? @"\\" : "/";
+                return $"^{escaped}({sepEscaped}.*)?$";
+            }
+
+            // Build negated character class for single * (must not cross directory boundaries)
+            var sepE = sep == '\\' ? @"\\" : "/";
+            var regex = "^" + Regex.Escape(normalized)
                 .Replace("\\*\\*", ".*")
-                .Replace("\\*", "[^/\\\\]*")
+                .Replace("\\*", $"[^{sepE}]*")
                 .Replace("\\?", ".") + "$";
             return regex;
         }
@@ -96,12 +115,24 @@ namespace AICA.Core.Security
                 }
             }
 
-            // Check ignore patterns
-            foreach (var pattern in _ignorePatterns)
+            // Check ignore patterns (match against relative path from working directory)
+            if (_ignorePatterns.Count > 0)
             {
-                if (pattern.IsMatch(normalizedPath))
+                var pathToCheck = normalizedPath;
+
+                // Convert absolute path to relative for pattern matching
+                var workDirPrefix = _workingDirectory.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                if (normalizedPath.StartsWith(workDirPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    return PathAccessResult.Denied("Path matches .aicaignore pattern");
+                    pathToCheck = normalizedPath.Substring(workDirPrefix.Length);
+                }
+
+                foreach (var pattern in _ignorePatterns)
+                {
+                    if (pattern.IsMatch(pathToCheck))
+                    {
+                        return PathAccessResult.Denied("Path matches .aicaignore pattern");
+                    }
                 }
             }
 

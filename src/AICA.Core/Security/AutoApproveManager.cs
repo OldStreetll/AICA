@@ -139,16 +139,38 @@ namespace AICA.Core.Security
             if (string.IsNullOrEmpty(details))
                 return false;
 
-            var safeCommands = new[] { "dotnet", "npm", "git", "nuget", "node", "python", "pip" };
-            var lowerDetails = details.ToLowerInvariant();
-
-            foreach (var cmd in safeCommands)
+            var safeCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                if (lowerDetails.Contains(cmd))
-                    return true;
+                "dotnet", "npm", "git", "nuget", "node", "python", "pip"
+            };
+
+            // Extract command from markdown code block if present (e.g. "Execute command:\n```\ngit status\n```")
+            var commandText = details;
+            var backtickStart = details.IndexOf("```", StringComparison.Ordinal);
+            if (backtickStart >= 0)
+            {
+                var contentStart = details.IndexOf('\n', backtickStart);
+                if (contentStart >= 0)
+                {
+                    contentStart++;
+                    var backtickEnd = details.IndexOf("```", contentStart, StringComparison.Ordinal);
+                    if (backtickEnd > contentStart)
+                    {
+                        commandText = details.Substring(contentStart, backtickEnd - contentStart).Trim();
+                    }
+                }
             }
 
-            return false;
+            // Extract first token (executable) for precise matching
+            var firstToken = commandText
+                .Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
+
+            if (string.IsNullOrEmpty(firstToken))
+                return false;
+
+            var executable = System.IO.Path.GetFileNameWithoutExtension(firstToken);
+            return safeCommands.Contains(executable);
         }
 
         private bool MatchesPattern(string details, string pattern)
