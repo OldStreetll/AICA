@@ -88,13 +88,19 @@ namespace AICA.Core.Agent
             var allToolDefinitions = _toolDispatcher.GetToolDefinitions().ToList();
             var complexity = TaskComplexityAnalyzer.AnalyzeComplexity(userRequest);
             var toolDefinitions = DynamicToolSelector.SelectTools(userRequest, complexity, allToolDefinitions);
+            // 1.2c: Detect project language and classify intent early (needed for prompt building)
+            var language = ProjectLanguageDetector.DetectLanguage(context?.WorkingDirectory);
+            var intent = DynamicToolSelector.ClassifyIntent(userRequest);
+
             var builder = new SystemPromptBuilder()
                 .AddTools(toolDefinitions)
                 .AddToolDescriptions()
                 .AddComplexityGuidance(complexity)
                 .AddWorkspaceContext(
                     context?.WorkingDirectory ?? Environment.CurrentDirectory,
-                    context?.SourceRoots);
+                    context?.SourceRoots)
+                .AddCppSpecialization(language)       // 1.2b: C++ specialization
+                .AddBugFixGuidance(intent, language); // 1.3a: Bug fix guidance
 
             // Load and integrate rules from files
             if (context?.WorkingDirectory != null)
@@ -104,6 +110,14 @@ namespace AICA.Core.Agent
                     CandidatePaths = ExtractPathCandidates(userRequest)
                 };
 
+                // C14: Force-activate C++ rules in C++ projects
+                if (language == ProjectLanguage.CppC)
+                {
+                    ruleContext.CandidatePaths.Add("**/*.cpp");
+                    ruleContext.CandidatePaths.Add("**/*.h");
+                    ruleContext.CandidatePaths.Add("**/*.c");
+                }
+
                 await builder.AddRulesFromFilesAsync(
                     context.WorkingDirectory,
                     ruleContext,
@@ -112,10 +126,8 @@ namespace AICA.Core.Agent
 
             // Add custom instructions
             builder.AddCustomInstructions(_customInstructions);
-
             // Add project knowledge context only for knowledge-hungry intents
-            var intent = DynamicToolSelector.ClassifyIntent(userRequest);
-            if (intent == "read" || intent == "analyze" || intent == "command")
+            if (intent == "read" || intent == "analyze" || intent == "command" || intent == "bug_fix")
             {
                 var knowledgeStore = Knowledge.ProjectKnowledgeStore.Instance;
                 if (knowledgeStore.HasIndex)
@@ -179,6 +191,17 @@ namespace AICA.Core.Agent
 
             // Track tool call signatures to detect duplicates
             var executedToolSignatures = new HashSet<string>(StringComparer.Ordinal);
+
+            // SEC-01: Permanent blacklist for security-denied paths (survives dedup set changes)
+            var securityBlacklist = new HashSet<string>(StringComparer.Ordinal);
+
+            // H4: Telemetry builder — collects per-tool metrics during execution
+            var telemetryBuilder = new SessionRecordBuilder
+            {
+                Complexity = complexity.ToString(),
+                Intent = intent,
+                UserMessageTokens = userRequest?.Length ?? 0
+            };
 
             while (_taskState.Iteration < _maxIterations && !ct.IsCancellationRequested && !_taskState.Abort && !_taskState.IsCompleted)
             {
@@ -824,6 +847,16 @@ namespace AICA.Core.Agent
                 // Execute tool calls
                 foreach (var toolCall in toolCalls)
                 {
+                    // SEC-01: Check security blacklist BEFORE dedup — blocks path variants
+                    if (ToolCallProcessor.IsPathBlacklisted(toolCall, securityBlacklist, context?.WorkingDirectory))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] SEC-01: Blocked security-blacklisted path for tool '{toolCall.Name}'");
+                        var blockedResult = ToolResult.SecurityDenied("此路径已被安全策略永久拒绝访问。");
+                        yield return AgentStep.WithToolResult(toolCall, blockedResult);
+                        conversationHistory.Add(ChatMessage.ToolResult(toolCall.Id, blockedResult.Error));
+                        continue;
+                    }
+
                     // ── Duplicate tool call detection ──
                     // Skip tools that were already called with identical arguments
                     // (exempt attempt_completion, condense, and read_file after edit)
@@ -891,6 +924,11 @@ namespace AICA.Core.Agent
                         result = ToolResult.Fail($"Tool execution error: {ex.Message}");
                     }
 
+                    // H4: Record tool call for telemetry
+                    telemetryBuilder.RecordToolCall(toolCall.Name, result.Success);
+                    if (!result.Success && toolCall.Name == "edit")
+                        telemetryBuilder.RecordEditFailureReason(result.Error);
+
                     // Track mistakes vs successes
                     if (result.Success)
                     {
@@ -927,6 +965,8 @@ namespace AICA.Core.Agent
                         }
                         else
                         {
+                            // SEC-01: Add to permanent security blacklist (blocks path variants)
+                            ToolCallProcessor.AddToSecurityBlacklist(toolCall, securityBlacklist, context?.WorkingDirectory);
                             System.Diagnostics.Debug.WriteLine($"[AICA] Tool '{toolCall.Name}' security denied, keeping in dedup set (no retry)");
                         }
                     }
@@ -1156,6 +1196,28 @@ namespace AICA.Core.Agent
                     }
                 }
             }
+
+            // H4: Determine outcome and write telemetry
+            string telemetryOutcome;
+            if (_taskState.IsCompleted) telemetryOutcome = "completed";
+            else if (_taskState.Abort) telemetryOutcome = "aborted";
+            else if (ct.IsCancellationRequested) telemetryOutcome = "user_cancelled";
+            else if (_taskState.Iteration >= _maxIterations) telemetryOutcome = "timeout";
+            else telemetryOutcome = "unknown";
+
+            var sessionRecord = telemetryBuilder.Build(_taskState, telemetryOutcome);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var writer = new AgentTelemetryWriter();
+                    await writer.WriteAsync(sessionRecord).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] H4 telemetry fire-and-forget failed: {ex.Message}");
+                }
+            });
 
             if (_taskState.Iteration >= _maxIterations)
             {

@@ -52,6 +52,15 @@ namespace AICA.Core.Agent
             @"```[\s\S]*$",
             RegexOptions.Compiled);
 
+        // BF-06: Explanation/description requests — user manual input (not context menu)
+        private static readonly Regex ExplanationPattern = new Regex(
+            @"解释|说明|explain|what does|what is|这段代码|这个函数|这个方法",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static readonly Regex ModificationPattern = new Regex(
+            @"实现|创建|修改|重构|implement|create|modify|refactor",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         /// <summary>
         /// Classify request complexity using a scoring system.
         /// </summary>
@@ -63,6 +72,10 @@ namespace AICA.Core.Agent
             // BF-06 fix: Context menu requests (Explain/Refactor/GenerateTest) are
             // single-purpose tasks. They should be Medium at most, not Complex.
             bool isContextMenuRequest = ContextMenuPattern.IsMatch(userRequest.TrimStart());
+
+            // BF-06: Explanation requests without modification intent should cap at Medium
+            bool isExplanationRequest = ExplanationPattern.IsMatch(userRequest)
+                && !ModificationPattern.IsMatch(userRequest);
 
             // Strip code blocks before scoring — embedded code should not inflate
             // the action verb count or length signal.
@@ -92,6 +105,14 @@ namespace AICA.Core.Agent
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"[AICA] Context menu request capped from Complex to Medium (score={score})");
+                complexity = TaskComplexity.Medium;
+            }
+
+            // BF-06: Cap explanation requests at Medium — "解释一下这段500行代码" should not trigger planning
+            if (isExplanationRequest && complexity == TaskComplexity.Complex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] Explanation request capped from Complex to Medium (score={score})");
                 complexity = TaskComplexity.Medium;
             }
 

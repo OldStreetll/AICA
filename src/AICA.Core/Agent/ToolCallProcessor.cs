@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -295,6 +296,66 @@ namespace AICA.Core.Agent
         {
             if (result.Success) return false; // not a failure
             return result.FailureKind != ToolResultFailureKind.SecurityDenied;
+        }
+
+        /// <summary>
+        /// SEC-01: Normalize a file path for security blacklist comparison.
+        /// Resolves relative segments (./ ../) and normalizes case + separators.
+        /// </summary>
+        public static string NormalizeSecurityPath(string path, string basePath = null)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return string.Empty;
+
+            try
+            {
+                // Resolve relative path against basePath if provided
+                var fullPath = string.IsNullOrEmpty(basePath)
+                    ? Path.GetFullPath(path)
+                    : Path.GetFullPath(Path.Combine(basePath, path));
+
+                // Normalize to forward slashes and lowercase for consistent comparison
+                return fullPath.Replace('\\', '/').ToLowerInvariant();
+            }
+            catch
+            {
+                // Fallback: basic normalization without filesystem resolution
+                return path.Replace('\\', '/').ToLowerInvariant().TrimEnd('/');
+            }
+        }
+
+        /// <summary>
+        /// SEC-01: Check if a tool call targets a blacklisted (security-denied) path.
+        /// </summary>
+        public static bool IsPathBlacklisted(ToolCall call, HashSet<string> securityBlacklist, string basePath = null)
+        {
+            if (securityBlacklist == null || securityBlacklist.Count == 0)
+                return false;
+
+            var path = ExtractPathFromToolCall(call);
+            if (string.IsNullOrEmpty(path))
+                return false;
+
+            var normalized = NormalizeSecurityPath(path, basePath);
+            return securityBlacklist.Contains(normalized);
+        }
+
+        /// <summary>
+        /// SEC-01: Add the path from a security-denied tool call to the blacklist.
+        /// </summary>
+        public static void AddToSecurityBlacklist(ToolCall call, HashSet<string> securityBlacklist, string basePath = null)
+        {
+            if (securityBlacklist == null) return;
+
+            var path = ExtractPathFromToolCall(call);
+            if (string.IsNullOrEmpty(path)) return;
+
+            var normalized = NormalizeSecurityPath(path, basePath);
+            if (!string.IsNullOrEmpty(normalized))
+            {
+                securityBlacklist.Add(normalized);
+                System.Diagnostics.Debug.WriteLine($"[AICA] SEC-01: Added to security blacklist: {normalized}");
+            }
         }
 
         /// <summary>

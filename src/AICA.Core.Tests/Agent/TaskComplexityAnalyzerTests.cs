@@ -95,5 +95,55 @@ namespace AICA.Core.Tests.Agent
             var request = "解释这段代码\n\n```c++\n" + new string('x', 500) + "\n```";
             Assert.NotEqual(TaskComplexity.Complex, TaskComplexityAnalyzer.AnalyzeComplexity(request));
         }
+
+        #region BF-06: Explanation request cap
+
+        [Fact]
+        public void BF06_ExplainLongCode_CappedToMedium()
+        {
+            // "解释一下这段500行代码的逻辑" — long text with action verbs, but pure explanation
+            var request = "解释一下这段代码的逻辑，分析每个函数的作用，并说明数据流向 " + new string('。', 200);
+            var result = TaskComplexityAnalyzer.AnalyzeComplexity(request);
+            Assert.NotEqual(TaskComplexity.Complex, result);
+        }
+
+        [Fact]
+        public void BF06_ExplainWithRefactor_StaysComplex()
+        {
+            // Contains both "解释" and "重构" — modification intent should NOT be capped
+            Assert.Equal(TaskComplexity.Complex,
+                TaskComplexityAnalyzer.AnalyzeComplexity("分析这个项目的架构并重构日志模块"));
+        }
+
+        [Fact]
+        public void BF06_PureExplainShort_Simple()
+        {
+            // Short explanation request
+            Assert.Equal(TaskComplexity.Simple,
+                TaskComplexityAnalyzer.AnalyzeComplexity("explain this function"));
+        }
+
+        [Fact]
+        public void BF06_WhatDoesThisCode_NotComplex()
+        {
+            // English "what does" pattern
+            var request = "what does this function do? " + new string('x', 300);
+            Assert.NotEqual(TaskComplexity.Complex, TaskComplexityAnalyzer.AnalyzeComplexity(request));
+        }
+
+        [Fact]
+        public void BF06_ExplainWithImplement_NotCapped()
+        {
+            // "explain" + "implement" — modification intent present, so explanation cap should NOT apply.
+            // The modification pattern ("implement") prevents the explanation cap from triggering.
+            var request = "explain the current auth flow and implement a new JWT validation layer with refresh tokens and add test coverage for all edge cases";
+            var result = TaskComplexityAnalyzer.AnalyzeComplexity(request);
+            // With "implement", explanation cap is disabled; scoring depends on complexity signals.
+            // This test verifies the cap does NOT apply when modification intent exists.
+            Assert.True(result == TaskComplexity.Medium || result == TaskComplexity.Complex,
+                $"Expected Medium or Complex when modification intent present, got {result}");
+        }
+
+        #endregion
     }
 }

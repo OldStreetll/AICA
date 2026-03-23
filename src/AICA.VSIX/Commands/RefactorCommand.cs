@@ -46,8 +46,18 @@ namespace AICA.Commands
             {
                 var contentType = docView.TextView.TextDataModel.ContentType.DisplayName;
                 var fileName = docView.FilePath != null ? System.IO.Path.GetFileName(docView.FilePath) : "unknown";
-                var prompt = $"请用中文重构以下来自文件 `{fileName}` 的 {contentType} 代码，以提高可读性、性能和可维护性。请展示改进后的代码并解释修改内容：\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
-                
+                var ext = docView.FilePath != null ? System.IO.Path.GetExtension(docView.FilePath).ToLowerInvariant() : "";
+                var isCpp = contentType.Contains("C++") || contentType.Contains("C/C++")
+                    || ext == ".cpp" || ext == ".h" || ext == ".c" || ext == ".cc" || ext == ".cxx"
+                    || ext == ".hpp" || ext == ".hxx";
+
+                var codeBlockLang = isCpp ? "cpp" : contentType.ToLowerInvariant();
+                var styleGuidance = isCpp
+                    ? "。重构时必须遵循 Allman 花括号风格、m_ 成员变量前缀、HNC 类型宏（Bit32/Bit64）和 MISRA C 安全子集"
+                    : "";
+
+                var prompt = $"请用中文重构以下来自文件 `{fileName}` 的 {contentType} 代码，以提高可读性、性能和可维护性{styleGuidance}。请展示改进后的代码并解释修改内容：\n\n```{codeBlockLang}\n{selectedText}\n```";
+
                 await window.SendProgrammaticMessageAsync(prompt);
             }
         }

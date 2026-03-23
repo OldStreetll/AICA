@@ -17,8 +17,8 @@ enabled: true
 ## 注释规范
 
 - 为复杂逻辑添加注释
-- 使用 XML 文档注释（C#）
 - 避免过度注释
+- 使用 doxygen 注释格式（详见 cpp-comment-template 规范文件）
 
 ## 测试要求
 

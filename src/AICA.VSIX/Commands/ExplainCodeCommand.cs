@@ -46,8 +46,18 @@ namespace AICA.Commands
             {
                 var contentType = docView.TextView.TextDataModel.ContentType.DisplayName;
                 var fileName = docView.FilePath != null ? System.IO.Path.GetFileName(docView.FilePath) : "unknown";
-                var prompt = $"请用中文详细解释以下来自文件 `{fileName}` 的 {contentType} 代码，包括其功能、逻辑和关键细节：\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
-                
+                var ext = docView.FilePath != null ? System.IO.Path.GetExtension(docView.FilePath).ToLowerInvariant() : "";
+                var isCpp = contentType.Contains("C++") || contentType.Contains("C/C++")
+                    || ext == ".cpp" || ext == ".h" || ext == ".c" || ext == ".cc" || ext == ".cxx"
+                    || ext == ".hpp" || ext == ".hxx";
+
+                var codeBlockLang = isCpp ? "cpp" : contentType.ToLowerInvariant();
+                var extraGuidance = isCpp
+                    ? "。请额外说明代码所属模块、调用链位置、关键分支含义和内存管理策略"
+                    : "";
+
+                var prompt = $"请用中文详细解释以下来自文件 `{fileName}` 的 {contentType} 代码，包括其功能、逻辑和关键细节{extraGuidance}：\n\n```{codeBlockLang}\n{selectedText}\n```";
+
                 await window.SendProgrammaticMessageAsync(prompt);
             }
         }

@@ -483,6 +483,75 @@ namespace AICA.Core.Prompt
         }
 
         /// <summary>
+        /// 1.2b: Add C/C++ specialization prompt when project is detected as C/C++.
+        /// Injects language-specific coding guidance into the system prompt.
+        /// </summary>
+        public SystemPromptBuilder AddCppSpecialization(Agent.ProjectLanguage language)
+        {
+            if (language != Agent.ProjectLanguage.CppC)
+                return this;
+
+            _builder.AppendLine("## C/C++ 专业化指导 (HNC)");
+            _builder.AppendLine();
+            _builder.AppendLine("当前项目为 C/C++ 项目，生成和修改代码时必须遵循以下规范：");
+            _builder.AppendLine();
+            _builder.AppendLine("### 代码生成");
+            _builder.AppendLine("- 使用 Allman 花括号风格（花括号单独占一行）");
+            _builder.AppendLine("- 成员变量使用 m_ 前缀，禁止 public 成员变量");
+            _builder.AppendLine("- 使用 HNC 类型宏：Bit8, Bit16, Bit32, Bit64, uBit32（不要用 int/long/short）");
+            _builder.AppendLine("- 添加 doxygen 格式注释（@file, @brief, @param [in]/[out], @return）");
+            _builder.AppendLine("- 指针/引用紧靠变量名：`Bit8 *name`");
+            _builder.AppendLine("- 4 空格缩进，80 字符行宽");
+            _builder.AppendLine();
+            _builder.AppendLine("### Bug 修复");
+            _builder.AppendLine("- 重点检查：内存泄漏（malloc/free 配对）、空指针解引用、数组越界");
+            _builder.AppendLine("- 检查：隐式类型转换、除零风险、未初始化变量");
+            _builder.AppendLine("- 字符串安全：禁止 strcpy/sprintf，用 strlcpy/snprintf");
+            _builder.AppendLine();
+            _builder.AppendLine("### 代码解释");
+            _builder.AppendLine("- 说明代码所属模块和在项目中的位置");
+            _builder.AppendLine("- 描述调用链和执行流程");
+            _builder.AppendLine("- 解释关键分支的含义和内存管理策略");
+            _builder.AppendLine();
+            _builder.AppendLine("### 测试生成");
+            _builder.AppendLine("- 使用 Google Test 框架（TEST_F, EXPECT_EQ, ASSERT_NE 等宏）");
+            _builder.AppendLine("- 不要使用 xUnit/NUnit/JUnit 等其他框架");
+            _builder.AppendLine();
+
+            return this;
+        }
+
+        /// <summary>
+        /// 1.3a: Add bug fix guidance when intent is bug_fix.
+        /// Injects structured diagnostic workflow into the system prompt.
+        /// </summary>
+        public SystemPromptBuilder AddBugFixGuidance(string intent, Agent.ProjectLanguage language)
+        {
+            if (intent != "bug_fix")
+                return this;
+
+            _builder.AppendLine("## Bug 定位指导");
+            _builder.AppendLine();
+            _builder.AppendLine("用户正在描述 Bug 或错误，请按以下步骤进行诊断：");
+            _builder.AppendLine();
+            _builder.AppendLine("1. 用 grep_search 在代码中搜索错误信息中的关键字符串");
+            _builder.AppendLine("2. 用 read_file 读取匹配文件的相关代码段");
+            _builder.AppendLine("3. 分析可能的原因（重点检查：空指针、数组越界、未初始化变量、资源泄漏）");
+
+            int step = 4;
+            if (language == Agent.ProjectLanguage.CppC)
+            {
+                _builder.AppendLine($"{step}. **C/C++ 额外检查**：malloc/free 配对、new/delete 配对、类型转换安全、线程安全、fopen/fclose 配对");
+                step++;
+            }
+
+            _builder.AppendLine($"{step}. 给出修复建议，包含具体的代码修改方案");
+            _builder.AppendLine();
+
+            return this;
+        }
+
+        /// <summary>
         /// Load and integrate rules from files (.aica-rules directory).
         /// Rules are evaluated based on context and added to the system prompt.
         /// </summary>

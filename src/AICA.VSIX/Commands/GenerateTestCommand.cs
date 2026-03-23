@@ -46,8 +46,21 @@ namespace AICA.Commands
             {
                 var contentType = docView.TextView.TextDataModel.ContentType.DisplayName;
                 var fileName = docView.FilePath != null ? System.IO.Path.GetFileName(docView.FilePath) : "unknown";
-                var prompt = $"请用中文为以下来自文件 `{fileName}` 的 {contentType} 代码生成全面的单元测试，使用 xUnit 框架。请包含边界情况并使用 Arrange/Act/Assert 模式，并用中文注释说明每个测试的目的：\n\n```{contentType.ToLowerInvariant()}\n{selectedText}\n```";
-                
+                var ext = docView.FilePath != null ? System.IO.Path.GetExtension(docView.FilePath).ToLowerInvariant() : "";
+                var isCpp = contentType.Contains("C++") || contentType.Contains("C/C++")
+                    || ext == ".cpp" || ext == ".h" || ext == ".c" || ext == ".cc" || ext == ".cxx"
+                    || ext == ".hpp" || ext == ".hxx";
+
+                var codeBlockLang = isCpp ? "cpp" : contentType.ToLowerInvariant();
+                var framework = isCpp
+                    ? "Google Test 框架（使用 TEST_F、EXPECT_EQ、ASSERT_NE 等宏）"
+                    : "xUnit 框架";
+                var pattern = isCpp
+                    ? "请包含边界情况，并用中文注释说明每个测试的目的"
+                    : "请包含边界情况并使用 Arrange/Act/Assert 模式，并用中文注释说明每个测试的目的";
+
+                var prompt = $"请用中文为以下来自文件 `{fileName}` 的 {contentType} 代码生成全面的单元测试，使用 {framework}。{pattern}：\n\n```{codeBlockLang}\n{selectedText}\n```";
+
                 await window.SendProgrammaticMessageAsync(prompt);
             }
         }

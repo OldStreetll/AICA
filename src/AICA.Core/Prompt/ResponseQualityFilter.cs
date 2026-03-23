@@ -174,7 +174,7 @@ namespace AICA.Core.Prompt
             "我应该查看", "我应该搜索",
             "我将调用", "我将使用工具",
             "让我查看", "让我搜索", "让我检查", "让我读取",
-            "首先，我需要", "首先，让我查",
+            "首先，我需要", "首先我需要", "首先，让我查",
             "接下来，我需要", "接下来，让我",
             // BF-02 fix: catch LLM reasoning about user intent
             "用户要求", "用户只是", "用户用", "用户在",
@@ -193,7 +193,7 @@ namespace AICA.Core.Prompt
             // BF-02/TC-01 fix: catch LLM meta-reasoning about instructions/rules
             "let me re-read", "let me reconsider", "let me think about",
             "according to the rules", "based on the instructions",
-            "根据规则", "让我重新阅读", "让我重新考虑",
+            "根据规则", "让我重新阅读", "让我重新考虑", "让我思考",
             "the user asked me to read", "the user asked me to search",
             "the user asked me to analyze", "the user asked me to check",
             "the user is asking me to",
@@ -305,21 +305,45 @@ namespace AICA.Core.Prompt
                 return false;
 
             var trimmed = text.Trim();
-            var lower = trimmed.ToLowerInvariant();
 
-            // Check if text STARTS with reasoning patterns.
-            // Only check the first 200 chars for StartsWith — this works regardless of total length,
-            // catching MiniMax's mixed reasoning+answer output.
+            // BF-02 fix: Scan ALL paragraphs for reasoning patterns, not just the first 200 chars.
+            // MiniMax sometimes outputs normal text first, then starts reasoning mid-response.
+            var paragraphs = trimmed.Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var paragraph in paragraphs)
+            {
+                if (IsParagraphReasoning(paragraph))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Check if a single paragraph is internal reasoning.
+        /// </summary>
+        internal static bool IsParagraphReasoning(string paragraph)
+        {
+            if (string.IsNullOrWhiteSpace(paragraph))
+                return false;
+
+            var trimmed = paragraph.Trim();
+
+            // Skip code blocks
+            if (trimmed.StartsWith("```"))
+                return false;
+
+            var lower = trimmed.ToLowerInvariant();
             var checkPortion = lower.Length > 200 ? lower.Substring(0, 200) : lower;
 
+            // Check reasoning-start patterns (StartsWith)
             foreach (var pattern in GetReasoningStartPatterns())
             {
                 if (checkPortion.StartsWith(pattern))
                     return true;
             }
 
-            // Meta-reasoning patterns use Contains — keep the length threshold
-            // to avoid false positives on long legitimate answers.
+            // Meta-reasoning patterns (Contains) — only for short paragraphs to avoid false positives
             if (trimmed.Length <= 500)
             {
                 foreach (var pattern in GetMetaReasoningPatterns())
@@ -343,11 +367,10 @@ namespace AICA.Core.Prompt
 
             var result = text;
 
-            // Strip reasoning prefix if detected (MiniMax mixed output)
-            if (IsInternalReasoning(result))
-            {
-                result = StripReasoningPrefix(result);
-            }
+            // BF-02 fix: Always attempt to strip reasoning paragraphs.
+            // Previous approach only stripped when IsInternalReasoning() was true (first paragraph),
+            // missing reasoning that appeared in middle paragraphs.
+            result = StripReasoningParagraphs(result);
 
             result = StripForbiddenOpeners(result);
             result = StripTrailingOffers(result);
@@ -356,10 +379,38 @@ namespace AICA.Core.Prompt
         }
 
         /// <summary>
+        /// BF-02 fix: Strip reasoning paragraphs from ANYWHERE in the text.
+        /// Splits by double-newline, filters out paragraphs matching reasoning patterns,
+        /// reassembles the remaining paragraphs.
+        /// </summary>
+        public static string StripReasoningParagraphs(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            var paragraphs = text.Trim().Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
+            var kept = new System.Collections.Generic.List<string>();
+
+            foreach (var paragraph in paragraphs)
+            {
+                if (!IsParagraphReasoning(paragraph))
+                {
+                    kept.Add(paragraph);
+                }
+            }
+
+            // If all paragraphs were reasoning, return the last one as fallback
+            if (kept.Count == 0 && paragraphs.Length > 0)
+            {
+                return paragraphs[paragraphs.Length - 1].Trim();
+            }
+
+            return string.Join("\n\n", kept).Trim();
+        }
+
+        /// <summary>
         /// Strip internal reasoning prefix from mixed reasoning+answer text.
-        /// MiniMax may output multiple reasoning paragraphs before the actual answer.
-        /// Iteratively strips paragraphs that start with reasoning patterns until
-        /// a non-reasoning paragraph is found.
+        /// Kept for backward compatibility. Iteratively strips leading reasoning paragraphs.
         /// </summary>
         public static string StripReasoningPrefix(string text)
         {
@@ -396,7 +447,6 @@ namespace AICA.Core.Prompt
                 }
 
                 // Also check meta-reasoning patterns (Contains) for short paragraphs
-                // MiniMax often has multiple meta-reasoning paragraphs before the answer
                 if (!stillReasoning && afterSplit.Length < 200)
                 {
                     foreach (var pattern in GetMetaReasoningPatterns())
@@ -411,7 +461,6 @@ namespace AICA.Core.Prompt
 
                 current = afterSplit;
 
-                // If the remaining text is NOT reasoning, we found the answer
                 if (!stillReasoning)
                     break;
             }

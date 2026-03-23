@@ -316,6 +316,9 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
             _toolDispatcher.RegisterTool(new ListProjectsTool());
 
+            // H5: Register pre-validation middleware to catch obvious parameter errors
+            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PreValidationMiddleware());
+
             // Initialize LLM client
             var clientOptions = new LLMClientOptions
             {

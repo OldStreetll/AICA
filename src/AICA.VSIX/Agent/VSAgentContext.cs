@@ -31,6 +31,19 @@ namespace AICA.Agent
 
         public TaskPlan CurrentPlan => _currentPlan;
 
+        // H6: Track files edited during this session
+        private readonly HashSet<string> _editedFilesInSession = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyCollection<string> EditedFilesInSession => _editedFilesInSession;
+
+        /// <summary>
+        /// H6: Record that a file was edited in this session.
+        /// </summary>
+        public void RecordFileEdit(string filePath)
+        {
+            if (!string.IsNullOrEmpty(filePath))
+                _editedFilesInSession.Add(filePath);
+        }
+
         private string _pathMismatchWarning;
         public string PathMismatchWarning => _pathMismatchWarning;
 

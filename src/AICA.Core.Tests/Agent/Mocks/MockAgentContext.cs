@@ -106,6 +106,9 @@ namespace AICA.Core.Tests.Agent.Mocks
             return Task.FromResult(true);
         }
 
+        // H6: Edited files tracking
+        public IReadOnlyCollection<string> EditedFilesInSession => Array.Empty<string>();
+
         // --- Test helpers ---
 
         /// <summary>

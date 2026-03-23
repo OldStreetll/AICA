@@ -64,6 +64,13 @@ namespace AICA.Core.Agent
             "分析", "概览", "架构", "结构", "调查", "研究", "全面", "完整"
         };
 
+        private static readonly string[] BugFixKeywords = new[]
+        {
+            "报错", "错误", "崩溃", "异常", "bug", "error", "crash", "exception",
+            "段错误", "segfault", "内存泄漏", "leak", "死锁", "deadlock",
+            "不工作", "doesn't work", "失败", "coredump", "core dump"
+        };
+
         /// <summary>
         /// Select tools based on user request intent and complexity.
         /// Complex tasks always get full tool set (safety fallback).
@@ -104,6 +111,10 @@ namespace AICA.Core.Agent
             if (userRequest.Length < 15 && ConversationKeywords.Any(k => lower.Contains(k)))
                 return "conversation";
 
+            // Bug fix intent (before modify — "fix" is in both, but bug keywords take priority)
+            if (BugFixKeywords.Any(k => lower.Contains(k)))
+                return "bug_fix";
+
             // Modification intent
             if (ModifyKeywords.Any(k => lower.Contains(k)))
                 return "modify";
@@ -142,6 +153,7 @@ namespace AICA.Core.Agent
                     return commandSet;
 
                 case "analyze":
+                case "bug_fix":
                     var analyzeSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
                     foreach (var t in ReadTools) analyzeSet.Add(t);
                     foreach (var t in ContextTools) analyzeSet.Add(t);

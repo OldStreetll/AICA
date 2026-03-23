@@ -250,6 +250,97 @@ namespace AICA.Core.Tests.Prompt
 
         #endregion
 
+        #region BF-02: Paragraph-level reasoning detection and stripping
+
+        [Fact]
+        public void BF02_IsInternalReasoning_MiddleParagraphReasoning_ReturnsTrue()
+        {
+            // MiniMax outputs normal text first, then starts reasoning in a later paragraph
+            var text = "这个函数的功能是处理数据。\n\n我需要查看具体的实现代码。\n\n下面是结果。";
+            Assert.True(ResponseQualityFilter.IsInternalReasoning(text));
+        }
+
+        [Fact]
+        public void BF02_IsInternalReasoning_AllNormalParagraphs_ReturnsFalse()
+        {
+            var text = "这个函数处理数据转换。\n\n它接受两个参数并返回结果。\n\n代码质量良好。";
+            Assert.False(ResponseQualityFilter.IsInternalReasoning(text));
+        }
+
+        [Fact]
+        public void BF02_StripReasoningParagraphs_RemovesMiddleReasoning()
+        {
+            var text = "函数功能说明如下：\n\n让我查看这段代码。\n\n该函数返回整数类型。";
+            var result = ResponseQualityFilter.StripReasoningParagraphs(text);
+            Assert.Contains("函数功能说明如下", result);
+            Assert.DoesNotContain("让我查看", result);
+            Assert.Contains("该函数返回整数类型", result);
+        }
+
+        [Fact]
+        public void BF02_StripReasoningParagraphs_RemovesLeadingReasoning()
+        {
+            // "我需要搜索" matches "我需要搜索"; "首先，我需要查看" matches "首先，我需要"
+            var text = "我需要搜索这个函数。\n\n首先，我需要查看项目结构。\n\n这是一个工具函数，用于数据转换。";
+            var result = ResponseQualityFilter.StripReasoningParagraphs(text);
+            Assert.DoesNotContain("我需要搜索", result);
+            Assert.DoesNotContain("我需要查看", result);
+            Assert.Contains("这是一个工具函数", result);
+        }
+
+        [Fact]
+        public void BF02_StripReasoningParagraphs_NormalContent_Preserved()
+        {
+            var text = "让我们看看这个函数的实现。\n\n它使用了观察者模式。\n\n性能表现很好。";
+            var result = ResponseQualityFilter.StripReasoningParagraphs(text);
+            Assert.Contains("让我们看看这个函数", result);
+            Assert.Contains("观察者模式", result);
+        }
+
+        [Fact]
+        public void BF02_StripReasoningParagraphs_AllReasoning_ReturnsFallback()
+        {
+            // If all paragraphs are reasoning, return the last paragraph as fallback
+            var text = "我需要查看文件。\n\n让我搜索这段代码。";
+            var result = ResponseQualityFilter.StripReasoningParagraphs(text);
+            Assert.False(string.IsNullOrWhiteSpace(result));
+        }
+
+        [Fact]
+        public void BF02_NormalContentWithLetMe_NotFalsePositive()
+        {
+            // "让我们" (let us) is valid user-facing content, should not be filtered
+            var text = "让我们来分析这段代码的性能特征。";
+            Assert.False(ResponseQualityFilter.IsParagraphReasoning(text));
+        }
+
+        [Fact]
+        public void BF02_AC1_ThinkingAndReasoningFiltered()
+        {
+            // Exact AC1 scenario from work plan
+            var text = "好的，让我思考一下这个问题。\n\n首先我需要分析这段代码的结构。\n\n这个函数的作用是数据转换。";
+            var result = ResponseQualityFilter.StripReasoningParagraphs(text);
+            Assert.DoesNotContain("让我思考", result);
+            Assert.DoesNotContain("首先我需要", result);
+            Assert.Contains("这个函数的作用", result);
+        }
+
+        [Fact]
+        public void BF02_LetMeThink_DetectedAsReasoning()
+        {
+            // "让我思考" should be detected as meta-reasoning
+            Assert.True(ResponseQualityFilter.IsParagraphReasoning("让我思考一下这个问题的解决方案。"));
+        }
+
+        [Fact]
+        public void BF02_FirstINeedTo_NoComma_DetectedAsReasoning()
+        {
+            // "首先我需要" (no comma) should match as reasoning start
+            Assert.True(ResponseQualityFilter.IsParagraphReasoning("首先我需要查看项目的目录结构。"));
+        }
+
+        #endregion
+
         #region MicroCompactToolResults Tests
 
         [Fact]
