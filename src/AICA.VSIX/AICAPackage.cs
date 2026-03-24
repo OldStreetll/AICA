@@ -118,9 +118,24 @@ namespace AICA
         {
             if (disposing)
             {
+                // Unadvise solution events (cleanup advisory cookie)
                 try
                 {
-                    // 注销事件监听器
+                    if (_solutionEventsCookie != 0)
+                    {
+                        var solutionService = GetService(typeof(SVsSolution)) as IVsSolution;
+                        solutionService?.UnadviseSolutionEvents(_solutionEventsCookie);
+                        _solutionEventsCookie = 0;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Error unadvising solution events: {ex.Message}");
+                }
+
+                // Dispose solution event listener
+                try
+                {
                     if (_solutionEventListener != null)
                     {
                         _solutionEventListener.Dispose();
@@ -130,6 +145,17 @@ namespace AICA
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[AICA] Error disposing rules directory listener: {ex.Message}");
+                }
+
+                // Dispose GitNexus process manager
+                try
+                {
+                    AICA.Core.Agent.GitNexusProcessManager.Instance.Dispose();
+                    System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: process manager disposed (package disposing)");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Error disposing GitNexus: {ex.Message}");
                 }
             }
 

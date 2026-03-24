@@ -316,6 +316,28 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
             _toolDispatcher.RegisterTool(new ListProjectsTool());
 
+            // Register GitNexus MCP bridge tools (graceful degradation: failure here doesn't affect built-in tools)
+            try
+            {
+                var grepTool = new GrepSearchTool();
+                Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback =
+                    (call, ctx, ui, ct) => grepTool.ExecuteAsync(call, ctx, ui, ct);
+
+                var gitNexusTools = McpBridgeTool.CreateAllTools(
+                    GitNexusProcessManager.Instance, grepFallback);
+
+                foreach (var tool in gitNexusTools)
+                {
+                    _toolDispatcher.RegisterTool(tool);
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: registered {gitNexusTools.Count} bridge tools");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: tool registration failed (non-fatal): {ex.Message}");
+            }
+
             // H5: Register pre-validation middleware to catch obvious parameter errors
             _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PreValidationMiddleware());
 

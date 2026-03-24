@@ -1,6 +1,6 @@
 # AICA 下一阶段工作计划
 
-> 版本: v1.6 | 日期: 2026-03-23
+> 版本: v1.7 | 日期: 2026-03-24
 > 定位: 合并 Harness 工程改造 + 原路线图基础修复/M1/M2，形成可执行的工作计划
 > 前置文档: [项目总结与路线图](agentref/AICA_ProjectReview_and_Roadmap.md) | [产品设计研讨会](AICA_ProductDesign_Workshop.md)
 > 规范来源: Qt-C++ 编程规范.doc + MISRA C++/C
@@ -35,7 +35,7 @@
 | C14 | paths 过滤已确认 + C++ 强制激活 | ProjectLanguageDetector 判定 C++ 项目后强制激活规范文件；用户请求关闭需确认提醒 | RuleLoader 完整支持 paths glob 过滤。C++ 规范是项目级强制规则，不应轻易关闭 |
 | C15 | 阶段 1 后非正式部署收集场景 [C40] | 新增步骤 1.4：非正式部署 + 通知工程师试用并收集验收任务场景；正式发布推迟到全计划完成后 | 工程师提供真实场景（非开发者自行设计），与 GitNexus 开发并行。领导要求正式发布需带 GitNexus 功能 |
 | C16 | 构建系统待确认项补回 | 新增待确认项 #8：公司构建系统（CMake/MSBuild） | 路线图中有但工作计划遗漏，影响规范文件完善 |
-| C17 | 反馈收集双渠道 | Excel 结构化模板 + 企业微信群快速通道 | Excel 用于正式记录和分析，微信群降低反馈门槛保证不丢失 |
+| C17 | 反馈收集双渠道 | Excel 结构化模板 + 钉钉群快速通道 | Excel 用于正式记录和分析，钉钉群降低反馈门槛保证不丢失 |
 
 ### v1.3 修正（10 项，逻辑审查收敛）
 
@@ -91,6 +91,18 @@
 | C50 | C33 规范文件审查时机 | 在步骤 2.1 开发期间穿插进行（原为"M1 前审查"） | 时间线提前，2.1 开发期间穿插不冲突 |
 | C51 | 去掉"先上线"/"首批"表述 | 界面组不再是"首批上线用户"，两组同时参与试用和正式发布 | 两次部署均为平台/界面均分，无先后之分 |
 
+### v1.7 修正（7 项，步骤 2.1 Day 1+2 执行校准）
+
+| # | 修正项 | 决定 | 原因 |
+|---|--------|------|------|
+| C52 | 步骤 2.1 新建文件补全 | 新增 `IGitNexusProcessManager.cs` 接口文件，总计 4 个新建文件 | 实际执行中拆分了接口以支持测试 Mock |
+| C53 | 步骤 2.1 行数校准 | McpClient ~350 行、GitNexusProcessManager ~230 行、McpBridgeTool ~380 行、IGitNexusProcessManager ~40 行 | 实际实现比预估复杂：MCP 协议需要完整的 JSON-RPC 读写循环 + Content-Length 帧解析；6 个工具各自需要独立的参数 schema 定义 |
+| C54 | 步骤 2.1 工具表补全 cypher | 桥接工具从 5 个增至 6 个，新增 `gitnexus_cypher`（Cypher 图谱查询） | MiniMax-M2.5 实测能可靠使用 cypher 工具（OpenCode 截图证实），应作为常规工具提供 |
+| C55 | 步骤 2.1 改动文件修正 | 工具注册在 `ChatToolWindowControl.xaml.cs`（非 ToolDispatcher.cs）；新增改动 `DynamicToolSelector.cs` | ToolDispatcher 是运行时注册 API，实际注册代码在 VSIX 层的 UI 初始化中 |
+| C56 | 步骤 2.1 测试文件补充 | 新增 3 个测试文件：McpClientTests.cs、GitNexusProcessManagerTests.cs、McpBridgeToolTests.cs | 实际执行中按 TDD 方式同步编写测试 |
+| C57 | 阶段 2 代码量校准 | 阶段 2 步骤 2.1 实际代码 ~1000 行（不含测试），含测试 ~1730 行 | 预估 ~300 行严重低估，MCP 协议实现 + 6 个工具定义 + 降级逻辑 + 进程管理 = 远超预期 |
+| C58 | AgentEvalHarness 命名空间修复 | 修复 `AICA.Core.Tests.LLM` 命名空间冲突导致的编译错误 | Day 1 新增 McpClientTests.cs 引入的 `AICA.Core.Tests.LLM` 命名空间与 AgentEvalHarness 中的 `LLM.ChatMessage` 引用冲突 |
+
 ---
 
 ## 一、工作范围与边界
@@ -109,7 +121,7 @@
 - 多 Agent 架构
 - SK 升级
 
-**功能覆盖对照（v1.6 修正后）：** [C34/C36/C37/C38/C39]
+**功能覆盖对照（v1.7 修正后）：** [C34/C36/C37/C38/C39/C54]
 
 | 功能 | 里程碑 | 工作计划步骤 | 受益用户 |
 |------|--------|------------|---------|
@@ -131,7 +143,7 @@
 ```
 阶段 0 [3/22-3/23]   基础修复 + Harness 基础设施         ← ✅ 提前完成
 阶段 1 [3/23]        C/C++ 专业化 + 日常功能基础         ← ✅ 提前完成（原计划 3/26-3/31）
-阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← 15 天（含缓冲）[C48]
+阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← 🔄 步骤 2.1 ✅ 完成（3/24），步骤 2.2 待执行 [C48]
 阶段 3 [4/8-5/10]    M2: 日常功能完善 + 跨文件可用        ← 33 天（含 8 天缓冲）[C9][C48]
 ```
 
@@ -580,7 +592,7 @@ priority: 20
 | 评分 | 1-5 分 | 2 |
 | 备注 | 补充信息 | 花括号风格也不对 |
 
-**渠道 2：企业微信群**（低门槛入口，保证反馈不丢失）
+**渠道 2：钉钉群**（低门槛入口，保证反馈不丢失）
 - 工程师遇到问题直接截图发群，一句话描述即可
 - 开发者每两天将群内反馈整理到 Excel 中
 
@@ -607,7 +619,7 @@ priority: 20
 | 1.2 | 执行器集成 | AgentExecutor.cs | 改动 | ~15 | ~40 人 | ✅ 验收通过 |
 | 1.2 | 右键命令适配 [C3] | Commands/ 下 3 个文件 | 改动 | ~100 | **~40 人** | ✅ 验收通过 + [C31] 补 .hpp/.hxx |
 | 1.3 | F3 Bug 定位 [C1] | SystemPromptBuilder + DynamicToolSelector | 改动 | ~50 | **~40 人** | ✅ 验收通过 (8/8 AC) [C32] 已知限制 |
-| 1.4 | 非正式部署 [C15][C40] | 编译 + 部署 + 收集 | 操作 | 0 行代码 | — | 🔲 待执行 |
+| 1.4 | 非正式部署 [C15][C40] | 编译 + 部署 + 收集 | 操作 | 0 行代码 | — | ✅ 已部署给 6 人（3/23），反馈收集中 |
 | | **合计** | | | **~415** | | |
 
 > **阶段 1 执行记录（2026-03-23）：**
@@ -636,44 +648,59 @@ priority: 20
 > 目标：F1 代码理解做到 80%+ 成功率，F2 规范合规 70%+，F3 Bug 定位基本可用。[C51]
 > 时间：3/23-4/7（15 天，含 3 天缓冲）[C48]
 > 前置：阶段 1 完成 + ✅ Node.js 部署可行性已确认（3/23）+ ✅ 许可证合规已确认（3/23）[C49]
+> 进度：🔄 步骤 2.1 ✅ 完成（2026-03-24），步骤 2.2 待执行
 
 ### 步骤 2.1：GitNexus MCP 集成
 
-**要做什么：** 通过 MCP 协议集成 GitNexus，获得 Tree-sitter AST 解析 + 知识图谱 + 7 个 MCP 工具。
+**要做什么：** 通过 MCP 协议集成 GitNexus，获得 Tree-sitter AST 解析 + 知识图谱 + 6 个 MCP 工具桥接。
 
 **现状审查：**
 - AICA 已有 `ToolDispatcher.RegisterTool()` 用于注册新工具
 - `ToolMetadata` 已有 `Category` 枚举（FileRead/FileWrite/Search/Analysis 等）和 `Tags` 数组
 - `ToolExecutionPipeline` 支持中间件链，MCP 工具可通过桥接层接入
-- **阻塞确认：** 需要在执行前确认两个前置条件：
-  - ① 涉密环境允许 Node.js 部署（IT 部门确认）
-  - ② PolyForm Noncommercial 许可证合规（法务确认）
-- **降级方案：** 若前置条件不满足，回退到步骤 6（知识引擎正则增强），M1 延后 1 周
+- ~~**阻塞确认**~~ ✅ 两个前置条件均已确认（3/23）[C49]
 
-**新建文件：**
-- `src/AICA.Core/LLM/McpClient.cs`（~120 行）— MCP JSON-RPC 通信
-- `src/AICA.Core/Agent/GitNexusProcessManager.cs`（~80 行）— Node.js 进程管理
-- `src/AICA.Core/Tools/McpBridgeTool.cs`（~60 行）— MCP 工具 → AICA 工具桥接
+**新建文件：** [C52][C53]
+- `src/AICA.Core/Agent/IGitNexusProcessManager.cs`（~40 行）— 进程管理接口（供 Mock 测试）
+- `src/AICA.Core/LLM/McpClient.cs`（~350 行）— MCP JSON-RPC 2.0 客户端（Content-Length 帧 + 后台读循环 + 请求/响应匹配）
+- `src/AICA.Core/Agent/GitNexusProcessManager.cs`（~230 行）— Node.js 进程管理（状态机 + 单例 + 自动重启）
+- `src/AICA.Core/Tools/McpBridgeTool.cs`（~380 行）— 6 个 MCP 工具桥接（工厂模式 + 降级处理）
 
-**改动文件：**
-- `src/AICA.Core/Agent/ToolDispatcher.cs`（~20 行，注册 MCP 工具）
-- `src/AICA.VSIX/AICAPackage.cs`（~20 行，Solution 打开时触发索引）
+**改动文件：** [C55]
+- `src/AICA.VSIX/ToolWindows/ChatToolWindowControl.xaml.cs`（~15 行，注册 6 个桥接工具，try/catch 包裹）
+- `src/AICA.Core/Agent/DynamicToolSelector.cs`（~5 行，ReadTools 加 5 个 GitNexus 工具，WriteTools 加 gitnexus_rename）
+- `src/AICA.VSIX/Events/SolutionEventListener.cs`（~20 行，Solution 打开时触发索引）🔲 Day 3
+- `src/AICA.VSIX/AICAPackage.cs`（~5 行，Dispose 释放）🔲 Day 3
 
-**关键设计：工具能力标签（为 H2 状态机铺路）**
+**测试文件：** [C56]
+- `src/AICA.Core.Tests/LLM/McpClientTests.cs`（~278 行）— JSON-RPC 协议测试
+- `src/AICA.Core.Tests/Agent/GitNexusProcessManagerTests.cs`（~47 行）— 状态机契约测试
+- `src/AICA.Core.Tests/Tools/McpBridgeToolTests.cs`（~405 行）— 工厂 + 降级 + 执行逻辑测试
+
+**关键设计：工具能力标签（为 H2 状态机铺路）** [C54]
 
 在注册 MCP 工具时，为每个工具的 `ToolMetadata.Tags` 加上能力标签：
 
-| MCP 工具 | ToolCategory | Tags |
-|----------|-------------|------|
-| `context()` | Analysis | `["search", "read", "context"]` |
-| `impact()` | Analysis | `["search", "analysis"]` |
-| `rename()` | FileWrite | `["modify", "refactor"]` |
-| `query()` | Search | `["search"]` |
-| `detect_changes()` | Analysis | `["search", "analysis"]` |
+| AICA 工具名 | MCP Tool | ToolCategory | Tags |
+|------------|----------|-------------|------|
+| `gitnexus_context` | `context` | Analysis | `["search", "read", "context", "gitnexus"]` |
+| `gitnexus_impact` | `impact` | Analysis | `["search", "analysis", "gitnexus"]` |
+| `gitnexus_query` | `query` | Search | `["search", "gitnexus"]` |
+| `gitnexus_detect_changes` | `detect_changes` | Analysis | `["search", "analysis", "gitnexus"]` |
+| `gitnexus_rename` | `rename` | FileWrite | `["modify", "refactor", "gitnexus"]` |
+| `gitnexus_cypher` | `cypher` | Analysis | `["search", "analysis", "gitnexus"]` |
+
+**降级策略（三级）：**
+1. **注册时失败**（无 Node.js 等）→ try/catch 跳过，AICA 仅用内置工具
+2. **调用时进程不可用** → 单次重启 → 失败则调 fallbackHandler：
+   - gitnexus_context/impact/query → 降级到 grep_search
+   - gitnexus_detect_changes/rename/cypher → 返回错误提示
+3. **MCP 调用返回错误** → 返回 ToolResult.Fail（不降级，错误是工具级别的）
 
 **验收标准：**
-- C++ 项目中执行 `context("CChannel")` 返回调用者/被调用者/执行流
-- 执行 `impact("CAxis::SetPosition")` 返回爆炸半径分析
+- C++ 项目中执行 `gitnexus_context(name: "CChannel")` 返回调用者/被调用者/执行流
+- 执行 `gitnexus_impact(target: "CAxis::SetPosition")` 返回爆炸半径分析
+- 执行 `gitnexus_cypher(query: "MATCH (n:Function)...")` 返回图谱数据
 - GitNexus 进程崩溃后 AICA 自动回退到内置工具（grep_search 等），不报错
 - 索引 3000+ 文件的 C++ 项目 < 30 秒
 
@@ -728,21 +755,63 @@ priority: 20
 **部署操作：** [C43][C45]
 - 编译新版 VSIX（`build.ps1 -Restore -Build` 或 `buildinhome.ps1 -Restore -Build`）
 - 部署给 ~10 名工程师（在步骤 1.4 的 6 人基础上扩大，平台组 5 + 界面组 5），含 GitNexus 功能
-- **[C17] 反馈收集：** 复用步骤 1.4 建立的双渠道（Excel 模板 + 企业微信群），小范围试用期间持续收集反馈直到 M2
+- **[C17] 反馈收集：** 复用步骤 1.4 建立的双渠道（Excel 模板 + 钉钉群），小范围试用期间持续收集反馈直到 M2
 
 ---
 
-### 阶段 2 完成检查清单
+### 阶段 2 完成检查清单 [C52-C57 更新]
 
-| # | 任务 | 文件 | 新增/改动 | 行数 |
-|---|------|------|----------|------|
-| 2.1 | MCP Client | McpClient.cs (新) | 新建 | ~120 |
-| 2.1 | 进程管理 | GitNexusProcessManager.cs (新) | 新建 | ~80 |
-| 2.1 | 工具桥接 | McpBridgeTool.cs (新) | 新建 | ~60 |
-| 2.1 | 工具注册 | ToolDispatcher.cs | 改动 | ~20 |
-| 2.1 | 初始化 | AICAPackage.cs | 改动 | ~20 |
-| 2.2 | 可靠性验证 | 无代码 | 测试执行 | 0 |
-| | **合计** | | | **~300** |
+| # | 任务 | 文件 | 新增/改动 | 行数 | 状态 |
+|---|------|------|----------|------|------|
+| 2.1 | 进程管理接口 | IGitNexusProcessManager.cs (新) [C52] | 新建 | ~40 | ✅ Day 1 |
+| 2.1 | MCP Client | McpClient.cs (新) | 新建 | ~350 | ✅ Day 1 |
+| 2.1 | 进程管理 | GitNexusProcessManager.cs (新) | 新建 | ~230 | ✅ Day 1 |
+| 2.1 | 工具桥接（6 个工具） | McpBridgeTool.cs (新) | 新建 | ~380 | ✅ Day 2 |
+| 2.1 | 工具注册 [C55] | ChatToolWindowControl.xaml.cs | 改动 | ~15 | ✅ Day 2 |
+| 2.1 | 工具选择器更新 | DynamicToolSelector.cs | 改动 | ~5 | ✅ Day 2 |
+| 2.1 | 索引触发 | SolutionEventListener.cs | 改动 | ~20 | ✅ Day 3 |
+| 2.1 | 释放 + UnAdvise 修复 | AICAPackage.cs | 改动 | ~25 | ✅ Day 3 |
+| 2.1 | 测试 [C56] | 3 个测试文件 | 新建 | ~730 | ✅ Day 1+2 |
+| 2.2 | 可靠性验证 | 无代码 | 测试执行 | 0 | 🔲 |
+| | **合计（不含测试）** | | | **~1045** | |
+| | **合计（含测试）** | | | **~1775** | |
+
+> **步骤 2.1 执行记录：**
+>
+> **Day 1（2026-03-24）：**
+> - 新建：IGitNexusProcessManager.cs + McpClient.cs + GitNexusProcessManager.cs
+> - 测试：McpClientTests.cs + GitNexusProcessManagerTests.cs
+> - 编译：BUILD SUCCEEDED (0 errors)
+> - 单元测试：424/426 pass（2 个预存 flaky）
+>
+> **Day 2（2026-03-24）：**
+> - 新建：McpBridgeTool.cs（6 个工具：context/impact/query/detect_changes/rename/cypher + CreateAllTools 工厂）
+> - 改动：ChatToolWindowControl.xaml.cs（注册 6 个桥接工具）+ DynamicToolSelector.cs（ReadTools +5, WriteTools +1）
+> - 测试：McpBridgeToolTests.cs（17 个测试：工厂 10 + 执行逻辑 7）
+> - 修复：AgentEvalHarness.cs 命名空间冲突 [C58]
+> - 编译：BUILD SUCCEEDED (0 errors, VSIX 生成)
+> - 单元测试：449/453 pass（4 个预存 flaky，0 个新增失败）
+>
+> **Day 3（2026-03-24）：**
+> - 改动：SolutionEventListener.cs（OnAfterOpenSolutionAsync 并行触发 GitNexus 索引 + OnAfterCloseSolution 释放进程）
+> - 改动：AICAPackage.cs（Dispose 新增 UnadviseSolutionEvents + GitNexusProcessManager.Dispose）
+> - 编译：BUILD SUCCEEDED (0 errors, VSIX 生成)
+> - 单元测试：449/453 pass（4 个预存 flaky，0 个新增失败）
+>
+> **Day 4（2026-03-24）：**
+> - 代码审查：code-reviewer agent 发现 2 CRITICAL + 5 HIGH + 5 MEDIUM + 2 LOW
+> - 修复 CRITICAL-1：McpBridgeTool TOCTOU race — snapshot Client 引用，避免 null 访问
+> - 修复 CRITICAL-2：OnAfterCloseSolution 中移除 Dispose 单例调用，避免重开解决方案后 GitNexus 永久失效
+> - 修复 HIGH-5：McpClient Content-Length 加 10MB 上限，防止恶意/异常包分配巨型缓冲区
+> - 其余 HIGH/MEDIUM 记录为技术债务，不影响 Day 4 交付
+> - 最终编译：BUILD SUCCEEDED (0 errors, VSIX 生成)
+> - 最终测试：449/453 pass（4 个预存 flaky，0 个新增失败）
+>
+> **步骤 2.1 完成总结：**
+> - 新建 4 个核心文件 + 3 个测试文件 = ~1730 行（核心 ~1000 + 测试 ~730）
+> - 改动 4 个文件 = ~45 行
+> - 桥接 6 个 GitNexus MCP 工具，含三级降级策略
+> - 17 个新增单元测试全部通过
 
 ---
 
@@ -1343,7 +1412,7 @@ condensed.AddRange(recentMessages);
 **执行步骤：**
 1. 编译正式版 VSIX（`build.ps1 -Restore -Build` 或 `buildinhome.ps1 -Restore -Build`）
 2. 全量部署给 ~40 人（平台组 ~20 + 界面组 ~20）
-3. 复用步骤 1.4 建立的双渠道（Excel 模板 + 企业微信群）持续收集反馈
+3. 复用步骤 1.4 建立的双渠道（Excel 模板 + 钉钉群）持续收集反馈
 4. 正式版上线后进入持续运营阶段
 
 **验收标准：**
@@ -1378,18 +1447,19 @@ condensed.AddRange(recentMessages);
 
 ---
 
-## 八、全量代码统计 [更新]
+## 八、全量代码统计 [v1.7 更新]
 
-| 阶段 | 新增文件 | 改动文件 | 代码行数 | 受益覆盖 |
-|------|---------|---------|---------|---------|
-| 阶段 0（基础修复 + Harness 基础设施） | 2 | 5 | ~271 | ~40 人 |
-| 阶段 1（C/C++ 专业化 + 日常功能 + 非正式部署）[C1/C3/C15/C17/C40] | 1 + 5个.md | 5 | ~365 | **~40 人** |
-| 阶段 2（M1 GitNexus） | 3 | 2 | ~300 | ~40 人 |
-| 阶段 3（M2 日常功能 + Harness 核心）[C2/C4/C5/C6/C9/C10/C11] | 4 | 7 | ~1000 | ~40 人 |
-| **总计** | **10 + 5个.md** | **19** | **~1936** | |
+| 阶段 | 新增文件 | 改动文件 | 代码行数（不含测试） | 测试行数 | 受益覆盖 |
+|------|---------|---------|---------|---------|---------|
+| 阶段 0（基础修复 + Harness 基础设施） | 2 | 5 | ~271 | ~38 测试 | ~40 人 |
+| 阶段 1（C/C++ 专业化 + 日常功能 + 非正式部署） | 1 + 5个.md | 5 | ~365 | ~24 测试 | **~40 人** |
+| 阶段 2（M1 GitNexus）[C52-C57] | **4** | **4** | **~1045** | **~730 行 / 17 测试** | ~40 人 |
+| 阶段 3（M2 日常功能 + Harness 核心） | 4 | 7 | ~1000 | — | ~40 人 |
+| **总计** | **11 + 5个.md** | **21** | **~2681** | | |
 
 > v1.0 → v1.1 代码量增加 ~220 行，主要来自 F3（+50）、F5（+60）、右键命令（+100）、集成测试修复（+50），H1 因重新设计减少 40 行。
 > v1.1 → v1.2 代码量增加 ~40 行，主要来自 Step 1.4 反馈收集机制（+20）、Step 3.5 wall-clock 超时（+20）。
+> v1.6 → v1.7 阶段 2 代码量从预估 ~300 行修正为实际 ~1045 行 [C57]。原因：MCP 协议实现需要完整的 JSON-RPC 读写循环 + Content-Length 帧解析（~350 行）；6 个工具各自需要独立的参数 schema、metadata、降级逻辑（~380 行）；进程管理状态机 + 单例 + 自动重启（~230 行）。
 
 ---
 

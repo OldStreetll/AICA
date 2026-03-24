@@ -22,13 +22,15 @@ namespace AICA.Core.Agent
         private static readonly HashSet<string> ReadTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "read_file", "list_dir", "list_code_definition_names",
-            "grep_search", "find_by_name", "list_projects", "log_analysis"
+            "grep_search", "find_by_name", "list_projects", "log_analysis",
+            "gitnexus_context", "gitnexus_query", "gitnexus_impact",
+            "gitnexus_detect_changes", "gitnexus_cypher"
         };
 
         // Write tools for modification tasks
         private static readonly HashSet<string> WriteTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "edit", "run_command"
+            "edit", "run_command", "gitnexus_rename"
         };
 
         // Context management tools

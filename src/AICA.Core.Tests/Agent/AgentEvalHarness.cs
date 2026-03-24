@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.LLM;
 using AICA.Core.Tests.Agent.Mocks;
 
 namespace AICA.Core.Tests.Agent
@@ -97,7 +98,7 @@ namespace AICA.Core.Tests.Agent
         /// </summary>
         public async Task<List<AgentStep>> RunAsync(
             string userRequest,
-            List<LLM.ChatMessage> previousMessages = null,
+            List<AICA.Core.LLM.ChatMessage> previousMessages = null,
             CancellationToken ct = default)
         {
             var steps = new List<AgentStep>();

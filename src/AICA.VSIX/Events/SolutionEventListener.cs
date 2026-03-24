@@ -1,6 +1,8 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell.Interop;
+using AICA.Core.Agent;
 using AICA.Core.Knowledge;
 using AICA.Core.Rules;
 
@@ -95,6 +97,22 @@ namespace AICA.VSIX.Events
                             $"[AICA] Indexing failed: {indexEx.Message}");
                     }
                 });
+
+                // 并行触发 GitNexus 索引（fire-and-forget，不阻塞其他初始化）
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: triggering index for {solutionPath}");
+                        await GitNexusProcessManager.Instance.TriggerIndexAsync(solutionPath, CancellationToken.None);
+                        System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: index trigger completed");
+                    }
+                    catch (Exception gnEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] GitNexus: index trigger failed (non-fatal): {gnEx.Message}");
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -145,6 +163,12 @@ namespace AICA.VSIX.Events
         {
             ProjectKnowledgeStore.Instance.Clear();
             System.Diagnostics.Debug.WriteLine("[AICA] Project knowledge index cleared (solution closed)");
+
+            // Note: GitNexusProcessManager is NOT disposed here — it's a singleton that
+            // must survive solution close/reopen cycles within the same VS session.
+            // Final cleanup happens in AICAPackage.Dispose when VS exits.
+            // The MCP process will idle until the next solution open triggers re-indexing.
+
             return Microsoft.VisualStudio.VSConstants.S_OK;
         }
 
