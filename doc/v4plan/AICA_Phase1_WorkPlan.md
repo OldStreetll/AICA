@@ -1,6 +1,6 @@
 # AICA 下一阶段工作计划
 
-> 版本: v1.8 | 日期: 2026-03-25
+> 版本: v1.9 | 日期: 2026-03-25
 > 定位: 合并 Harness 工程改造 + 原路线图基础修复/M1/M2，形成可执行的工作计划
 > 前置文档: [项目总结与路线图](agentref/AICA_ProjectReview_and_Roadmap.md) | [产品设计研讨会](AICA_ProductDesign_Workshop.md)
 > 规范来源: Qt-C++ 编程规范.doc + MISRA C++/C
@@ -436,7 +436,7 @@ public interface ITaskContext
 
 **现状审查：**
 - `src/AICA.Core/Rules/` 目录存在，RuleLoader 机制已实现
-- `.aica-rules/general.md` 已有通用规则
+- ~~`.aica-rules/general.md` 已有通用规则~~ [C71] 已移除 general.md，C++ 规范通过 `CppRuleTemplates.cs` 自动部署 [C70]
 - `SystemPromptBuilder.AddRulesFromFilesAsync()` 已能从 `.aica-rules/` 加载规则
 - **可行性确认：** 纯配置工作，不需要修改代码。RuleLoader 通过 glob 模式匹配文件，新增 .md 文件即可被自动加载
 
@@ -494,7 +494,7 @@ priority: 20
 
 **新建文件：** `src/AICA.Core/Agent/ProjectLanguageDetector.cs`（~120 行）
 **改动文件：**
-- `src/AICA.Core/Prompt/SystemPromptBuilder.cs`（~80 行，新增 `AddCppSpecialization()` 方法 + C14 强制激活逻辑）[C24]
+- `src/AICA.Core/Prompt/SystemPromptBuilder.cs`（~80 行，~~新增 `AddCppSpecialization()` 方法~~ [C68] 已删除，规范改为通过 `.aica-rules/cpp-*.md` 加载 + C14 强制激活逻辑）[C24]
 - `src/AICA.Core/Agent/AgentExecutor.cs`（~15 行，调用语言检测和注入）
 - `src/AICA.VSIX/Commands/` 下的三个右键命令文件（~100 行总计）[C3]
 
@@ -518,7 +518,7 @@ priority: 20
 |---------|------------|--------|
 | 解释代码 | 通用"请解释这段代码" | C++ 模式：增加"说明所属模块、调用链位置、关键分支含义" |
 | 重构代码 | 通用"请重构这段代码" | C++ 模式：增加"遵循 Allman 风格、m_ 前缀、MISRA 子集" |
-| 生成测试 | 硬编码 xUnit | C++ 模式：切换为 Google Test / CppUnit 框架模板 |
+| 生成测试 | 硬编码 xUnit | C++ 模式：通过 `.aica-rules/cpp-aica-guidance.md` 注入 Google Test 框架 [C68] |
 
 **[C14] C++ 项目规范强制激活 + 用户关闭确认：**
 
@@ -634,9 +634,9 @@ priority: 20
 
 | # | 任务 | 文件 | 新增/改动 | 行数 | 受益范围 | 状态 |
 |---|------|------|----------|------|---------|------|
-| 1.1 | 规范文件 | .aica-rules/ 下 5 个 .md | 新建 | 0 行代码 | ~40 人 | ✅ 验收通过 (6/6 AC) [C33] 技术债务记录 |
+| 1.1 | 规范文件 | ~~.aica-rules/ 下 5 个 .md~~ → CppRuleTemplates.cs 嵌入 6 个 [C68/C70] | 新建 | ~266 行代码 | ~40 人 | ✅ 验收通过 [C33] + 重构为自动部署 [C70] |
 | 1.2 | 语言检测 | ProjectLanguageDetector.cs (新) | 新建 | ~170 | ~40 人 | ✅ 验收通过 (8/8 AC) |
-| 1.2 | Prompt 注入 + C++ 强制激活 [C14] | SystemPromptBuilder.cs | 改动 | ~80 | ~40 人 | ✅ 验收通过 |
+| 1.2 | Prompt 注入 + C++ 强制激活 [C14] | SystemPromptBuilder.cs | 改动 | ~~~80~~ →~45 [C68] | ~40 人 | ✅ 验收通过 → [C68] AddCppSpecialization 已删除 |
 | 1.2 | 执行器集成 | AgentExecutor.cs | 改动 | ~15 | ~40 人 | ✅ 验收通过 |
 | 1.2 | 右键命令适配 [C3] | Commands/ 下 3 个文件 | 改动 | ~100 | **~40 人** | ✅ 验收通过 + [C31] 补 .hpp/.hxx |
 | 1.3 | F3 Bug 定位 [C1] | SystemPromptBuilder + DynamicToolSelector | 改动 | ~50 | **~40 人** | ✅ 验收通过 (8/8 AC) [C32] 已知限制 |
@@ -696,8 +696,8 @@ priority: 20
 **改动文件：** [C55]
 - `src/AICA.VSIX/ToolWindows/ChatToolWindowControl.xaml.cs`（~15 行，注册 6 个桥接工具，try/catch 包裹）
 - `src/AICA.Core/Agent/DynamicToolSelector.cs`（~5 行，ReadTools 加 5 个 GitNexus 工具，WriteTools 加 gitnexus_rename）
-- `src/AICA.VSIX/Events/SolutionEventListener.cs`（~20 行，Solution 打开时触发索引）🔲 Day 3
-- `src/AICA.VSIX/AICAPackage.cs`（~5 行，Dispose 释放）🔲 Day 3
+- `src/AICA.VSIX/Events/SolutionEventListener.cs`（~20 行，Solution 打开时触发索引 + FindGitRoot [C69]）✅ Day 3
+- `src/AICA.VSIX/AICAPackage.cs`（~25 行，Dispose + UnAdvise 修复）✅ Day 3
 
 **测试文件：** [C56]
 - `src/AICA.Core.Tests/LLM/McpClientTests.cs`（~278 行）— JSON-RPC 协议测试
@@ -998,7 +998,7 @@ if (trimmedIndex >= 0)
 - 产品设计研讨会判定"界面组工程师是 AICA 最容易出效果的群体"
 - GitNexus `context()` 工具可提供 signal/slot 连接关系查找（M1 已集成）
 - `SystemPromptBuilder` 已支持场景化 prompt 注入
-- `.aica-rules/cpp-qt-specific.md`（步骤 1.1）已包含 Qt 编码规范
+- `.aica-rules/cpp-qt-specific.md`（步骤 1.1，通过 `CppRuleTemplates.cs` 自动部署 [C70]）已包含 Qt 编码规范
 - **可行性确认：** F5 的核心是 prompt 模板 + Qt 规范约束，不需要新的架构组件
 
 **改动文件：**
@@ -1512,20 +1512,21 @@ condensed.AddRange(recentMessages);
 
 ---
 
-## 八、全量代码统计 [v1.8 更新]
+## 八、全量代码统计 [v1.9 更新]
 
 | 阶段 | 新增文件 | 改动文件 | 代码行数（不含测试） | 测试行数 | 受益覆盖 |
 |------|---------|---------|---------|---------|---------|
 | 阶段 0（基础修复 + Harness 基础设施） | 2 | 5 | ~271 | ~38 测试 | ~40 人 |
-| 阶段 1（C/C++ 专业化 + 日常功能 + 非正式部署） | 1 + 5个.md | 5 | ~365 | ~24 测试 | **~40 人** |
+| 阶段 1（C/C++ 专业化 + 日常功能 + 非正式部署）[C68-C74] | 2 | 5 | ~550 | ~24 测试 | **~40 人** |
 | 阶段 2（M1 GitNexus）[C52-C67] | **4 + tools/gitnexus/** | **7** | **~1115** | **~730 行 / 17 测试** | ~40 人 |
 | 阶段 3（M2 日常功能 + Harness 核心） | 4 | 7 | ~1000 | — | ~40 人 |
-| **总计** | **11 + 5个.md + tools/** | **24** | **~2751** | | |
+| **总计** | **12 + tools/** | **24** | **~2936** | | |
 
 > v1.0 → v1.1 代码量增加 ~220 行，主要来自 F3（+50）、F5（+60）、右键命令（+100）、集成测试修复（+50），H1 因重新设计减少 40 行。
 > v1.1 → v1.2 代码量增加 ~40 行，主要来自 Step 1.4 反馈收集机制（+20）、Step 3.5 wall-clock 超时（+20）。
 > v1.6 → v1.7 阶段 2 代码量从预估 ~300 行修正为实际 ~1045 行 [C57]。原因：MCP 协议实现需要完整的 JSON-RPC 读写循环 + Content-Length 帧解析（~350 行）；6 个工具各自需要独立的参数 schema、metadata、降级逻辑（~380 行）；进程管理状态机 + 单例 + 自动重启（~230 行）。
 > v1.7 → v1.8 新增 tools/gitnexus/ 内嵌部署 [C59]；GitNexusProcessManager 三级路径解析 +~25 行 [C60]；MAX_FILE_SIZE 2MB 定制 [C61]；FindGitRoot 解决 .sln 子目录问题 [C64]；vendor/ 补复制 [C65]；P1-P3 few-shot 修复 +~45 行 [C67]。
+> v1.8 → v1.9 规范注入统一为 .aica-rules 单一路径 [C68]：删除 AddCppSpecialization（-35 行），新建 CppRuleTemplates.cs（+266 行），RulesDirectoryInitializer 增加 IsCppProject 检测 + 自动部署（+84 行）；.aica-rules 位置改为 git root [C69]；去除 general.md [C71]。阶段 1 代码量从 ~365 调整为 ~550（+185 净增，因 CppRuleTemplates 从 0 行配置文件变为嵌入代码）。
 
 ---
 
@@ -1555,6 +1556,6 @@ condensed.AddRange(recentMessages);
 | 3 | ~~RuleLoader 是否支持 frontmatter paths 过滤~~ | 步骤 1.1 规范文件激活范围 | ~~3/26 前~~ | **✅ 已确认** [C14]：RuleLoader 完整支持 `paths` 过滤（`PathMatcher` glob 匹配），C++ 项目由 `ProjectLanguageDetector` 强制激活 |
 | 4 | 公司 C/C++ 测试框架（Google Test / CppUnit） | 步骤 1.2 测试生成 | 4 月 | 待调研 |
 | 5 | ITaskContext 实现类位置 | 步骤 0.6 接口扩展 | 3/22 当天 | **开工时代码搜索确认，不阻塞进度** [C20] |
-| 6 | **H2 状态机兼容性测试结果** [C5] | **步骤 3.4 实现策略选择** | **步骤 2.2 完成时** | **待测试** |
+| 6 | **H2 状态机兼容性测试结果** [C5] | **步骤 3.4 实现策略选择** | **步骤 2.2 完成时** | **待测试**（步骤 2.2 用 poco 自测简化，H2 测试推迟到阶段 3） |
 | 7 | **右键命令源文件位置确认** [C3] | **步骤 1.2 右键命令适配** | **3/26 前** | **开工时代码搜索确认，不阻塞进度** [C20] |
 | 8 | **公司构建系统（CMake / MSBuild）配置确认** [C16] | **步骤 1.2 编译错误修复 Prompt 适配** | **4 月** | **待确认** |
