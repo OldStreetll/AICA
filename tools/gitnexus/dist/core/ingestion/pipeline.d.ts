@@ -1,0 +1,17 @@
+import { PipelineProgress, PipelineResult } from '../../types/pipeline.js';
+/** A group of files with no mutual dependencies, safe to process in parallel. */
+type IndependentFileGroup = readonly string[];
+/** Kahn's algorithm: returns files grouped by topological level.
+ *  Files in the same level have no mutual dependencies — safe to process in parallel.
+ *  Files in cycles are returned as a final group (no cross-cycle propagation). */
+export declare function topologicalLevelSort(importMap: ReadonlyMap<string, ReadonlySet<string>>): {
+    levels: readonly IndependentFileGroup[];
+    cycleCount: number;
+};
+export { extractMiddlewareChain, MIDDLEWARE_STOP_KEYWORDS } from './route-extractors/middleware.js';
+export { detectStatusCode, extractResponseShapes } from './route-extractors/response-shapes.js';
+export interface PipelineOptions {
+    /** Skip MRO, community detection, and process extraction for faster test runs. */
+    skipGraphPhases?: boolean;
+}
+export declare const runPipelineFromRepo: (repoPath: string, onProgress: (progress: PipelineProgress) => void, options?: PipelineOptions) => Promise<PipelineResult>;

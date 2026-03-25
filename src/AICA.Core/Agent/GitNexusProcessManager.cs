@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.LLM;
@@ -24,10 +25,45 @@ namespace AICA.Core.Agent
 
         private const int StartTimeoutMs = 15000;
         private const int IndexTimeoutMs = 60000;
-        private const string MCP_COMMAND = "npx";
-        private const string MCP_ARGS = "-y gitnexus@latest mcp";
-        private const string ANALYZE_ARGS = "-y gitnexus@latest analyze";
         private const string STARTUP_SIGNAL = "MCP server starting";
+
+        // Bundled GitNexus entry point (relative to tools/gitnexus/ in AICA project)
+        private const string BUNDLED_ENTRY = "dist/cli/index.js";
+
+        // Fallback to npx if bundled version not found
+        private const string NPX_COMMAND = "npx";
+        private const string NPX_MCP_ARGS = "-y gitnexus@latest mcp";
+        private const string NPX_ANALYZE_ARGS = "-y gitnexus@latest analyze";
+
+        /// <summary>
+        /// Resolve GitNexus launch command. Prefers bundled version, falls back to npx.
+        /// </summary>
+        private static (string fileName, string mcpArgs, string analyzeArgs) ResolveGitNexusPath()
+        {
+            // Search for bundled GitNexus in known locations
+            var candidates = new[]
+            {
+                // Relative to AICA project root (development)
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "tools", "gitnexus", BUNDLED_ENTRY),
+                // Relative to VSIX install directory
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools", "gitnexus", BUNDLED_ENTRY),
+                // Environment variable override
+                Environment.GetEnvironmentVariable("AICA_GITNEXUS_PATH") ?? ""
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (!string.IsNullOrEmpty(candidate) && File.Exists(candidate))
+                {
+                    var fullPath = Path.GetFullPath(candidate);
+                    System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: using bundled version at {fullPath}");
+                    return ("node", $"\"{fullPath}\" mcp", $"\"{fullPath}\" analyze");
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: bundled version not found, falling back to npx");
+            return (NPX_COMMAND, NPX_MCP_ARGS, NPX_ANALYZE_ARGS);
+        }
 
         public GitNexusState State => _state;
         public McpClient Client => _state == GitNexusState.Ready ? _client : null;
@@ -52,10 +88,11 @@ namespace AICA.Core.Agent
 
             try
             {
+                var (cmd, mcpArgs, _) = ResolveGitNexusPath();
                 var psi = new ProcessStartInfo
                 {
-                    FileName = MCP_COMMAND,
-                    Arguments = MCP_ARGS,
+                    FileName = cmd,
+                    Arguments = mcpArgs,
                     UseShellExecute = false,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
@@ -157,10 +194,11 @@ namespace AICA.Core.Agent
 
             try
             {
+                var (cmd, _, analyzeArgs) = ResolveGitNexusPath();
                 var psi = new ProcessStartInfo
                 {
-                    FileName = MCP_COMMAND,
-                    Arguments = ANALYZE_ARGS,
+                    FileName = cmd,
+                    Arguments = $"{analyzeArgs} \"{solutionDirectory}\"",
                     WorkingDirectory = solutionDirectory,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
