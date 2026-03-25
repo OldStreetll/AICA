@@ -99,7 +99,6 @@ namespace AICA.Core.Agent
                 .AddWorkspaceContext(
                     context?.WorkingDirectory ?? Environment.CurrentDirectory,
                     context?.SourceRoots)
-                .AddCppSpecialization(language)       // 1.2b: C++ specialization
                 .AddBugFixGuidance(intent, language)  // 1.3a: Bug fix guidance
                 .AddGitNexusGuidance(ResolveGitNexusRepoName(context?.WorkingDirectory)); // 2.1: GitNexus few-shot [P1/P2/P3]
 

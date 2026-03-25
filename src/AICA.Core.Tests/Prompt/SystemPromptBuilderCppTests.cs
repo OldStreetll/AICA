@@ -1,5 +1,6 @@
 using AICA.Core.Agent;
 using AICA.Core.Prompt;
+using AICA.Core.Rules;
 using Xunit;
 
 namespace AICA.Core.Tests.Prompt
@@ -7,38 +8,69 @@ namespace AICA.Core.Tests.Prompt
     public class SystemPromptBuilderCppTests
     {
         [Fact]
-        public void AddCppSpecialization_CppLanguage_ContainsGoogleTest()
+        public void CppRuleTemplates_ContainsAllRequiredRules()
         {
-            var builder = new SystemPromptBuilder();
-            builder.AddCppSpecialization(ProjectLanguage.CppC);
-            var prompt = builder.Build();
+            var templates = CppRuleTemplates.GetAll();
 
-            Assert.Contains("Google Test", prompt);
-            Assert.Contains("Allman", prompt);
-            Assert.Contains("m_", prompt);
-            Assert.Contains("Bit32", prompt);
-            Assert.Contains("doxygen", prompt);
+            Assert.Equal(6, templates.Count);
+
+            // Verify all expected file names exist
+            var fileNames = new System.Collections.Generic.HashSet<string>();
+            foreach (var (fileName, _) in templates)
+            {
+                fileNames.Add(fileName);
+            }
+            Assert.Contains("cpp-code-style.md", fileNames);
+            Assert.Contains("cpp-reliability.md", fileNames);
+            Assert.Contains("cpp-file-io.md", fileNames);
+            Assert.Contains("cpp-qt-specific.md", fileNames);
+            Assert.Contains("cpp-comment-template.md", fileNames);
+            Assert.Contains("cpp-aica-guidance.md", fileNames);
         }
 
         [Fact]
-        public void AddCppSpecialization_CSharp_NoGoogleTest()
+        public void CppRuleTemplates_CodeStyle_ContainsKeyRules()
         {
-            var builder = new SystemPromptBuilder();
-            builder.AddCppSpecialization(ProjectLanguage.CSharp);
-            var prompt = builder.Build();
-
-            Assert.DoesNotContain("Google Test", prompt);
-            Assert.DoesNotContain("C/C++ 专业化", prompt);
+            Assert.Contains("Allman", CppRuleTemplates.CodeStyle);
+            Assert.Contains("m_", CppRuleTemplates.CodeStyle);
+            Assert.Contains("Bit32", CppRuleTemplates.CodeStyle);
+            Assert.Contains("4 个空格", CppRuleTemplates.CodeStyle);
         }
 
         [Fact]
-        public void AddCppSpecialization_Unknown_NoSpecialization()
+        public void CppRuleTemplates_Reliability_ContainsMemorySafety()
         {
-            var builder = new SystemPromptBuilder();
-            builder.AddCppSpecialization(ProjectLanguage.Unknown);
-            var prompt = builder.Build();
+            Assert.Contains("malloc/free", CppRuleTemplates.Reliability);
+            Assert.Contains("snprintf", CppRuleTemplates.Reliability);
+            Assert.Contains("NULL", CppRuleTemplates.Reliability);
+        }
 
-            Assert.DoesNotContain("C/C++ 专业化", prompt);
+        [Fact]
+        public void CppRuleTemplates_AicaGuidance_ContainsTestAndExplanation()
+        {
+            Assert.Contains("Google Test", CppRuleTemplates.AicaGuidance);
+            Assert.Contains("调用链", CppRuleTemplates.AicaGuidance);
+            Assert.Contains("模块", CppRuleTemplates.AicaGuidance);
+        }
+
+        [Fact]
+        public void CppRuleTemplates_CommentTemplate_ContainsDoxygen()
+        {
+            Assert.Contains("doxygen", CppRuleTemplates.CommentTemplate);
+            Assert.Contains("@brief", CppRuleTemplates.CommentTemplate);
+            Assert.Contains("@param", CppRuleTemplates.CommentTemplate);
+        }
+
+        [Fact]
+        public void CppRuleTemplates_AllHaveFrontmatter()
+        {
+            foreach (var (fileName, content) in CppRuleTemplates.GetAll())
+            {
+                Assert.True(content.TrimStart().StartsWith("---"), $"{fileName} missing frontmatter");
+                Assert.True(content.Contains("paths:"), $"{fileName} missing paths");
+                Assert.True(content.Contains("**/*.cpp"), $"{fileName} missing cpp glob");
+                Assert.True(content.Contains("enabled: true"), $"{fileName} not enabled");
+            }
         }
 
         [Fact]

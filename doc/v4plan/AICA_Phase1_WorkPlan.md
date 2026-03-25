@@ -116,6 +116,13 @@
 | C65 | GitNexus 内嵌漏 vendor/ 目录 | 补复制 `vendor/leiden/`（20KB 社区检测算法）| analyze 时 community-processor.js 加载 leiden 失败 |
 | C66 | 步骤 2.2 自测发现 5 个 LLM 参数优化项 | P1-P5 记录在步骤 2.1 执行记录中，P1-P3 需 SystemPrompt few-shot 注入 | 多仓库 repo 参数、impact 符号名格式、Cypher schema 不匹配、grep 路径混淆、dedup 循环 |
 | C67 | P1-P3 修复：SystemPrompt GitNexus few-shot 注入 | `AddGitNexusGuidance(repoName)` ~30 行 + `ResolveGitNexusRepoName` ~15 行 | 复测 IT3 从 14 轮降至 2 轮。repo 参数、简单符号名、Cypher schema 均一次正确 |
+| C68 | 规范注入统一为 .aica-rules 单一路径 | 删除 `AddCppSpecialization()` 硬编码，全部通过 RuleLoader 从 `.aica-rules/cpp-*.md` 加载 | Phase 1 存在双路径注入设计缺陷：硬编码路径 A 生效但 .aica-rules 路径 B 从未部署到目标项目 |
+| C69 | .aica-rules 目录位置改为 git root | `SolutionEventListener` 用 `FindGitRoot` 解析项目根目录，`.aica-rules` 与 `.git` 同级 | 原来在 `poco\build\.aica-rules`（.sln 目录），现改为 `poco\.aica-rules`（git root） |
+| C70 | RulesDirectoryInitializer 自动部署 C++ 规范 | C++ 项目检测（IsCppProject 15% 阈值）+ 6 个 `cpp-*.md` 自动创建 | 新建 `CppRuleTemplates.cs` 嵌入规范内容 + `cpp-aica-guidance.md`（代码解释 + 测试生成 + Bug 修复） |
+| C71 | 去除 general.md 自动创建 | `.aica-rules` 只创建 C++ 规范文件，不再创建通用 general.md | general.md 内容过于泛化，C++ 规范文件已覆盖所有需要 |
+| C72 | IsCppProject 阈值 0.3→0.15 | poco 项目 55/200 = 27.5% 低于 0.3 阈值导致检测失败 | 大型 C++ 项目根目录含大量 config/build/doc 文件，C++ 源文件占比可能低于 30% |
+| C73 | 旧版 VSIX 部署兼容性 | 已部署工程师使用旧版（含 `AddCppSpecialization` 硬编码），新版发布前不受影响 | 旧 `build/.aica-rules/general.md` 成为孤儿文件，不影响功能 |
+| C74 | 规范注入验证（poco MyTimer）| 生成代码遵循 Allman/m_/doxygen/Bit64 — 规范生效 | 但 48 轮迭代（触发安全边界），LLM 过度探索项目结构而非直接生成 — 已知限制 [C32] |
 
 ---
 

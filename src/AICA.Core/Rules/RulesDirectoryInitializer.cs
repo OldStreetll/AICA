@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -158,18 +159,21 @@ namespace AICA.Core.Rules
                     };
                 }
 
-                // 创建 general.md 文件
-                var generalRulePath = Path.Combine(rulesPath, GeneralRuleFileName);
-
-                // 如果文件不存在，创建它
-                if (!File.Exists(generalRulePath))
+                // 检测 C/C++ 项目并复制规范文件
+                var projectDir = Path.GetDirectoryName(rulesPath) ?? rulesPath;
+                System.Diagnostics.Debug.WriteLine($"[AICA] Checking if C++ project: {projectDir}");
+                var isCpp = IsCppProject(projectDir);
+                System.Diagnostics.Debug.WriteLine($"[AICA] IsCppProject result: {isCpp}");
+                if (isCpp)
                 {
-                    var content = GenerateGeneralRuleContent();
-                    // 使用 StreamWriter 进行异步写入（兼容 .NET Standard 2.0）
-                    using (var fileStream = File.Create(generalRulePath))
-                    using (var writer = new StreamWriter(fileStream, System.Text.Encoding.UTF8))
+                    foreach (var (fileName, fileContent) in CppRuleTemplates.GetAll())
                     {
-                        await writer.WriteAsync(content);
+                        var filePath = Path.Combine(rulesPath, fileName);
+                        if (!File.Exists(filePath))
+                        {
+                            await WriteFileAsync(filePath, fileContent);
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Created C++ rule: {fileName}");
+                        }
                     }
                 }
 
@@ -208,6 +212,66 @@ namespace AICA.Core.Rules
         /// <summary>
         /// 生成通用规则文件内容
         /// </summary>
+        /// <summary>
+        /// Write content to a file asynchronously (.NET Standard 2.0 compatible).
+        /// </summary>
+        private static async Task WriteFileAsync(string filePath, string content)
+        {
+            using (var fileStream = File.Create(filePath))
+            using (var writer = new StreamWriter(fileStream, System.Text.Encoding.UTF8))
+            {
+                await writer.WriteAsync(content);
+            }
+        }
+
+        /// <summary>
+        /// Detect if the project directory contains C/C++ source files.
+        /// Uses a quick scan (first 200 files) to avoid slow enumeration on large projects.
+        /// </summary>
+        private static bool IsCppProject(string projectDir)
+        {
+            try
+            {
+                var cppExtensions = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
+                {
+                    ".cpp", ".c", ".h", ".cc", ".cxx", ".hpp", ".hxx"
+                };
+
+                int cppCount = 0;
+                int totalCount = 0;
+                const int scanLimit = 200;
+
+                foreach (var file in Directory.EnumerateFiles(projectDir, "*.*", SearchOption.AllDirectories))
+                {
+                    var ext = Path.GetExtension(file);
+                    if (string.IsNullOrEmpty(ext)) continue;
+
+                    // Skip build/dependency directories
+                    if (file.IndexOf(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        file.IndexOf(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        file.IndexOf(Path.DirectorySeparatorChar + "node_modules" + Path.DirectorySeparatorChar, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                        continue;
+
+                    totalCount++;
+                    if (cppExtensions.Contains(ext))
+                        cppCount++;
+
+                    if (totalCount >= scanLimit) break;
+                }
+
+                // Threshold 15%: large C++ projects have many config/build/doc files
+                // (poco: 55/200 = 27.5%, but smaller projects may be lower)
+                var result = totalCount > 0 && (double)cppCount / totalCount > 0.15;
+                System.Diagnostics.Debug.WriteLine($"[AICA] IsCppProject scan: {cppCount}/{totalCount} cpp files, result={result}");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] IsCppProject exception: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
         private static string GenerateGeneralRuleContent()
         {
             return @"---

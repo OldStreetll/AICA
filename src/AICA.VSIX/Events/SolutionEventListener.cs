@@ -61,10 +61,12 @@ namespace AICA.VSIX.Events
 
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[AICA] Initializing rules directory for: {solutionPath}");
+                // Resolve git root for .aica-rules directory (colocate with .git)
+                var projectRoot = FindGitRoot(solutionPath) ?? solutionPath;
+                System.Diagnostics.Debug.WriteLine($"[AICA] Initializing rules directory for: {projectRoot} (sln dir: {solutionPath})");
 
-                // 初始化规则目录
-                var result = await _initializer.InitializeAsync(solutionPath);
+                // 初始化规则目录（在项目根目录，与 .git 同级）
+                var result = await _initializer.InitializeAsync(projectRoot);
 
                 if (result.Success)
                 {
@@ -218,6 +220,21 @@ namespace AICA.VSIX.Events
         }
 
         #endregion
+
+        /// <summary>
+        /// Walk up from a directory to find the nearest .git directory (repository root).
+        /// </summary>
+        private static string FindGitRoot(string startDir)
+        {
+            var dir = startDir;
+            for (int i = 0; i < 10 && !string.IsNullOrEmpty(dir); i++)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir, ".git")))
+                    return dir;
+                dir = System.IO.Path.GetDirectoryName(dir);
+            }
+            return null;
+        }
 
         /// <summary>
         /// 释放资源
