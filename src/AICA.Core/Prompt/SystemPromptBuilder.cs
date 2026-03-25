@@ -552,6 +552,43 @@ namespace AICA.Core.Prompt
         }
 
         /// <summary>
+        /// 2.1: Add GitNexus MCP tool usage guidance with few-shot examples.
+        /// Fixes P1 (repo param), P2 (simple symbol names), P3 (Cypher schema).
+        /// </summary>
+        public SystemPromptBuilder AddGitNexusGuidance(string repoName)
+        {
+            if (string.IsNullOrEmpty(repoName))
+                return this;
+
+            _builder.AppendLine("## GitNexus 代码知识图谱工具使用指南");
+            _builder.AppendLine();
+            _builder.AppendLine($"当前项目的 GitNexus repo 名称为 **\"{repoName}\"**。调用任何 gitnexus_* 工具时，**必须传 repo 参数**。");
+            _builder.AppendLine();
+            _builder.AppendLine("### 工具调用示例");
+            _builder.AppendLine();
+            _builder.AppendLine("**gitnexus_context** — 使用简单函数/类名（不带命名空间前缀）：");
+            _builder.AppendLine($"  正确：gitnexus_context(name: \"Logger\", repo: \"{repoName}\")");
+            _builder.AppendLine($"  错误：gitnexus_context(name: \"Poco::Logger::Logger\")  ← 缺少 repo，名称太长");
+            _builder.AppendLine();
+            _builder.AppendLine("**gitnexus_impact** — target 使用简单函数名：");
+            _builder.AppendLine($"  正确：gitnexus_impact(target: \"unsafeGet\", direction: \"upstream\", repo: \"{repoName}\")");
+            _builder.AppendLine($"  错误：gitnexus_impact(target: \"Logger::unsafeGet\")  ← 命名空间前缀会导致找不到符号");
+            _builder.AppendLine();
+            _builder.AppendLine("**gitnexus_cypher** — 关系类型统一为 CodeRelation，用 r.type 属性区分：");
+            _builder.AppendLine($"  正确：gitnexus_cypher(query: \"MATCH (a:Class)-[r:CodeRelation]->(b:Class) WHERE r.type = 'EXTENDS' AND b.name = 'Base' RETURN a.name, a.filePath\", repo: \"{repoName}\")");
+            _builder.AppendLine("  错误：MATCH (a)-[:EXTENDS]->(b)  ← EXTENDS 不是边类型，是 r.type 属性值");
+            _builder.AppendLine();
+            _builder.AppendLine("**gitnexus_query** — 自然语言搜索：");
+            _builder.AppendLine($"  gitnexus_query(query: \"HTTP server request handling\", repo: \"{repoName}\")");
+            _builder.AppendLine();
+            _builder.AppendLine("**gitnexus_detect_changes** — 无需额外参数：");
+            _builder.AppendLine($"  gitnexus_detect_changes(repo: \"{repoName}\")");
+            _builder.AppendLine();
+
+            return this;
+        }
+
+        /// <summary>
         /// Load and integrate rules from files (.aica-rules directory).
         /// Rules are evaluated based on context and added to the system prompt.
         /// </summary>

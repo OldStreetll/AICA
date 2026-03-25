@@ -187,10 +187,23 @@ namespace AICA.Core.Agent
 
         /// <summary>
         /// Trigger GitNexus indexing for a solution directory (separate process, fire-and-forget).
+        /// Resolves git repository root from the solution directory before indexing.
         /// </summary>
         public async Task TriggerIndexAsync(string solutionDirectory, CancellationToken ct)
         {
             if (string.IsNullOrEmpty(solutionDirectory)) return;
+
+            // Resolve git repo root (walk up from solution dir to find .git)
+            var repoRoot = FindGitRoot(solutionDirectory);
+            if (repoRoot == null)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] GitNexus: no .git found above {solutionDirectory}, skipping index");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] GitNexus: resolved repo root {repoRoot} (from {solutionDirectory})");
 
             try
             {
@@ -198,8 +211,8 @@ namespace AICA.Core.Agent
                 var psi = new ProcessStartInfo
                 {
                     FileName = cmd,
-                    Arguments = $"{analyzeArgs} \"{solutionDirectory}\"",
-                    WorkingDirectory = solutionDirectory,
+                    Arguments = $"{analyzeArgs} \"{repoRoot}\"",
+                    WorkingDirectory = repoRoot,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -221,7 +234,7 @@ namespace AICA.Core.Agent
 
                     var exitCode = await exitTask.ConfigureAwait(false);
                     System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] GitNexus analyze completed: exit={exitCode}, dir={solutionDirectory}");
+                        $"[AICA] GitNexus analyze completed: exit={exitCode}, repo={repoRoot}");
                 }
             }
             catch (OperationCanceledException)
@@ -232,6 +245,22 @@ namespace AICA.Core.Agent
             {
                 System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus analyze error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Walk up from a directory to find the nearest .git directory (repository root).
+        /// Returns null if no .git found within 10 levels.
+        /// </summary>
+        private static string FindGitRoot(string startDir)
+        {
+            var dir = startDir;
+            for (int i = 0; i < 10 && !string.IsNullOrEmpty(dir); i++)
+            {
+                if (Directory.Exists(Path.Combine(dir, ".git")))
+                    return dir;
+                dir = Path.GetDirectoryName(dir);
+            }
+            return null;
         }
 
         public void Dispose()

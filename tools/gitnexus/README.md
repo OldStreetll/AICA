@@ -29,6 +29,12 @@ node dist/cli/index.js analyze <项目路径>
 
 首次索引耗时取决于项目大小（3000 文件约 5 分钟），后续增量索引很快。
 
+强制重建索引（修改了 `MAX_FILE_SIZE` 配置后需要）：
+
+```powershell
+node dist/cli/index.js analyze <项目路径> --force
+```
+
 ## 配置
 
 | 环境变量 | 说明 | 默认值 |
@@ -54,8 +60,9 @@ cd D:\Project\AIConsProject\GitNexus\gitnexus
 git pull
 npx tsc
 
-# 复制构建产物到本目录
-copy dist\* D:\Project\AIConsProject\AICA\tools\gitnexus\dist\ /E /Y
+# 复制构建产物到本目录（dist/ + vendor/ + package.json）
+xcopy dist D:\Project\AIConsProject\AICA\tools\gitnexus\dist\ /E /Y
+xcopy vendor D:\Project\AIConsProject\AICA\tools\gitnexus\vendor\ /E /Y
 copy package.json D:\Project\AIConsProject\AICA\tools\gitnexus\
 # 然后重新 npm install --omit=dev
 ```
@@ -76,4 +83,6 @@ copy package.json D:\Project\AIConsProject\AICA\tools\gitnexus\
 - **AICA 中 GitNexus 工具不可用：** 打开 DebugView 过滤 `[AICA] GitNexus`，检查日志
 - **索引卡住：** 大项目首次索引可能需要 5-10 分钟，耐心等待
 - **"bundled version not found" 日志：** `npm install --omit=dev` 未执行，或 `node_modules` 被清除
-- **文件被跳过：** 超过 2MB 的文件会被跳过（可通过 `GITNEXUS_MAX_FILE_SIZE` 调大）
+- **analyze exit=1：** 可能原因：① .sln 不在 git 仓库根目录（AICA 会自动向上查找 .git）；② `vendor/` 目录缺失（重新从 GitNexus 源码复制）；③ 项目未初始化 git
+- **文件被跳过：** 超过 2MB 的文件会被跳过（可通过 `GITNEXUS_MAX_FILE_SIZE` 调大，改后需 `--force` 重建索引）
+- **"Cannot find module leiden"：** `vendor/` 目录未复制，从 GitNexus 源码复制 `vendor/` 到本目录

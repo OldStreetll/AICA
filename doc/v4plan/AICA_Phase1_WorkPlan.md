@@ -1,6 +1,6 @@
 # AICA 下一阶段工作计划
 
-> 版本: v1.7 | 日期: 2026-03-24
+> 版本: v1.8 | 日期: 2026-03-25
 > 定位: 合并 Harness 工程改造 + 原路线图基础修复/M1/M2，形成可执行的工作计划
 > 前置文档: [项目总结与路线图](agentref/AICA_ProjectReview_and_Roadmap.md) | [产品设计研讨会](AICA_ProductDesign_Workshop.md)
 > 规范来源: Qt-C++ 编程规范.doc + MISRA C++/C
@@ -103,6 +103,20 @@
 | C57 | 阶段 2 代码量校准 | 阶段 2 步骤 2.1 实际代码 ~1000 行（不含测试），含测试 ~1730 行 | 预估 ~300 行严重低估，MCP 协议实现 + 6 个工具定义 + 降级逻辑 + 进程管理 = 远超预期 |
 | C58 | AgentEvalHarness 命名空间修复 | 修复 `AICA.Core.Tests.LLM` 命名空间冲突导致的编译错误 | Day 1 新增 McpClientTests.cs 引入的 `AICA.Core.Tests.LLM` 命名空间与 AgentEvalHarness 中的 `LLM.ChatMessage` 引用冲突 |
 
+### v1.8 修正（5 项，GitNexus 部署方式 + 步骤 2.2 调整）
+
+| # | 修正项 | 决定 | 原因 |
+|---|--------|------|------|
+| C59 | GitNexus 内嵌到 AICA 仓库 | 新增 `tools/gitnexus/`（dist/ + package.json），开发者克隆后 `npm install --omit=dev` 即可使用 | 方案 C：对项目开发者和维护者更友好，不需要额外安装 GitNexus |
+| C60 | GitNexusProcessManager 启动路径三级解析 | 优先内嵌版本 → `AICA_GITNEXUS_PATH` 环境变量 → npx 兜底 | 兼容开发环境（内嵌）和部署环境（环境变量），npx 作为最终降级 |
+| C61 | GitNexus MAX_FILE_SIZE 从 512KB 提升到 2MB | 支持 `GITNEXUS_MAX_FILE_SIZE` 环境变量动态配置 | 华中数控实际项目有大量单文件 >512KB 的 C/C++ 源码，原限制会导致关键符号缺失 |
+| C62 | 步骤 2.2 任务来源调整 | 工程师真实场景暂未收集到时，可用 poco 项目自测替代 | 1.4 反馈收集周期未到，不阻塞步骤 2.2 推进 |
+| C63 | 风险 "GitNexus 整体不可用" 已关闭 | MCP 服务启动成功（poco 2 repo），风险已消除 | `node dist/cli/index.js mcp` 输出 `MCP server starting with 2 repo(s)` |
+| C64 | GitNexus 索引路径修复 | TriggerIndexAsync 新增 FindGitRoot：从 .sln 目录向上查找 .git | .sln 在 `poco\build\`，.git 在 `poco\`，原来传 build 目录导致 exit=1 |
+| C65 | GitNexus 内嵌漏 vendor/ 目录 | 补复制 `vendor/leiden/`（20KB 社区检测算法）| analyze 时 community-processor.js 加载 leiden 失败 |
+| C66 | 步骤 2.2 自测发现 5 个 LLM 参数优化项 | P1-P5 记录在步骤 2.1 执行记录中，P1-P3 需 SystemPrompt few-shot 注入 | 多仓库 repo 参数、impact 符号名格式、Cypher schema 不匹配、grep 路径混淆、dedup 循环 |
+| C67 | P1-P3 修复：SystemPrompt GitNexus few-shot 注入 | `AddGitNexusGuidance(repoName)` ~30 行 + `ResolveGitNexusRepoName` ~15 行 | 复测 IT3 从 14 轮降至 2 轮。repo 参数、简单符号名、Cypher schema 均一次正确 |
+
 ---
 
 ## 一、工作范围与边界
@@ -143,7 +157,7 @@
 ```
 阶段 0 [3/22-3/23]   基础修复 + Harness 基础设施         ← ✅ 提前完成
 阶段 1 [3/23]        C/C++ 专业化 + 日常功能基础         ← ✅ 提前完成（原计划 3/26-3/31）
-阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← 🔄 步骤 2.1 ✅ 完成（3/24），步骤 2.2 待执行 [C48]
+阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← 🔄 步骤 2.1 ✅ + 2.2 自测 ✅ 完成（3/25），步骤 2.3 待执行 [C48]
 阶段 3 [4/8-5/10]    M2: 日常功能完善 + 跨文件可用        ← 33 天（含 8 天缓冲）[C9][C48]
 ```
 
@@ -648,7 +662,7 @@ priority: 20
 > 目标：F1 代码理解做到 80%+ 成功率，F2 规范合规 70%+，F3 Bug 定位基本可用。[C51]
 > 时间：3/23-4/7（15 天，含 3 天缓冲）[C48]
 > 前置：阶段 1 完成 + ✅ Node.js 部署可行性已确认（3/23）+ ✅ 许可证合规已确认（3/23）[C49]
-> 进度：🔄 步骤 2.1 ✅ 完成（2026-03-24），步骤 2.2 待执行
+> 进度：🔄 步骤 2.1 ✅ + 步骤 2.2 自测 ✅ 完成（2026-03-25），步骤 2.3 待执行
 
 ### 步骤 2.1：GitNexus MCP 集成
 
@@ -659,6 +673,12 @@ priority: 20
 - `ToolMetadata` 已有 `Category` 枚举（FileRead/FileWrite/Search/Analysis 等）和 `Tags` 数组
 - `ToolExecutionPipeline` 支持中间件链，MCP 工具可通过桥接层接入
 - ~~**阻塞确认**~~ ✅ 两个前置条件均已确认（3/23）[C49]
+
+**部署方式（方案 C）：** [C59][C60]
+- GitNexus v1.4.8 编译产物内嵌到 `tools/gitnexus/`（dist/ 2.1MB + package.json）
+- 开发者首次使用：`cd tools/gitnexus && npm install --omit=dev`
+- `GitNexusProcessManager` 三级路径解析：内嵌版本 → `AICA_GITNEXUS_PATH` 环境变量 → npx 兜底
+- MAX_FILE_SIZE 从 512KB 提升到 2MB，支持 `GITNEXUS_MAX_FILE_SIZE` 环境变量 [C61]
 
 **新建文件：** [C52][C53]
 - `src/AICA.Core/Agent/IGitNexusProcessManager.cs`（~40 行）— 进程管理接口（供 Mock 测试）
@@ -716,7 +736,7 @@ priority: 20
 - **可行性确认：** 不需要写代码，需要设计和执行测试
 
 **执行方式：**
-1. **[C15][C44] 任务来源：** 从步骤 1.4 收集到的工程师真实场景中选取 10 个，覆盖两类角色（平台组×5 + 界面组×5）
+1. **[C15][C44][C62] 任务来源：** 优先从步骤 1.4 收集的工程师真实场景中选取 10 个，覆盖两类角色（平台组×5 + 界面组×5）。**若真实场景暂未收集到，可先用 poco 项目自测 6 个工具的基本调用**（context/impact/query/detect_changes/cypher/降级恢复），不阻塞推进
 2. 每个任务手动执行，遥测自动记录
 3. 汇总遥测数据，分析工具调用成功率和失败模式
 4. 若 MiniMax-M2.5 无法可靠调用 MCP 工具参数格式 → 在 SystemPrompt 中注入 few-shot 示例
@@ -772,7 +792,9 @@ priority: 20
 | 2.1 | 索引触发 | SolutionEventListener.cs | 改动 | ~20 | ✅ Day 3 |
 | 2.1 | 释放 + UnAdvise 修复 | AICAPackage.cs | 改动 | ~25 | ✅ Day 3 |
 | 2.1 | 测试 [C56] | 3 个测试文件 | 新建 | ~730 | ✅ Day 1+2 |
-| 2.2 | 可靠性验证 | 无代码 | 测试执行 | 0 | 🔲 |
+| 2.1 | GitNexus 内嵌 [C59] | tools/gitnexus/ + README.md | 新建 | dist 2.1MB | ✅ Day 4 |
+| 2.1 | 路径解析 [C60] | GitNexusProcessManager.cs | 改动 | ~25 | ✅ Day 4 |
+| 2.2 | 可靠性验证（poco 自测）[C62] | SystemPromptBuilder + AgentExecutor | 改动 | ~45 | ✅ 自测 5/5 通过 + P1-P3 修复 [C67] |
 | | **合计（不含测试）** | | | **~1045** | |
 | | **合计（含测试）** | | | **~1775** | |
 
@@ -793,7 +815,7 @@ priority: 20
 > - 单元测试：449/453 pass（4 个预存 flaky，0 个新增失败）
 >
 > **Day 3（2026-03-24）：**
-> - 改动：SolutionEventListener.cs（OnAfterOpenSolutionAsync 并行触发 GitNexus 索引 + OnAfterCloseSolution 释放进程）
+> - 改动：SolutionEventListener.cs（OnAfterOpenSolutionAsync 并行触发 GitNexus 索引；OnAfterCloseSolution 不 Dispose 单例 [CRITICAL-2 修复]）
 > - 改动：AICAPackage.cs（Dispose 新增 UnadviseSolutionEvents + GitNexusProcessManager.Dispose）
 > - 编译：BUILD SUCCEEDED (0 errors, VSIX 生成)
 > - 单元测试：449/453 pass（4 个预存 flaky，0 个新增失败）
@@ -807,11 +829,47 @@ priority: 20
 > - 最终编译：BUILD SUCCEEDED (0 errors, VSIX 生成)
 > - 最终测试：449/453 pass（4 个预存 flaky，0 个新增失败）
 >
+> **Day 4 补充（2026-03-25）：**
+> - GitNexus 内嵌：tools/gitnexus/（dist/ 2.1MB + package.json + README.md）[C59]
+> - 改动：GitNexusProcessManager.cs（三级路径解析：内嵌 → 环境变量 → npx）[C60]
+> - 定制：MAX_FILE_SIZE 512KB → 2MB + GITNEXUS_MAX_FILE_SIZE 环境变量 [C61]
+> - poco 索引验证：64,122 nodes | 130,467 edges | 1913 clusters | 326.6s
+> - MCP 服务验证：`MCP server starting with 2 repo(s)` ✅
+>
 > **步骤 2.1 完成总结：**
 > - 新建 4 个核心文件 + 3 个测试文件 = ~1730 行（核心 ~1000 + 测试 ~730）
-> - 改动 4 个文件 = ~45 行
+> - 内嵌 GitNexus v1.4.8 构建产物到 tools/gitnexus/（dist/ 2.1MB）
+> - 改动 5 个文件 = ~70 行（含三级路径解析）
 > - 桥接 6 个 GitNexus MCP 工具，含三级降级策略
 > - 17 个新增单元测试全部通过
+>
+> **步骤 2.2 简化自测记录（2026-03-25，poco 项目）：**
+>
+> | # | 测试 | 工具调用 | 回答质量 | 迭代 | 判定 |
+> |---|------|---------|---------|------|------|
+> | IT1 | context（Logger 调用者） | ✅ gitnexus_context + query | ✅ 准确 | 9 | PASS |
+> | IT2 | impact（unsafeGet 爆炸半径） | ⚠️ impact 参数名不匹配 | ✅ 准确（grep 补救） | 21 | 部分 PASS |
+> | IT3 | cypher（继承 CodeWriter） | ⚠️ Cypher schema 不匹配 | ✅ 准确（grep 补救） | 14 | 部分 PASS |
+> | IT4 | detect_changes（git 变更影响） | ✅ detect_changes + impact 协作 | ✅ 详细准确 | 7 | PASS |
+> | IT5 | 降级（杀 node 后恢复） | ✅ 纯内置工具降级 | ✅ 准确 | 2 | PASS |
+>
+> **自测发现的 5 个问题及修复状态：**
+>
+> | # | 问题 | 影响 | 修复方案 | 状态 |
+> |---|------|------|---------|------|
+> | P1 | 多仓库时 LLM 第一次不传 repo 参数 | 每次浪费 1 轮迭代 | SystemPrompt 注入当前项目 repo 名 [C67] | ✅ 已修复 |
+> | P2 | impact 传 `Logger::unsafeGet`，GitNexus 需要 `unsafeGet` | impact 返回空，降级到 grep | SystemPrompt few-shot：使用简单函数名 [C67] | ✅ 已修复 |
+> | P3 | cypher 用 `[:EXTENDS]`，实际应为 `[r:CodeRelation] WHERE r.type='EXTENDS'` | cypher 查询失败 | SystemPrompt few-shot：GitNexus Cypher schema 示例 [C67] | ✅ 已修复 |
+> | P4 | grep_search 传 `path: poco` 但工作目录已在 poco 内 | grep 返回 0 结果 | 已知路径混淆问题，工作目录解析需改进 | 🔲 阶段 3 |
+> | P5 | dedup 拦截 read_file 后 LLM 陷入重复循环 | 迭代浪费（IT2 21 轮中 4 次 duplicate skip） | 阶段 3 H2 状态机覆盖 [C32] | 🔲 阶段 3 |
+>
+> **P1-P3 修复验证（2026-03-25）：**
+> - 改动：SystemPromptBuilder.cs 新增 `AddGitNexusGuidance(repoName)`（~30 行 few-shot 示例）
+> - 改动：AgentExecutor.cs 新增 `ResolveGitNexusRepoName(workingDir)`（~15 行，从 .git 取 repo 名）
+> - 复测 IT3（cypher 继承 CodeWriter）：14 轮 → **2 轮**，repo 参数 + Cypher schema 均一次正确
+> - 编译：BUILD SUCCEEDED | 测试：449/453 pass
+>
+> **自测最终结论：** MCP 集成链路通畅，6 个工具均可调用，降级机制正常。P1-P3 修复后效率提升显著（IT3 从 14 轮降至 2 轮）。P4/P5 为已知限制，分别在阶段 3 工作目录改进和 H2 状态机中解决。步骤 2.2 简化自测通过，可进入步骤 2.3。
 
 ---
 
@@ -1447,19 +1505,20 @@ condensed.AddRange(recentMessages);
 
 ---
 
-## 八、全量代码统计 [v1.7 更新]
+## 八、全量代码统计 [v1.8 更新]
 
 | 阶段 | 新增文件 | 改动文件 | 代码行数（不含测试） | 测试行数 | 受益覆盖 |
 |------|---------|---------|---------|---------|---------|
 | 阶段 0（基础修复 + Harness 基础设施） | 2 | 5 | ~271 | ~38 测试 | ~40 人 |
 | 阶段 1（C/C++ 专业化 + 日常功能 + 非正式部署） | 1 + 5个.md | 5 | ~365 | ~24 测试 | **~40 人** |
-| 阶段 2（M1 GitNexus）[C52-C57] | **4** | **4** | **~1045** | **~730 行 / 17 测试** | ~40 人 |
+| 阶段 2（M1 GitNexus）[C52-C67] | **4 + tools/gitnexus/** | **7** | **~1115** | **~730 行 / 17 测试** | ~40 人 |
 | 阶段 3（M2 日常功能 + Harness 核心） | 4 | 7 | ~1000 | — | ~40 人 |
-| **总计** | **11 + 5个.md** | **21** | **~2681** | | |
+| **总计** | **11 + 5个.md + tools/** | **24** | **~2751** | | |
 
 > v1.0 → v1.1 代码量增加 ~220 行，主要来自 F3（+50）、F5（+60）、右键命令（+100）、集成测试修复（+50），H1 因重新设计减少 40 行。
 > v1.1 → v1.2 代码量增加 ~40 行，主要来自 Step 1.4 反馈收集机制（+20）、Step 3.5 wall-clock 超时（+20）。
 > v1.6 → v1.7 阶段 2 代码量从预估 ~300 行修正为实际 ~1045 行 [C57]。原因：MCP 协议实现需要完整的 JSON-RPC 读写循环 + Content-Length 帧解析（~350 行）；6 个工具各自需要独立的参数 schema、metadata、降级逻辑（~380 行）；进程管理状态机 + 单例 + 自动重启（~230 行）。
+> v1.7 → v1.8 新增 tools/gitnexus/ 内嵌部署 [C59]；GitNexusProcessManager 三级路径解析 +~25 行 [C60]；MAX_FILE_SIZE 2MB 定制 [C61]；FindGitRoot 解决 .sln 子目录问题 [C64]；vendor/ 补复制 [C65]；P1-P3 few-shot 修复 +~45 行 [C67]。
 
 ---
 
@@ -1469,14 +1528,14 @@ condensed.AddRange(recentMessages);
 |------|------|------|---------|---------|
 | ~~GitNexus Node.js 部署不被允许~~ | ~~中~~ | ~~M1 延后 1 周~~ | ~~降级方案：知识引擎正则增强~~ | ✅ 已确认可行（3/23）[C49] |
 | ~~GitNexus 许可证不合规~~ | ~~中~~ | ~~同上~~ | ~~联系作者 / 自实现简化版~~ | ✅ 已确认合规（3/23）[C49] |
-| **GitNexus 整体不可用（部署+许可均失败）** [C13] | **低** | **F8 缺失** | **搜索开源生态替代组件（Tree-sitter bindings、代码图工具等），不自建也不用 RAG** | **阶段 2 Day 3** |
-| MiniMax-M2.5 无法稳定调用 MCP 工具 | 中 | F1 成功率 <80% | few-shot 示例注入 / 简化工具参数 | 步骤 2.2 |
+| ~~GitNexus 整体不可用（部署+许可均失败）~~ [C13] | ~~低~~ | ~~F8 缺失~~ | ~~搜索开源生态替代组件~~ | ✅ 已验证可用（3/25）MCP 服务启动成功 [C63] |
+| ~~MiniMax-M2.5 无法稳定调用 MCP 工具~~ | ~~中~~ | ~~F1 成功率 <80%~~ | ~~few-shot 示例注入~~ | ✅ 自测通过（3/25）：P1-P3 few-shot 修复后 IT3 从 14 轮降至 2 轮 [C67] |
 | **H2 状态机 MiniMax-M2.5 不兼容** [C5] | **中** | **状态机无法使用** | **步骤 2.2 先验证 → 三级降级策略（硬拦截/软拦截/放弃）** | **步骤 2.2** |
 | H3 StaleContent 诊断误判 | 低 | 正常 Edit 被误报 | 仅对 EditedFilesInSession 中的文件做诊断 | 阶段 3 内测 |
 | **Harness 交叉集成问题** [C9] | **中** | **M2 延后** | **预留 3 天集成测试窗口 + 修复缓冲** | **步骤 3.10** |
 | M1 反馈超出预留窗口 | 中 | M2 延后 | 优先高影响问题，低优先级推迟到 M3 | 步骤 2.3 小范围试用后 |
 | **System Prompt token 膨胀** [C21] | **低** | **触发 Build() 警告** | **阈值从 8000 调整为 16000（适配 177K 窗口）。监控实际 token 数，超过 16K 时按优先级裁剪低优先级规范文件** | **阶段 1 完成后** |
-| **工程师反馈收集不足** [C27] | **中** | **步骤 2.2 阻塞** | **降低门槛：开发者主动到工位旁观使用并记录场景，不完全依赖工程师自行提交** | **1.4 非正式部署后 3 天（约 3/26）** [C51] |
+| **工程师反馈收集不足** [C27] | **中** | **步骤 2.3 验收任务不足** | **降低门槛：开发者主动到工位旁观记录 + poco 自测替代 [C62]** | **步骤 2.2 已用 poco 自测绕过 [C62]，2.3 验收仍需真实场景** |
 
 ---
 

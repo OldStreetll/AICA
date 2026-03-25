@@ -100,7 +100,8 @@ namespace AICA.Core.Agent
                     context?.WorkingDirectory ?? Environment.CurrentDirectory,
                     context?.SourceRoots)
                 .AddCppSpecialization(language)       // 1.2b: C++ specialization
-                .AddBugFixGuidance(intent, language); // 1.3a: Bug fix guidance
+                .AddBugFixGuidance(intent, language)  // 1.3a: Bug fix guidance
+                .AddGitNexusGuidance(ResolveGitNexusRepoName(context?.WorkingDirectory)); // 2.1: GitNexus few-shot [P1/P2/P3]
 
             // Load and integrate rules from files
             if (context?.WorkingDirectory != null)
@@ -1292,6 +1293,29 @@ namespace AICA.Core.Agent
 
             var pathMatcher = new AICA.Core.Rules.Parsers.PathMatcher();
             return pathMatcher.ExtractPathCandidates(text);
+        }
+
+        /// <summary>
+        /// Resolve GitNexus repo name from working directory by finding the git root
+        /// and using its directory name. Returns null if no .git found.
+        /// </summary>
+        private static string ResolveGitNexusRepoName(string workingDirectory)
+        {
+            if (string.IsNullOrEmpty(workingDirectory))
+                return null;
+
+            var dir = workingDirectory;
+            for (int i = 0; i < 10 && !string.IsNullOrEmpty(dir); i++)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir, ".git")))
+                {
+                    var repoName = System.IO.Path.GetFileName(dir);
+                    System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus repo name resolved: {repoName} (from {workingDirectory})");
+                    return repoName;
+                }
+                dir = System.IO.Path.GetDirectoryName(dir);
+            }
+            return null;
         }
     }
 
