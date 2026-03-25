@@ -12,7 +12,7 @@ namespace AICA.Core.Storage
 {
     /// <summary>
     /// Manages persistent storage and retrieval of conversation histories.
-    /// Stores conversations as JSON files in %LOCALAPPDATA%\AICA\conversations\
+    /// Stores conversations as JSON files in ~/.AICA/conversations/
     /// </summary>
     public class ConversationStorage
     {
@@ -26,7 +26,6 @@ namespace AICA.Core.Storage
 
         public ConversationStorage(string storageDir = null)
         {
-            // 修改存储路径到 C:\Users\{用户名}\.AICA\conversations
             _storageDir = storageDir ??
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".AICA", "conversations");
 

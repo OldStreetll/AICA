@@ -133,7 +133,7 @@ namespace AICA.Core.Agent
     }
 
     /// <summary>
-    /// H4: Writes SessionRecord to JSONL files in %LOCALAPPDATA%/AICA/telemetry/.
+    /// H4: Writes SessionRecord to JSONL files in ~/.AICA/telemetry/.
     /// Thread-safe, creates directory if needed, appends one JSON line per record.
     /// </summary>
     public class AgentTelemetryWriter
@@ -149,8 +149,8 @@ namespace AICA.Core.Agent
         {
             _baseDirectory = baseDirectory
                 ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "AICA",
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".AICA",
                     "telemetry");
         }
 

@@ -295,7 +295,7 @@ public class SessionRecord
 ```
 
 **存储方式：**
-- 写入 `%LOCALAPPDATA%/AICA/telemetry/` 目录下按日期命名的 JSONL 文件
+- 写入 `~/.AICA/telemetry/` 目录下按日期命名的 JSONL 文件
 - 每行一条 JSON 记录，便于后续脚本聚合分析
 - 不写入项目目录（避免污染用户工作区）
 
@@ -325,7 +325,7 @@ await AgentTelemetry.WriteAsync(record);
 **受益范围：** [C8] 全部任务（基础设施）
 
 **验收标准：**
-- 执行一次 Agent 会话后，在 `%LOCALAPPDATA%/AICA/telemetry/` 下生成 JSONL 文件
+- 执行一次 Agent 会话后，在 `~/.AICA/telemetry/` 下生成 JSONL 文件
 - 文件内容包含 Complexity、ToolCallCounts、Outcome 等字段
 - 多次会话追加到同一天的文件中（不覆盖）
 
