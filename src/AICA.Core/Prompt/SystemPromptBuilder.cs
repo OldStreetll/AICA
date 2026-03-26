@@ -153,6 +153,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("  - `result`: A comprehensive summary of what was accomplished (see detail requirements below)");
             _builder.AppendLine("  - `command`: (Optional) A command to verify or test the result (e.g., 'dotnet build', 'make', 'g++ -o program main.cpp')");
             _builder.AppendLine("- **If you forget to call `attempt_completion`, the user will not see the completion card and will think the task is incomplete.**");
+            _builder.AppendLine("- **例外：纯知识/对话式回答。** 如果用户提出的是知识问题、问候或对话式查询，不需要任何文件操作或工具调用，请直接用文本回答。不要将回答包裹在 attempt_completion 中。系统会自动检测纯文本响应并完成任务。");
             _builder.AppendLine();
             _builder.AppendLine("### attempt_completion Result Detail Requirements");
             _builder.AppendLine("- **For file reading tasks**: Include ALL key structures found — classes, interfaces, enums, namespaces, important methods, member variables, #include dependencies. Do NOT summarize with just 3-4 items when the file contains 20+.");
@@ -548,6 +549,12 @@ namespace AICA.Core.Prompt
             _builder.AppendLine();
             _builder.AppendLine("**gitnexus_detect_changes** — 无需额外参数：");
             _builder.AppendLine($"  gitnexus_detect_changes(repo: \"{repoName}\")");
+            _builder.AppendLine();
+            _builder.AppendLine("### GitNexus 优先策略");
+            _builder.AppendLine("对于代码理解类任务（解释代码、分析架构、查找调用关系等），请**优先使用 GitNexus 工具**：");
+            _builder.AppendLine("1. **首选** gitnexus_context / gitnexus_impact / gitnexus_query — 快速获取函数上下文、调用链、依赖关系");
+            _builder.AppendLine("2. **次选** grep_search / read_file — 仅当 GitNexus 不可用或返回结果不足时使用");
+            _builder.AppendLine("3. **避免** 对同一问题反复使用 grep_search 搜索不同关键词 — 这会浪费迭代次数");
             _builder.AppendLine();
 
             return this;

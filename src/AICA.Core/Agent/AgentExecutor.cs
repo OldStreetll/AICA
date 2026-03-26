@@ -163,6 +163,16 @@ namespace AICA.Core.Agent
                 var filteredPrevious = previousMessages
                     .Where(m => m.Role != ChatRole.System)
                     .ToList();
+
+                // H6: Inject task boundary marker for cross-task isolation [C81/D-02]
+                // This tells the LLM and condense logic that a new task begins here
+                if (filteredPrevious.Count > 0)
+                {
+                    conversationHistory.Add(ChatMessage.System(
+                        "[TASK_BOUNDARY] 以下是新的用户请求。" +
+                        "此标记之前的内容来自本会话的历史任务。请专注于新请求，不要继续之前任务的工作。"));
+                }
+
                 conversationHistory.AddRange(filteredPrevious);
             }
             else
@@ -340,6 +350,28 @@ namespace AICA.Core.Agent
                         System.Diagnostics.Debug.WriteLine(
                             $"[AICA] Proactive condense complete, messages reduced to {conversationHistory.Count}, token usage {tokenUsageRatio:P0}");
                     }
+                }
+
+                // H7: Iteration budget awareness — intermediate checkpoints [C80/D-01]
+                int budgetPercent = (_taskState.Iteration * 100) / _maxIterations;
+
+                if (budgetPercent >= 80 && !_taskState.BudgetWarning80Sent)
+                {
+                    _taskState.BudgetWarning80Sent = true;
+                    conversationHistory.Add(ChatMessage.System(
+                        $"[BUDGET_WARNING_80] 你已使用 {_taskState.Iteration}/{_maxIterations} 次迭代（{budgetPercent}%）。" +
+                        "你必须立即停止搜索，整合已有信息并调用 attempt_completion 提交最终答案。"));
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] H7: 80% budget warning sent ({_taskState.Iteration}/{_maxIterations})");
+                }
+                else if (budgetPercent >= 60 && !_taskState.BudgetWarning60Sent)
+                {
+                    _taskState.BudgetWarning60Sent = true;
+                    conversationHistory.Add(ChatMessage.System(
+                        $"[BUDGET_WARNING_60] 你已使用 {_taskState.Iteration}/{_maxIterations} 次迭代（{budgetPercent}%）。" +
+                        "请开始整合已收集的信息，准备给出最终答案。避免不必要的额外搜索。"));
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] H7: 60% budget warning sent ({_taskState.Iteration}/{_maxIterations})");
                 }
 
                 // Only force completion in extreme edge cases
@@ -655,8 +687,9 @@ namespace AICA.Core.Agent
                     }
                 }
 
-                // Even without tool calls, suppress standalone meta-reasoning text
-                if (!suppressText && !string.IsNullOrWhiteSpace(assistantResponse)
+                // Suppress standalone meta-reasoning text only when tool calls are present [C79/D-04]
+                // When no tool calls, the text IS the final answer — do not suppress
+                if (!suppressText && hasToolCalls && !string.IsNullOrWhiteSpace(assistantResponse)
                     && ResponseQualityFilter.IsInternalReasoning(assistantResponse))
                 {
                     System.Diagnostics.Debug.WriteLine(
@@ -739,7 +772,10 @@ namespace AICA.Core.Agent
 
                     // ── Hallucination detection ──
                     // Detect if the model claims to have executed a tool but didn't actually call it
-                    if (!string.IsNullOrWhiteSpace(assistantResponse) && ResponseProcessor.DetectToolExecutionClaim(assistantResponse))
+                    // [D-05] Only check when LLM has previously used tools — if it never called a tool,
+                    // Chinese words like "调用了" / "结果是" in technical answers are not hallucinations
+                    if (_taskState.HasEverUsedTools
+                        && !string.IsNullOrWhiteSpace(assistantResponse) && ResponseProcessor.DetectToolExecutionClaim(assistantResponse))
                     {
                         _taskState.HallucinationCount++;
                         System.Diagnostics.Debug.WriteLine(

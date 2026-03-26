@@ -64,6 +64,10 @@ namespace AICA.Core.Agent
         public int CondenseHintIteration { get; set; }
         public bool HasAutoCondensed { get; set; }
 
+        // H7: Iteration budget awareness checkpoints [C80/D-01]
+        public bool BudgetWarning60Sent { get; set; }
+        public bool BudgetWarning80Sent { get; set; }
+
         /// <summary>
         /// Reset failure counters after a successful step.
         /// </summary>

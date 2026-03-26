@@ -216,5 +216,31 @@ namespace AICA.Core.Tests.Agent
             Assert.True(firstMessages.Count >= 4,
                 "Should include system prompt + previous messages");
         }
+        [Fact]
+        public async Task NoToolCalls_MetaReasoningText_NotSuppressed_D04()
+        {
+            // D-04: When LLM returns text that matches IsInternalReasoning patterns
+            // but has NO tool calls (finish_reason: stop), the text should NOT be suppressed.
+            // It IS the final answer, not meta-reasoning before tool execution.
+            var reasoningLikeAnswer = "用户要求解释虚函数的概念。\n\n" +
+                "虚函数是C++中实现多态的核心机制。通过在基类中声明虚函数，" +
+                "派生类可以重写该函数，从而在运行时根据对象的实际类型调用正确的函数版本。";
+
+            var harness = new AgentEvalHarness(new[]
+            {
+                MockLlmResponse.Text(reasoningLikeAnswer)
+            });
+
+            // Act
+            var steps = await harness.RunAsync("解释一下C++中的虚函数");
+
+            // Assert: response should be yielded as Complete, not suppressed
+            Assert.True(AgentEvalHarness.IsCompleted(steps),
+                "Response should complete even when text matches meta-reasoning patterns");
+
+            var completionText = AgentEvalHarness.GetCompletionText(steps);
+            Assert.True(completionText != null && completionText.Contains("虚函数"),
+                "Completion text should contain the actual answer, not be empty");
+        }
     }
 }

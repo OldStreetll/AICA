@@ -40,12 +40,15 @@ namespace AICA.Core.Agent
         /// </summary>
         private static (string fileName, string mcpArgs, string analyzeArgs) ResolveGitNexusPath()
         {
-            // Search for bundled GitNexus in known locations
+            // [D-06] Use assembly location (VSIX install dir) instead of BaseDirectory (VS IDE dir)
+            var assemblyDir = Path.GetDirectoryName(typeof(GitNexusProcessManager).Assembly.Location) ?? "";
             var candidates = new[]
             {
-                // Relative to AICA project root (development)
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "tools", "gitnexus", BUNDLED_ENTRY),
-                // Relative to VSIX install directory
+                // Relative to VSIX install directory (assembly location) — primary for deployed VSIX
+                Path.Combine(assemblyDir, "tools", "gitnexus", BUNDLED_ENTRY),
+                // Relative to AICA project root (development: assembly in bin/Debug/netstandard2.0/)
+                Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "tools", "gitnexus", BUNDLED_ENTRY),
+                // Legacy: BaseDirectory fallback
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools", "gitnexus", BUNDLED_ENTRY),
                 // Environment variable override
                 Environment.GetEnvironmentVariable("AICA_GITNEXUS_PATH") ?? ""
@@ -56,6 +59,43 @@ namespace AICA.Core.Agent
                 if (!string.IsNullOrEmpty(candidate) && File.Exists(candidate))
                 {
                     var fullPath = Path.GetFullPath(candidate);
+                    var gitnexusDir = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(fullPath), "..", ".."));
+                    var nodeModulesDir = Path.Combine(gitnexusDir, "node_modules");
+
+                    // [D-06] Auto-install dependencies if node_modules missing
+                    if (!Directory.Exists(nodeModulesDir))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: node_modules not found, running npm install in {gitnexusDir}");
+                        try
+                        {
+                            var npmCmd = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "npm";
+                            var npmArgs = Environment.OSVersion.Platform == PlatformID.Win32NT
+                                ? "/c npm install --omit=dev"
+                                : "install --omit=dev";
+                            var npmPsi = new ProcessStartInfo
+                            {
+                                FileName = npmCmd,
+                                Arguments = npmArgs,
+                                WorkingDirectory = gitnexusDir,
+                                UseShellExecute = false,
+                                RedirectStandardOutput = false,
+                                RedirectStandardError = false,
+                                CreateNoWindow = true
+                            };
+                            using (var npmProc = Process.Start(npmPsi))
+                            {
+                                npmProc.WaitForExit(120000);
+                                System.Diagnostics.Debug.WriteLine(
+                                    $"[AICA] GitNexus: npm install exit={npmProc.ExitCode}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine(
+                                $"[AICA] GitNexus: npm install failed: {ex.Message}");
+                        }
+                    }
+
                     System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: using bundled version at {fullPath}");
                     return ("node", $"\"{fullPath}\" mcp", $"\"{fullPath}\" analyze");
                 }

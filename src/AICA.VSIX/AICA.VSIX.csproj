@@ -97,6 +97,24 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
+  <!-- D-06: Include bundled GitNexus (dist + vendor + package.json) in VSIX [C61: 2MB MAX_FILE_SIZE] -->
+  <ItemGroup>
+    <Content Include="..\..\tools\gitnexus\dist\**\*">
+      <Link>tools\gitnexus\dist\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\tools\gitnexus\vendor\**\*">
+      <Link>tools\gitnexus\vendor\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\tools\gitnexus\package.json">
+      <Link>tools\gitnexus\package.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
   <ItemGroup>
     <VSCTCompile Include="VSCommandTable.vsct">
       <ResourceName>Menus.ctmenu</ResourceName>

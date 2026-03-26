@@ -264,6 +264,88 @@ namespace AICA.Core.Agent
         /// </summary>
         public static string BuildAutoCondenseSummary(List<ChatMessage> conversationHistory)
         {
+            // H6: Task boundary awareness [C81/D-02]
+            // Find last [TASK_BOUNDARY] marker; condense pre-boundary content minimally
+            int boundaryIndex = -1;
+            for (int i = conversationHistory.Count - 1; i >= 0; i--)
+            {
+                if (conversationHistory[i].Role == ChatRole.System
+                    && conversationHistory[i].Content != null
+                    && conversationHistory[i].Content.Contains("[TASK_BOUNDARY]"))
+                {
+                    boundaryIndex = i;
+                    break;
+                }
+            }
+
+            if (boundaryIndex > 0)
+            {
+                // Split: minimal summary for pre-boundary, full summary for post-boundary
+                var preBoundary = conversationHistory.GetRange(0, boundaryIndex);
+                var postBoundary = conversationHistory.GetRange(boundaryIndex, conversationHistory.Count - boundaryIndex);
+
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("## Previous Tasks (condensed)");
+                sb.AppendLine(BuildMinimalSummary(preBoundary));
+                sb.AppendLine();
+                sb.AppendLine("## Current Task");
+                sb.AppendLine(BuildFullSummary(postBoundary));
+                return sb.ToString();
+            }
+
+            // No boundary found — use full summary for everything
+            return BuildFullSummary(conversationHistory);
+        }
+
+        /// <summary>
+        /// Build a minimal summary for previous task content (pre-boundary).
+        /// Only retains user requests and file lists, omits tool details. [C81/D-02]
+        /// </summary>
+        private static string BuildMinimalSummary(List<ChatMessage> messages)
+        {
+            var sb = new System.Text.StringBuilder();
+            var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var msg in messages)
+            {
+                if (msg.Role == ChatRole.User && msg.Content != null
+                    && !msg.Content.StartsWith("[System") && !msg.Content.StartsWith("⚠️"))
+                {
+                    var text = msg.Content.Length > 100 ? msg.Content.Substring(0, 100) + "..." : msg.Content;
+                    sb.AppendLine($"- Request: {text}");
+                }
+                else if (msg.Role == ChatRole.Assistant && msg.ToolCalls != null)
+                {
+                    foreach (var tc in msg.ToolCalls)
+                    {
+                        var argsJson = tc.Function?.Arguments;
+                        if (!string.IsNullOrEmpty(argsJson))
+                        {
+                            var args = TryParseJsonArgs(argsJson);
+                            if (args != null)
+                            {
+                                if (args.TryGetValue("path", out var p) && p != null) files.Add(p);
+                                else if (args.TryGetValue("file_path", out var fp) && fp != null) files.Add(fp);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (files.Count > 0)
+                sb.AppendLine($"- Files touched: {string.Join(", ", files.Take(20))}");
+
+            if (sb.Length == 0)
+                sb.AppendLine("- (no significant operations)");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Build full structured summary (original logic, extracted as method). [C81/D-02]
+        /// </summary>
+        private static string BuildFullSummary(List<ChatMessage> conversationHistory)
+        {
             var sb = new System.Text.StringBuilder();
             var filesRead = new List<string>();
             var filesCreated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

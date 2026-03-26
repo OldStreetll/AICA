@@ -1371,14 +1371,11 @@ namespace AICA.ToolWindows
                                     }
 
                                     // P0-007 fix: restore pre-tool streaming content that was saved before
-                                    // responseBuilder was cleared on ToolStart. This happens when
-                                    // attempt_completion is the only tool (no tool logs rendered),
-                                    // e.g., right-click Explain/Refactor commands where the LLM streams
-                                    // detailed analysis before calling attempt_completion.
+                                    // [C79/D-03] Always restore pre-tool streaming content.
+                                    // The LLM's detailed analysis streamed before tool calls should
+                                    // be shown above the Task Completed block, not discarded.
                                     var preToolText = preToolContent.ToString().Trim();
-                                    if (!string.IsNullOrWhiteSpace(preToolText)
-                                        && iterationBlocks.Count == 0
-                                        && toolCallBlocks.Count == 0)
+                                    if (!string.IsNullOrWhiteSpace(preToolText))
                                     {
                                         if (string.IsNullOrWhiteSpace(finalContent))
                                         {
