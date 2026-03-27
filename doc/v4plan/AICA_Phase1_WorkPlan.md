@@ -1,6 +1,6 @@
 # AICA 下一阶段工作计划
 
-> 版本: v2.1 | 日期: 2026-03-27
+> 版本: v2.3 | 日期: 2026-03-27
 > 定位: 合并 Harness 工程改造 + 原路线图基础修复/M1/M2，形成可执行的工作计划
 > 前置文档: [项目总结与路线图](agentref/AICA_ProjectReview_and_Roadmap.md) | [产品设计研讨会](AICA_ProductDesign_Workshop.md)
 > 规范来源: Qt-C++ 编程规范.doc + MISRA C++/C
@@ -170,6 +170,23 @@
 | C96 | 步骤 3.9 扩展 | 步骤 3.9 从"M1 反馈修复"扩展为"M1 反馈修复 + ToolCall Phase A"。Phase A 预估 +1 天（含复测） | Phase A 改动量极小（方向 3 删 5 行 + 方向 1 改 1 处条件），复测用 D-01 原始场景即可验证 |
 | C97 | 步骤 3.10 扩展 | 步骤 3.10 从"集成测试"扩展为"集成测试 + ToolCall Phase B+C"。Phase B 预估 +2 天（方向 2 隔离测试 + 方向 4 实现），Phase C 预估 +3 天（逐条规则测试）。总缓冲从 8 天不变（Phase B+C 使用原缓冲天数） | Phase B 的方向 2 必须隔离测试（C86 教训）；Phase C 逐条测试工作量大但在集成测试窗口内可控 |
 
+### v2.3 执行记录（阶段 3 核心功能完成）
+
+> 执行时间：2026-03-27
+> 背景：阶段 3 步骤 3.1-3.8 全部实现，加上计划外的 GitNexus 工具选择竞争消除优化。步骤 3.9 的 Phase A 在阶段 2 已提前完成，3.10 的 Phase B 同样已完成。剩余 3.10 Phase C + 3.11 正式发布。
+
+| # | 实施项 | 说明 | commit |
+|---|--------|------|--------|
+| C98 | 3.1 H3 Edit 诊断路由 | 替换静态错误为 5 级诊断（StaleContent/IndentationMismatch/WhitespaceMismatch/NoMatch+hint/NoMatch）。缩进和空白差异自动修复，不浪费迭代轮次。解决 D-09 | `d16fa62` |
+| C99 | 3.2 F5 QT 模板生成 | SystemPromptBuilder.AddQtTemplateGuidance() 按 Qt 关键词注入规范（.h/.cpp 文件对、新式 connect 语法、TR() 宏） | `a389880` |
+| C100 | 3.3 H1 验证中间件 | VerificationMiddleware 在 edit 成功后验证内容存在性和行数异常。不检查括号配对（避免 C++ 模板误报） | `a389880` |
+| C101 | 3.4 H2 状态机 | TaskStateMachine 软拦截模式：CrossFileEdit(Understand→Plan→Execute→Verify→Complete) / Rename / Analysis。仅 Complex 任务激活。PlanManager 增加跨文件重构五步法 | `a389880` |
+| C102 | 3.7 断点续做 | TaskProgress + TaskProgressStore 持久化到 .aica/progress/latest.json。新会话自动加载并注入 SystemPrompt | `a389880` |
+| C103 | 3.8 Memory Bank | MemoryBank 跨会话记忆存储在 .aica/memory/*.md，上限 4000 字符。自动加载 | `a389880` |
+| C104 | GitNexus 工具竞争消除 | 移除 grepFallback 静默降级 + GitNexus 可用时隐藏 list_code_definition_names/find_by_name + 硬编码描述升级为完整 WHEN TO USE 版 | `c4c46d7` |
+| C105 | 3.9 Phase A 确认 | ToolCall Phase A+B 在 v2.2 期间已完成（`4881ff7`）。3.9 仅剩 M1 反馈修复（需要用户反馈数据） | — |
+| C106 | 测试回归 | 480 tests, 476 pass, 4 pre-existing failures。所有新代码无回归 | — |
+
 ---
 
 ## 一、工作范围与边界
@@ -211,7 +228,7 @@
 阶段 0 [3/22-3/23]   基础修复 + Harness 基础设施         ← ✅ 提前完成
 阶段 1 [3/23]        C/C++ 专业化 + 日常功能基础         ← ✅ 提前完成（原计划 3/26-3/31）
 阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← ✅ 步骤 2.1-2.3 全部完成（3/27）。D-01~D-06 修复复验通过，D-07~D-09 纳入阶段 3
-阶段 3 [4/8-5/10]    M2: 日常功能完善 + 跨文件可用        ← 33 天（含 8 天缓冲）[C9][C48]
+阶段 3 [4/8-5/10]    M2: 日常功能完善 + 跨文件可用        ← ✅ 核心功能完成（3/27）。3.1-3.8 实现，3.9-3.11 待执行
 ```
 
 > [C9] 阶段 3 缓冲从 5 天增至 8 天，新增 3 天为 Harness 交叉集成测试窗口。
@@ -1582,20 +1599,21 @@ condensed.AddRange(recentMessages);
 
 ### 阶段 3 完成检查清单
 
-| # | 任务 | 文件 | 新增/改动 | 行数 | 受益范围 |
-|---|------|------|----------|------|---------|
-| 3.1 | H3 Edit 诊断路由 | EditFileTool.cs | 改动 | ~100 | **~40 人** |
-| 3.2 | F5 QT 模板 [C2] | SystemPromptBuilder + DynamicToolSelector | 改动 | ~60 | **界面组 ~20 人** |
-| 3.3 | H1 验证中间件 [C4] | VerificationMiddleware.cs (新) | 新建 | ~80 | **~40 人** |
-| 3.4 | H2 状态机 [C5/C6] | TaskStateMachine.cs (新) + AgentExecutor + PlanManager + TaskState | 新建+改动 | ~260 | Complex 任务 |
-| 3.5 | H7 预算感知 | AgentExecutor.cs | 改动 | ~40 | Complex 任务 |
-| 3.6 | H6 保护区 | TokenBudgetManager.cs + TaskProgress.cs (新) | 新建+改动 | ~100 | Medium/Complex |
-| 3.7 | 断点续做 | AgentExecutor + SystemPromptBuilder + Storage | 改动+新建 | ~65 | Complex 任务 |
-| 3.8 | Memory Bank | MemoryBank.cs (新) + SystemPromptBuilder + AgentExecutor | 新建+改动 | ~125 | **~40 人** |
-| 3.9 | M1 反馈修复 + ToolCall Phase A [C96] | DynamicToolSelector + SystemPromptBuilder | 改动 | ~100（反馈）+ ~10（Phase A） | — |
-| 3.10 | 集成测试 + ToolCall Phase B+C [C97] | SystemPromptBuilder + AgentExecutor + ChatToolWindowControl | 测试+改动 | ~50（集成修复）+ ~80（Phase B+C） | — |
-| 3.11 | 正式发布 [C47] | 编译 + 全量部署 | 操作 | 0 行代码 | ~40 人 |
-| | **合计** | | | **~980** | |
+| # | 任务 | 状态 | 文件 | 新增/改动 | 行数 | 受益范围 |
+|---|------|------|------|----------|------|---------|
+| 3.1 | H3 Edit 诊断路由 | ✅ `d16fa62` | EditFileTool.cs | 改动 | ~230 | **~40 人** |
+| 3.2 | F5 QT 模板 [C2] | ✅ `a389880` | SystemPromptBuilder | 改动 | ~50 | **界面组 ~20 人** |
+| 3.3 | H1 验证中间件 [C4] | ✅ `a389880` | VerificationMiddleware.cs (新) | 新建 | ~100 | **~40 人** |
+| 3.4 | H2 状态机 [C5/C6] | ✅ `a389880` | TaskStateMachine.cs (新) + AgentExecutor + PlanManager + TaskState | 新建+改动 | ~280 | Complex 任务 |
+| 3.5 | H7 预算感知 | ✅ Phase 2 | AgentExecutor.cs | 改动 | ~40 | Complex 任务 |
+| 3.6 | H6 保护区 | ✅ Phase 2 | TokenBudgetManager.cs + TaskProgress.cs (新) | 新建+改动 | ~100 | Medium/Complex |
+| 3.7 | 断点续做 | ✅ `a389880` | AgentExecutor + SystemPromptBuilder + Storage | 改动+新建 | ~120 | Complex 任务 |
+| 3.8 | Memory Bank | ✅ `a389880` | MemoryBank.cs (新) + SystemPromptBuilder + AgentExecutor | 新建+改动 | ~120 | **~40 人** |
+| 3.9 | M1 反馈修复 + ToolCall Phase A | ✅ Phase A 已完成 `4881ff7` | DynamicToolSelector + SystemPromptBuilder | 改动 | ~10（Phase A）| — |
+| 3.10 | 集成测试 + ToolCall Phase B+C [C97] | 🔲 Phase B 已完成，Phase C 待执行 | SystemPromptBuilder + AgentExecutor | 测试+改动 | ~80（Phase C） | — |
+| 3.11 | 正式发布 [C47] | 🔲 待 3.10 完成 | 编译 + 全量部署 | 操作 | 0 行代码 | ~40 人 |
+
+**额外完成（计划外）：** GitNexus 工具选择竞争消除 `c4c46d7` — 移除 grepFallback + 隐藏重叠工具 + 升级硬编码描述
 
 ---
 
@@ -1691,6 +1709,6 @@ condensed.AddRange(recentMessages);
 | 3 | ~~RuleLoader 是否支持 frontmatter paths 过滤~~ | 步骤 1.1 规范文件激活范围 | ~~3/26 前~~ | **✅ 已确认** [C14]：RuleLoader 完整支持 `paths` 过滤（`PathMatcher` glob 匹配），C++ 项目由 `ProjectLanguageDetector` 强制激活 |
 | 4 | 公司 C/C++ 测试框架（Google Test / CppUnit） | 步骤 1.2 测试生成 | 4 月 | 待调研 |
 | 5 | ITaskContext 实现类位置 | 步骤 0.6 接口扩展 | 3/22 当天 | **开工时代码搜索确认，不阻塞进度** [C20] |
-| 6 | **H2 状态机兼容性测试结果** [C5] | **步骤 3.4 实现策略选择** | **步骤 2.2 完成时** | **待测试**（步骤 2.2 用 poco 自测简化，H2 测试推迟到阶段 3） |
+| 6 | **H2 状态机兼容性测试结果** [C5] | **步骤 3.4 实现策略选择** | **步骤 2.2 完成时** | **✅ 已实现**（步骤 3.4 采用软拦截模式，工具正常执行 + 阶段建议追加。三模板：CrossFileEdit/Rename/Analysis） |
 | 7 | **右键命令源文件位置确认** [C3] | **步骤 1.2 右键命令适配** | **3/26 前** | **开工时代码搜索确认，不阻塞进度** [C20] |
 | 8 | **公司构建系统（CMake / MSBuild）配置确认** [C16] | **步骤 1.2 编译错误修复 Prompt 适配** | **4 月** | **待确认** |
