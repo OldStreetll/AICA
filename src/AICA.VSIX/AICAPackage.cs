@@ -147,7 +147,25 @@ namespace AICA
                     System.Diagnostics.Debug.WriteLine($"[AICA] Error disposing rules directory listener: {ex.Message}");
                 }
 
-                // Dispose GitNexus process manager
+                // Cancel any running agent before disposing GitNexus (prevents mid-execution disposal)
+                try
+                {
+                    var chatWindow = FindToolWindow(typeof(ToolWindows.ChatToolWindow), 0, false) as ToolWindows.ChatToolWindow;
+                    if (chatWindow != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[AICA] Package disposing: cancelling running agent...");
+                        ThreadHelper.JoinableTaskFactory.Run(async () =>
+                        {
+                            await chatWindow.CancelRunningAgentAsync(3000);
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Error cancelling agent: {ex.Message}");
+                }
+
+                // Dispose GitNexus process manager (safe now — agent is stopped)
                 try
                 {
                     AICA.Core.Agent.GitNexusProcessManager.Instance.Dispose();

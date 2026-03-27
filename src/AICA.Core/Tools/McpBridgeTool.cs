@@ -234,6 +234,7 @@ namespace AICA.Core.Tools
                     RequiresConfirmation = spec.RequiresConfirmation
                 };
 
+                System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: {spec.AicaName} native desc ({nativeDesc.Length} chars): {(nativeDesc.Length > 120 ? nativeDesc.Substring(0, 120) + "..." : nativeDesc)}");
                 tools.Add(new McpBridgeTool(spec.AicaName, spec.McpName, nativeDesc, def, meta, pm, spec.Fallback));
             }
 

@@ -774,6 +774,27 @@ namespace AICA.ToolWindows
             ChatBrowser.NavigateToString(BuildPageHtml(innerHtml));
         }
 
+        /// <summary>
+        /// Cancel the running agent and wait for it to stop.
+        /// Called during VS shutdown to ensure GitNexus is not disposed mid-execution.
+        /// </summary>
+        internal async Task CancelRunningAgentAsync(int timeoutMs = 5000)
+        {
+            if (!_isSending) return;
+
+            _currentCts?.Cancel();
+            System.Diagnostics.Debug.WriteLine("[AICA] CancelRunningAgentAsync: cancellation requested");
+
+            // Wait for _isSending to become false (set in SendMessageAsync finally block)
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (_isSending && sw.ElapsedMilliseconds < timeoutMs)
+            {
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[AICA] CancelRunningAgentAsync: done (isSending={_isSending}, elapsed={sw.ElapsedMilliseconds}ms)");
+        }
+
         private async void SendButton_Click(object sender, RoutedEventArgs e)
         {
             if (_isSending)

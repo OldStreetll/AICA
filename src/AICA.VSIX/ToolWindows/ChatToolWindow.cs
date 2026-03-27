@@ -86,5 +86,16 @@ namespace AICA.ToolWindows
             ThreadHelper.ThrowIfNotOnUIThread();
             _control?.ClearConversation();
         }
+
+        /// <summary>
+        /// Cancel any running agent execution and wait for it to stop.
+        /// </summary>
+        public async Task CancelRunningAgentAsync(int timeoutMs = 5000)
+        {
+            if (_control != null)
+            {
+                await _control.CancelRunningAgentAsync(timeoutMs).ConfigureAwait(false);
+            }
+        }
     }
 }
