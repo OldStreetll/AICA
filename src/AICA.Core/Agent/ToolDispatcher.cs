@@ -15,11 +15,47 @@ namespace AICA.Core.Agent
         private readonly Dictionary<string, IAgentTool> _tools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
         private readonly ToolExecutionPipeline _pipeline;
         private readonly ILogger<ToolDispatcher> _logger;
+        private TaskCompletionSource<bool> _mcpUpgradeTcs;
 
         public ToolDispatcher(ILogger<ToolDispatcher> logger = null)
         {
             _logger = logger;
             _pipeline = new ToolExecutionPipeline();
+        }
+
+        /// <summary>
+        /// Create a gate that callers can await to ensure MCP native definitions are loaded.
+        /// Call SignalMcpUpgradeComplete() when the background upgrade finishes (success or failure).
+        /// </summary>
+        public void BeginMcpUpgrade()
+        {
+            _mcpUpgradeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        /// <summary>
+        /// Signal that the MCP upgrade has completed (success or failure).
+        /// </summary>
+        public void SignalMcpUpgradeComplete()
+        {
+            _mcpUpgradeTcs?.TrySetResult(true);
+        }
+
+        /// <summary>
+        /// Wait for MCP native definitions to be loaded. Returns immediately if no upgrade is pending.
+        /// </summary>
+        /// <param name="timeoutMs">Maximum wait time in milliseconds (default 5000)</param>
+        public async Task WaitForMcpUpgradeAsync(int timeoutMs = 5000)
+        {
+            if (_mcpUpgradeTcs == null) return;
+
+            var completed = await Task.WhenAny(
+                _mcpUpgradeTcs.Task,
+                Task.Delay(timeoutMs)).ConfigureAwait(false);
+
+            if (completed != _mcpUpgradeTcs.Task)
+            {
+                _logger?.LogWarning("MCP upgrade timed out after {Timeout}ms, proceeding with current definitions", timeoutMs);
+            }
         }
 
         /// <summary>

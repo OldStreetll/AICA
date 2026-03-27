@@ -153,7 +153,22 @@
 | C88 | D-01 修复方案修正 | 原方案"双层：GitNexus 优先策略 + H7"中的 GitNexus 优先策略改为：**消除 System Prompt 工具名不对称偏见（方案 A）**。已执行：规则部分去掉所有具体工具名（grep_search/find_by_name/list_dir/read_file 等 15+ 处 → 0 处），改为泛化表述（"搜索工具"/"文件读取工具"/"内置工具"）。AddGitNexusGuidance 的优先策略和 few-shot 示例暂保留。H7 兜底不变 | 方案 A 复测通过：LLM 自主选择 gitnexus_context → gitnexus_impact → grep_search（补充宏定义搜索），符合预期的工具组合模式。AddGitNexusGuidance 优先策略理论上也是一种偏见（OpenCode 无此引导），但实测效果良好，暂保留观察 |
 | C89 | Part 2 回滚范围确认 | 回滚 SystemPromptBuilder 的 AddBasePrompt/AddCoreRules/AddAdvancedRules/AddComplexRules/BuildSections，回滚 AgentExecutor 调用链，回滚 ExplainCodeCommand。然后在恢复后的规则部分执行方案 A（去工具名偏见）。Part 1 代码不动 | Part 1（透传机制）和 Part 2（prompt 精简）解耦。回滚后 AddToolDescriptions/AddGitNexusGuidance 恢复正常工作 |
 | C90 | 执行结果 | **D-01 修复复测通过。** 右键解释代码：LLM 第 1 轮选 `gitnexus_context`（获取函数上下文），第 2 轮选 `gitnexus_impact`（获取上游调用者），第 3 轮选 `grep_search`（搜索宏常量定义）。工具选择合理，GitNexus 优先+grep 补充的模式正确。MCP 透传链路正常（`ListToolsAsync returned 11 tools` → `Built 6 tools` → `upgraded to 6 native MCP definitions`）。无 parse error | 增量验证路径：回滚 Part 2 → 恢复基线 → 方案 A 去工具名偏见 → 复测通过。D-01 从"LLM 完全不选 GitNexus，盲搜 50 轮"改善为"GitNexus 优先 + grep 补充，2-3 轮完成" |
-| C91 | AddGitNexusGuidance 优先策略偏见暂保留 | "首选 gitnexus → 次选 grep_search → 避免反复搜索"的优先策略理论上是偏见（OpenCode 无此引导），但当前实测效果良好，暂不移除。后续如发现副作用（如 GitNexus 不适用场景仍强制使用），再考虑删除 | OpenCode 的零偏见设计是理想状态；AICA 保留适度引导作为过渡方案，待更多场景验证后决定是否移除 |
+| C91 | ~~AddGitNexusGuidance 优先策略偏见暂保留~~ **[C92 覆盖] 全部实行 ToolCall 优化方案，优先策略将在 Phase A 移除** | ~~"首选 gitnexus → 次选 grep_search → 避免反复搜索"的优先策略理论上是偏见（OpenCode 无此引导），但当前实测效果良好，暂不移除~~ | ~~OpenCode 的零偏见设计是理想状态；AICA 保留适度引导作为过渡方案~~ **决定全面迁移到信任型设计，不再保留过渡方案** |
+
+### v2.2 修正（6 项，全面实行 ToolCall 优化方案）
+
+> 执行时间：2026-03-27
+> 背景：决定全面实行 [ToolCall 优化方案](AICA_ToolCall_Optimization_Plan.md)，从控制型设计迁移到信任型设计（OpenCode 风格）。不再保留过渡方案，5 个方向全部纳入执行计划。
+> 参考文档：[AICA 工具调用优化方案](AICA_ToolCall_Optimization_Plan.md)
+
+| # | 修正项 | 决定 | 原因 |
+|---|--------|------|------|
+| C92 | 覆盖 C91：优先策略不再保留 | AddGitNexusGuidance 中的"首选/次选/避免"优先策略将在 Phase A 删除（保留 few-shot 参数示例）| C91 的"暂保留观察"策略改为"立即执行"。理由：OpenCode 验证了零偏见设计在 MiniMax-M2.5 上可行，保留偏见是不必要的过渡 |
+| C93 | ToolCall 优化 Phase A 纳入步骤 3.9 | 方向 3（移除优先策略偏见，~5 行删除）+ 方向 1（去除 DynamicToolSelector 工具过滤，conversation 除外）纳入步骤 3.9（M1 反馈修复窗口）| Phase A 风险低、改动小，属于 D-01 修复的延伸优化 |
+| C94 | ToolCall 优化 Phase B 纳入步骤 3.10 | 方向 2（移除 AddToolDescriptions，消除双重描述）+ 方向 4（消除原生 MCP 描述竞态）纳入步骤 3.10（集成测试窗口）| Phase B 需单独隔离测试。方向 2 需避免重蹈 C86 覆辙（只删 AddToolDescriptions，不同时改其他规则）；方向 4 改善首次请求体验 |
+| C95 | ToolCall 优化 Phase C 纳入阶段 3 尾声 | 方向 5（精简 System Prompt，从 ~800 行降至 ~300 行）在 Phase A+B 完成后、步骤 3.11 正式发布前执行 | Phase C 风险最高（C86 已证明激进精简导致退化），但前置条件（方向 1-4 完成后工具相关内容已大幅减少）将在阶段 3 内满足，不必推迟到 M2 后 |
+| C96 | 步骤 3.9 扩展 | 步骤 3.9 从"M1 反馈修复"扩展为"M1 反馈修复 + ToolCall Phase A"。Phase A 预估 +1 天（含复测） | Phase A 改动量极小（方向 3 删 5 行 + 方向 1 改 1 处条件），复测用 D-01 原始场景即可验证 |
+| C97 | 步骤 3.10 扩展 | 步骤 3.10 从"集成测试"扩展为"集成测试 + ToolCall Phase B+C"。Phase B 预估 +2 天（方向 2 隔离测试 + 方向 4 实现），Phase C 预估 +3 天（逐条规则测试）。总缓冲从 8 天不变（Phase B+C 使用原缓冲天数） | Phase B 的方向 2 必须隔离测试（C86 教训）；Phase C 逐条测试工作量大但在集成测试窗口内可控 |
 
 ---
 
@@ -983,9 +998,9 @@ priority: 20
                                                             ▼
                                                       3.8 Memory Bank
 
-── 收尾 ──────────────────────────────────────────────────────
-3.9 M1 反馈修复
-3.10 集成测试 [C9 新增]
+── 收尾 + 信任型迁移 ──────────────────────────────────────────
+3.9 M1 反馈修复 + ToolCall Phase A [C96]
+3.10 集成测试 + ToolCall Phase B+C [C97]
 3.11 正式发布 [C47 新增]
 ```
 
@@ -1489,23 +1504,37 @@ condensed.AddRange(recentMessages);
 
 ---
 
-### 步骤 3.9：M1 反馈修复
+### 步骤 3.9：M1 反馈修复 + ToolCall Phase A [C96]
 
-**要做什么：** 修复界面组工程师在 M1 试用后反馈的问题。
+**要做什么：** 修复界面组工程师在 M1 试用后反馈的问题；同时执行 ToolCall 优化 Phase A（信任型设计迁移第一步）。
 
-**执行原则：**
+**M1 反馈修复执行原则：**
 - 优先修复影响 ≥5 人的问题
 - 不在此窗口做架构性改动
 - 修复后用遥测验证效果
 - 预留 3-5 天修复窗口
 
+**ToolCall Phase A（+1 天）：**
+
+方向 3 — 移除 AddGitNexusGuidance 优先策略偏见：
+- 删除"首选 gitnexus → 次选 grep_search → 避免反复搜索"排序（~5 行）
+- **保留** few-shot 使用示例（repo 参数、简单符号名、Cypher schema 语法）— 这是参数正确性指导，不是偏见
+- 让 function calling API 中的原生工具描述（含 WHEN TO USE）驱动选择
+
+方向 1 — 去除 DynamicToolSelector 工具过滤：
+- `SelectTools` 不再按意图过滤工具子集，始终传入全部工具
+- 仅保留 `conversation` 意图的极简工具集（纯对话不需要 15 个工具）
+- 改动位置：DynamicToolSelector 一处条件修改
+
+**Phase A 复测：** 用 D-01 原始场景（右键解释代码）验证工具选择仍然合理（GitNexus 优先 + grep 补充）
+
 ---
 
-### 步骤 3.10：集成测试窗口 [C9 新增]
+### 步骤 3.10：集成测试 + ToolCall Phase B+C [C9 新增] [C97]
 
-**要做什么：** 验证 H1/H2/H3/H6/H7 五项 Harness 改造在 AgentExecutor 主循环中的交叉作用。
+**要做什么：** 验证 Harness 改造的交叉作用；同时执行 ToolCall 优化 Phase B（隔离测试）和 Phase C（System Prompt 精简）。
 
-**为什么需要单独的集成测试窗口：**
+**Part 1：Harness 集成测试（3 天）**
 
 五项改造全部作用于 AgentExecutor 的主 while 循环，存在交叉场景：
 
@@ -1518,13 +1547,36 @@ condensed.AddRange(recentMessages);
 | 预算 80% 时正在 Edit 自动修复 | H7 + H3 | 强制进入 Complete 时，进行中的 Edit 自动修复是否安全完成？ |
 | **预检拦截与 Edit 诊断的边界** [C22] | **H5 + H3** | **H5 拦截 edit 无效参数（文件不存在、old_string 为空）后，H3 诊断逻辑是否仍覆盖所有 edit 失败场景？确认 H5 不会吞掉本应由 H3 诊断的 case** |
 
+**Part 2：ToolCall Phase B（+2 天）**
+
+方向 2 — 移除 AddToolDescriptions（消除双重描述）：
+- 删除 `AddToolDescriptions()` 调用，工具描述完全由 function calling API 承载
+- System Prompt 保留通用工具使用原则（泛化规则）
+- **关键：单独隔离测试，不同时改其他规则（C86 教训）**
+- 节省 ~2000-3000 tokens
+- 复测标准：D-01 场景工具选择正确 + 无任务重复 + 无幻觉增加
+
+方向 4 — 消除原生 MCP 描述竞态：
+- 方案 B（延迟首次请求）：AgentExecutor.ExecuteAsync 开头检查 MCP 升级是否完成，未完成则等待（5s 超时，超时后降级到硬编码）
+- 保证原生描述（含 WHEN TO USE）在首次请求时可用
+
+**Part 3：ToolCall Phase C（+3 天）**
+
+方向 5 — 精简 System Prompt：
+- **前提：方向 1-4 完成后**，工具相关内容已大幅减少
+- 分步精简：去掉已被工具描述覆盖的规则 → 合并重复规则 → 评估每条规则的 ROI
+- 保留 MiniMax-M2.5 必需规则（attempt_completion、anti-hallucination）
+- 目标：从 ~800 行降至 ~300 行
+- 逐条 A/B 测试，每删一批规则后复测
+
 **执行方式：**
 1. 设计 5 个 Complex 跨文件任务作为集成测试用例
 2. 每个用例执行 2 遍，观察 Harness 各组件交互
 3. 检查遥测数据中的异常（迭代数异常、Edit 成功率异常、Condense 异常）
 4. 修复发现的集成问题
+5. Phase B/C 每步改动后独立复测，确认无退化后再进入下一步
 
-**时间：** 3 天
+**时间：** 3 天（Harness 集成）+ 2 天（Phase B）+ 3 天（Phase C）= 8 天（使用原 8 天缓冲）
 
 ---
 
@@ -1540,8 +1592,8 @@ condensed.AddRange(recentMessages);
 | 3.6 | H6 保护区 | TokenBudgetManager.cs + TaskProgress.cs (新) | 新建+改动 | ~100 | Medium/Complex |
 | 3.7 | 断点续做 | AgentExecutor + SystemPromptBuilder + Storage | 改动+新建 | ~65 | Complex 任务 |
 | 3.8 | Memory Bank | MemoryBank.cs (新) + SystemPromptBuilder + AgentExecutor | 新建+改动 | ~125 | **~40 人** |
-| 3.9 | M1 反馈修复 | 取决于反馈 | — | ~100（预估） | — |
-| 3.10 | 集成测试 [C9] | 无新代码 | 测试+修复 | ~50（修复预估） | — |
+| 3.9 | M1 反馈修复 + ToolCall Phase A [C96] | DynamicToolSelector + SystemPromptBuilder | 改动 | ~100（反馈）+ ~10（Phase A） | — |
+| 3.10 | 集成测试 + ToolCall Phase B+C [C97] | SystemPromptBuilder + AgentExecutor + ChatToolWindowControl | 测试+改动 | ~50（集成修复）+ ~80（Phase B+C） | — |
 | 3.11 | 正式发布 [C47] | 编译 + 全量部署 | 操作 | 0 行代码 | ~40 人 |
 | | **合计** | | | **~980** | |
 

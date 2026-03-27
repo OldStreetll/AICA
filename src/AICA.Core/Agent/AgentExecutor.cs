@@ -83,8 +83,10 @@ namespace AICA.Core.Agent
             List<ChatMessage> previousMessages = null,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            // Wait for MCP native definitions before building tool list (eliminates race condition)
+            await _toolDispatcher.WaitForMcpUpgradeAsync(5000).ConfigureAwait(false);
+
             // Build system prompt with tool definitions
-            // R3: Dynamic tool selection — reduce token usage for simple requests
             var allToolDefinitions = _toolDispatcher.GetToolDefinitions().ToList();
             var complexity = TaskComplexityAnalyzer.AnalyzeComplexity(userRequest);
             var toolDefinitions = DynamicToolSelector.SelectTools(userRequest, complexity, allToolDefinitions);

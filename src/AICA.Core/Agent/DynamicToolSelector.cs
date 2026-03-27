@@ -74,8 +74,10 @@ namespace AICA.Core.Agent
         };
 
         /// <summary>
-        /// Select tools based on user request intent and complexity.
-        /// Complex tasks always get full tool set (safety fallback).
+        /// Select tools based on user request intent.
+        /// Trust-based design: all tools are always visible to the LLM so it can
+        /// choose the best tool based on its own reasoning and the tool descriptions.
+        /// Only pure conversation (greetings) uses a minimal CoreTools set.
         /// </summary>
         public static IReadOnlyList<ToolDefinition> SelectTools(
             string userRequest,
@@ -85,18 +87,13 @@ namespace AICA.Core.Agent
             if (allTools == null || allTools.Count == 0)
                 return allTools;
 
-            // Complex tasks: always return all tools
-            if (complexity == TaskComplexity.Complex)
-                return allTools;
-
+            // Only filter for pure conversation intent (greetings don't need 15 tools)
             var intent = ClassifyIntent(userRequest);
-            var selectedNames = GetToolNamesForIntent(intent);
+            if (intent == "conversation")
+                return allTools.Where(t => CoreTools.Contains(t.Name)).ToList();
 
-            // If no filtering needed, return all
-            if (selectedNames == null)
-                return allTools;
-
-            return allTools.Where(t => selectedNames.Contains(t.Name)).ToList();
+            // All other intents: return full tool set — let LLM decide
+            return allTools;
         }
 
         /// <summary>

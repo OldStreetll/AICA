@@ -47,35 +47,20 @@ namespace AICA.Core.Prompt
         }
 
         /// <summary>
-        /// Generate tool usage documentation from registered tool definitions
+        /// Add generic tool usage principles to the system prompt.
+        /// Tool definitions are conveyed exclusively via the function calling API —
+        /// no per-tool descriptions are duplicated here (trust-based design).
         /// </summary>
         public SystemPromptBuilder AddToolDescriptions()
         {
-            if (_tools.Count == 0) return this;
-
-            _builder.AppendLine("## Available Tools");
+            _builder.AppendLine("## Tool Usage");
             _builder.AppendLine();
-            _builder.AppendLine("You have access to the following tools via the OpenAI function calling API.");
+            _builder.AppendLine("You have access to tools via the OpenAI function calling API.");
             _builder.AppendLine("When you need to perform an action, use the tool_calls mechanism — do NOT write out tool calls as text or XML.");
             _builder.AppendLine("IMPORTANT: Call tools IMMEDIATELY when needed. Do not describe what you would do — just call the tool directly.");
+            _builder.AppendLine("Choose the best tool for each task based on the tool descriptions provided in the function calling schema.");
+            _builder.AppendLine("Read files before editing them. Verify results after modifications.");
             _builder.AppendLine();
-
-            foreach (var tool in _tools)
-            {
-                _builder.AppendLine($"### {tool.Name}");
-                _builder.AppendLine(tool.Description);
-                if (tool.Parameters?.Properties != null && tool.Parameters.Properties.Count > 0)
-                {
-                    _builder.AppendLine("Parameters:");
-                    foreach (var param in tool.Parameters.Properties)
-                    {
-                        var required = tool.Parameters.Required != null &&
-                                       tool.Parameters.Required.Contains(param.Key) ? " (required)" : " (optional)";
-                        _builder.AppendLine($"  - `{param.Key}` ({param.Value.Type}){required}: {param.Value.Description}");
-                    }
-                }
-                _builder.AppendLine();
-            }
 
             return this;
         }
@@ -530,12 +515,6 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("**gitnexus_detect_changes** — 无需额外参数：");
             _builder.AppendLine($"  gitnexus_detect_changes(repo: \"{repoName}\")");
             _builder.AppendLine();
-            _builder.AppendLine("### GitNexus 优先策略");
-            _builder.AppendLine("对于代码理解类任务（解释代码、分析架构、查找调用关系等），请**优先使用 GitNexus 工具**：");
-            _builder.AppendLine("1. **首选** gitnexus_context / gitnexus_impact / gitnexus_query — 快速获取函数上下文、调用链、依赖关系");
-            _builder.AppendLine("2. **次选** grep_search / read_file — 仅当 GitNexus 不可用或返回结果不足时使用");
-            _builder.AppendLine("3. **避免** 对同一问题反复使用 grep_search 搜索不同关键词 — 这会浪费迭代次数");
-            _builder.AppendLine();
 
             return this;
         }
@@ -663,33 +642,17 @@ namespace AICA.Core.Prompt
             baseSb.AppendLine("- If the latest request is completely different from previous requests, switch tasks immediately.");
             sections.Add(new PromptSection("base_role", baseSb.ToString(), ContextPriority.Critical, 0));
 
-            // Tool descriptions — always required for function calling
-            if (_tools.Count > 0)
+            // Tool usage principles — tool definitions are in the function calling API, not duplicated here
             {
                 var toolSb = new StringBuilder();
-                toolSb.AppendLine("## Available Tools");
+                toolSb.AppendLine("## Tool Usage");
                 toolSb.AppendLine();
-                toolSb.AppendLine("You have access to the following tools via the OpenAI function calling API.");
+                toolSb.AppendLine("You have access to tools via the OpenAI function calling API.");
                 toolSb.AppendLine("When you need to perform an action, use the tool_calls mechanism — do NOT write out tool calls as text or XML.");
                 toolSb.AppendLine("IMPORTANT: Call tools IMMEDIATELY when needed. Do not describe what you would do — just call the tool directly.");
-                toolSb.AppendLine();
-                foreach (var tool in _tools)
-                {
-                    toolSb.AppendLine($"### {tool.Name}");
-                    toolSb.AppendLine(tool.Description);
-                    if (tool.Parameters?.Properties != null && tool.Parameters.Properties.Count > 0)
-                    {
-                        toolSb.AppendLine("Parameters:");
-                        foreach (var param in tool.Parameters.Properties)
-                        {
-                            var required = tool.Parameters.Required != null &&
-                                           tool.Parameters.Required.Contains(param.Key) ? " (required)" : " (optional)";
-                            toolSb.AppendLine($"  - `{param.Key}` ({param.Value.Type}){required}: {param.Value.Description}");
-                        }
-                    }
-                    toolSb.AppendLine();
-                }
-                sections.Add(new PromptSection("tool_descriptions", toolSb.ToString(), ContextPriority.Critical, 1));
+                toolSb.AppendLine("Choose the best tool for each task based on the tool descriptions provided in the function calling schema.");
+                toolSb.AppendLine("Read files before editing them. Verify results after modifications.");
+                sections.Add(new PromptSection("tool_usage", toolSb.ToString(), ContextPriority.Critical, 1));
             }
 
             // Workspace context — high priority, needed for path resolution

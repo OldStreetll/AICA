@@ -337,6 +337,7 @@ namespace AICA.ToolWindows
 
                 // Background upgrade: replace with native MCP definitions when available
                 var dispatcher = _toolDispatcher;
+                dispatcher.BeginMcpUpgrade();
                 _ = Task.Run(async () =>
                 {
                     try
@@ -355,6 +356,10 @@ namespace AICA.ToolWindows
                     catch (Exception ex2)
                     {
                         System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: native upgrade failed (keeping hardcoded): {ex2.Message}");
+                    }
+                    finally
+                    {
+                        dispatcher.SignalMcpUpgradeComplete();
                     }
                 });
             }

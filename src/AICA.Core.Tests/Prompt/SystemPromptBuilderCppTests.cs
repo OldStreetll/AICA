@@ -80,9 +80,10 @@ namespace AICA.Core.Tests.Prompt
             builder.AddBugFixGuidance("bug_fix", ProjectLanguage.Unknown);
             var prompt = builder.Build();
 
-            Assert.Contains("grep_search", prompt);
-            Assert.Contains("read_file", prompt);
-            Assert.Contains("修复建议", prompt);
+            // Trust-based design: guidance uses generic tool descriptions, not specific tool names
+            Assert.Contains("搜索", prompt);     // step 1: search for error keywords
+            Assert.Contains("读取", prompt);     // step 2: read matching code
+            Assert.Contains("修复建议", prompt); // final step: fix suggestion
         }
 
         [Fact]
