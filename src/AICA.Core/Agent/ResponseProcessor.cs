@@ -21,6 +21,10 @@ namespace AICA.Core.Agent
 
             var lowerText = text.ToLowerInvariant();
 
+            // These patterns detect LLM fabricating tool execution without actually calling tools.
+            // Safe to use broad patterns here because the caller (AgentExecutor) only invokes this
+            // when TotalToolCallCount == 0, meaning the LLM has never successfully called any tool.
+            // In that context, phrases like "调用了"/"结果是" ARE hallucination indicators.
             var executionClaimPatterns = new[]
             {
                 "i have executed", "i've executed", "i executed",

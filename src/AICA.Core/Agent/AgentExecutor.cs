@@ -821,10 +821,13 @@ namespace AICA.Core.Agent
                     }
 
                     // ── Hallucination detection ──
-                    // Detect if the model claims to have executed a tool but didn't actually call it
-                    // [D-05] Only check when LLM has previously used tools — if it never called a tool,
-                    // Chinese words like "调用了" / "结果是" in technical answers are not hallucinations
-                    if (_taskState.HasEverUsedTools
+                    // Detect if the model claims to have executed a tool but didn't actually call it.
+                    // Only check when the LLM has NEVER successfully called a tool in this session.
+                    // Once tools have been used successfully, text-only responses are legitimate
+                    // final answers (summarizing real tool results), not hallucinations.
+                    // False positive root cause: LLM's summary text ("调用了 gitnexus_context",
+                    // "结果是...") was indistinguishable from fabricated tool execution claims.
+                    if (_taskState.TotalToolCallCount == 0
                         && !string.IsNullOrWhiteSpace(assistantResponse) && ResponseProcessor.DetectToolExecutionClaim(assistantResponse))
                     {
                         _taskState.HallucinationCount++;
