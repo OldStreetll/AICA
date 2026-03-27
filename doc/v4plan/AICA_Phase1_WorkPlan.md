@@ -176,7 +176,7 @@
 ```
 阶段 0 [3/22-3/23]   基础修复 + Harness 基础设施         ← ✅ 提前完成
 阶段 1 [3/23]        C/C++ 专业化 + 日常功能基础         ← ✅ 提前完成（原计划 3/26-3/31）
-阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← 🔄 步骤 2.1 ✅ + 2.2 自测 ✅ 完成（3/25），非正式部署 4 问题已复现 [C75]，D-04/D-03 立即修复中，D-01/D-02 提前实施 H7+H6 [C79-C81]
+阶段 2 [3/23-4/7]    M1: 代码理解可靠                    ← 🔄 步骤 2.1 ✅ + 2.2 自测 ✅ 完成（3/25），非正式部署 6 问题全部修复并复验通过（3/27）[C75-C81]，步骤 2.3 待执行
 阶段 3 [4/8-5/10]    M2: 日常功能完善 + 跨文件可用        ← 33 天（含 8 天缓冲）[C9][C48]
 ```
 
@@ -681,7 +681,7 @@ priority: 20
 > 目标：F1 代码理解做到 80%+ 成功率，F2 规范合规 70%+，F3 Bug 定位基本可用。[C51]
 > 时间：3/23-4/7（15 天，含 3 天缓冲）[C48]
 > 前置：阶段 1 完成 + ✅ Node.js 部署可行性已确认（3/23）+ ✅ 许可证合规已确认（3/23）[C49]
-> 进度：🔄 步骤 2.1 ✅ + 步骤 2.2 自测 ✅ 完成（2026-03-25）。非正式部署 4 问题已复现（1 CRITICAL + 3 HIGH）[C75]。修复策略已确认 [C79]：D-04/D-03 立即修复，D-01/D-02 提前实施 H7+H6+GitNexus 优先 [C80/C81]
+> 进度：🔄 步骤 2.1 ✅ + 步骤 2.2 自测 ✅ 完成（2026-03-25）。非正式部署 6 问题（D-01~D-06）全部修复并复验通过（2026-03-27）[C75-C81]。Commit `83e5b46`，10 文件 +293/-25 行。步骤 2.3 待执行
 
 ### 步骤 2.1：GitNexus MCP 集成
 
@@ -792,8 +792,8 @@ priority: 20
 | D-02 | **跨任务上下文污染**：同一对话框先重构再解释，第二个任务继承第一个任务的 condense 摘要，LLM 继续搜索第一个任务的文件/符号（如 SUMMARY_STATION），dedup 频繁触发 `Skipping duplicate tool call`，解释任务不收敛 | 平台组反馈 + 最新版复现确认 | F1 代码理解 | **HIGH** | ✅ 已修复（H6 TASK_BOUNDARY + Condense 保护区） | **复验通过：同一对话先重构再解释，第二个任务未继承第一个任务搜索行为。** 注：右键命令可能每次创建新对话，TASK_BOUNDARY 未触发但效果达到 | ✅ 复验通过 |
 | D-03 | **流式输出被 Task Completed 替代**：LLM 先流式输出 929 字详细解释（用户可见），再调用 `attempt_completion`（425 字摘要），UI 用 Task Completed 块覆盖了原始流式内容，详细解释丢失 | 界面组反馈 + 最新版复现确认 | F1 代码理解 | **HIGH** | ❌ 最新版仍存在 | **立即修复：A) UI 层 preToolContent 显示在 Task Completed 上方共存 + B) System Prompt 引导对话式/简单任务不调用 attempt_completion** | 🔧 待实施 |
 | D-04 | **回答被推理过滤器完全吞掉（零输出）**：同一会话第二次对话，LLM 返回 924 字回答，全部被 BF-02 推理过滤器判定为 meta-reasoning 并抑制（`Suppressed text as thinking`），用户看到空白 | 最新版复现确认 | F1 代码理解 | **CRITICAL** | ✅ 已修复（hasToolCalls 前置检查） | **已修复：对话式响应绕过推理过滤器** | ✅ 复验通过（文字正常输出） |
-| D-05 | **幻觉检测器误判导致回答循环 3 次**：`DetectToolExecutionClaim` 将 LLM 回答中的"调用"（如"虚函数**调用**"）误判为"声称执行工具但未实际调用"，注入纠正消息 → LLM 重复回答 → 循环 3 次后中止。此问题之前被 D-04 bug 掩盖 | D-04 修复后复验暴露 | F1 代码理解 | **HIGH** | ✅ 已修复（`HasEverUsedTools` 前置检查） | **已修复：未使用过工具时跳过幻觉检测** | 🔧 待复验 |
-| D-06 | **GitNexus 大文件未索引**：`gitnexus_context` 查询 `scan_g72_para`/`scan_g73_para` 返回 `symbol not found`。根因：用户机器 VSIX 中未包含内嵌 GitNexus → 降级到 npx 原版（MAX_FILE_SIZE=512KB）→ decoder.c（1.4MB）被跳过未索引。Tree-sitter C 解析本身不过滤 static 函数 | D-01 复验 + 排查确认 | F1/F8 代码理解 | **HIGH** | ✅ 已修复（三项改动） | **已修复：1) VSIX csproj 包含 tools/gitnexus/（dist+vendor+package.json）2) ResolveGitNexusPath 改用 assembly location 替代 BaseDirectory 3) 首次启动自动 npm install --omit=dev。** npm install exit=0 + bundled version 路径解析成功已确认，analyze 待确认 | 🔧 analyze 待确认 |
+| D-05 | **幻觉检测器误判导致回答循环 3 次**：`DetectToolExecutionClaim` 将 LLM 回答中的"调用"（如"虚函数**调用**"）误判为"声称执行工具但未实际调用"，注入纠正消息 → LLM 重复回答 → 循环 3 次后中止。此问题之前被 D-04 bug 掩盖 | D-04 修复后复验暴露 | F1 代码理解 | **HIGH** | ✅ 纯对话场景已修复 / ⚠️ 工具后回答仍有残留误判 | **已修复：未使用过工具时跳过幻觉检测。残留：使用工具后的文本回答中"调用了"等中文模式仍可触发 1 次误判，但 LLM 可恢复（3 轮完成），不阻塞。后续优化 DetectToolExecutionClaim 中文模式范围** | ✅ 复验通过（不阻塞） |
+| D-06 | **GitNexus 大文件未索引**：`gitnexus_context` 查询 `scan_g72_para`/`scan_g73_para` 返回 `symbol not found`。根因：用户机器 VSIX 中未包含内嵌 GitNexus → 降级到 npx 原版（MAX_FILE_SIZE=512KB）→ decoder.c（1.4MB）被跳过未索引。Tree-sitter C 解析本身不过滤 static 函数 | D-01 复验 + 排查确认 | F1/F8 代码理解 | **HIGH** | ✅ 已修复（三项改动） | **已修复：1) VSIX csproj 包含 tools/gitnexus/（dist+vendor+package.json）2) ResolveGitNexusPath 改用 assembly location 替代 BaseDirectory 3) 首次启动自动 npm install --omit=dev。** 复验：`gitnexus_context(scan_g72_para)` 返回 `found`，analyze exit=0，bundled 2MB 限制生效 | ✅ 复验通过 |
 
 > **处理原则 [C77]：**
 > - CRITICAL/HIGH：立即修复，进入主线代码
