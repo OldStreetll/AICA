@@ -89,7 +89,8 @@ namespace AICA.Core.Agent
             // Build system prompt with tool definitions
             var allToolDefinitions = _toolDispatcher.GetToolDefinitions().ToList();
             var complexity = TaskComplexityAnalyzer.AnalyzeComplexity(userRequest);
-            var toolDefinitions = DynamicToolSelector.SelectTools(userRequest, complexity, allToolDefinitions);
+            var gitNexusAvailable = allToolDefinitions.Any(t => t.Name.StartsWith("gitnexus_", StringComparison.OrdinalIgnoreCase));
+            var toolDefinitions = DynamicToolSelector.SelectTools(userRequest, complexity, allToolDefinitions, gitNexusAvailable);
             // 1.2c: Detect project language and classify intent early (needed for prompt building)
             var language = ProjectLanguageDetector.DetectLanguage(context?.WorkingDirectory);
             var intent = DynamicToolSelector.ClassifyIntent(userRequest);

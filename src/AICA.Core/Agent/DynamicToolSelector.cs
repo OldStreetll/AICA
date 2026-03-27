@@ -5,38 +5,26 @@ using System.Linq;
 namespace AICA.Core.Agent
 {
     /// <summary>
-    /// Selects a subset of tools to inject into the system prompt based on
-    /// user intent classification and task complexity.
-    /// Reduces token usage for simple requests by ~3000 tokens.
+    /// Selects tools based on user intent and GitNexus availability.
+    /// Trust-based design: LLM sees tool descriptions and decides which to use.
+    /// Only conversation intent (greetings) uses a minimal tool set.
+    /// When GitNexus is available, overlapping built-in tools are hidden.
     /// </summary>
     public static class DynamicToolSelector
     {
-        // Core tools always included
+        // Core tools always included (conversation-only minimal set)
         private static readonly HashSet<string> CoreTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "attempt_completion",
             "ask_followup_question"
         };
 
-        // Read-only tools for analysis/exploration
-        private static readonly HashSet<string> ReadTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        // Tools that overlap with GitNexus capabilities — hidden when GitNexus is available
+        // to reduce tool competition and improve GitNexus selection rate
+        private static readonly HashSet<string> GitNexusOverlapTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "read_file", "list_dir", "list_code_definition_names",
-            "grep_search", "find_by_name", "list_projects", "log_analysis",
-            "gitnexus_context", "gitnexus_query", "gitnexus_impact",
-            "gitnexus_detect_changes", "gitnexus_cypher"
-        };
-
-        // Write tools for modification tasks
-        private static readonly HashSet<string> WriteTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "edit", "run_command", "gitnexus_rename"
-        };
-
-        // Context management tools
-        private static readonly HashSet<string> ContextTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "condense", "update_plan"
+            "list_code_definition_names",   // gitnexus_context provides richer structural info
+            "find_by_name"                  // gitnexus_query covers file/symbol lookup
         };
 
         // Intent classification keywords
@@ -74,15 +62,17 @@ namespace AICA.Core.Agent
         };
 
         /// <summary>
-        /// Select tools based on user request intent.
-        /// Trust-based design: all tools are always visible to the LLM so it can
-        /// choose the best tool based on its own reasoning and the tool descriptions.
-        /// Only pure conversation (greetings) uses a minimal CoreTools set.
+        /// Select tools based on user request intent and GitNexus availability.
+        /// Trust-based design: tools are visible to the LLM so it can choose based
+        /// on its own reasoning and the tool descriptions.
+        /// When GitNexus is available, overlapping built-in tools are hidden to
+        /// reduce competition and improve GitNexus selection rate.
         /// </summary>
         public static IReadOnlyList<ToolDefinition> SelectTools(
             string userRequest,
             TaskComplexity complexity,
-            IReadOnlyList<ToolDefinition> allTools)
+            IReadOnlyList<ToolDefinition> allTools,
+            bool gitNexusAvailable = false)
         {
             if (allTools == null || allTools.Count == 0)
                 return allTools;
@@ -92,7 +82,11 @@ namespace AICA.Core.Agent
             if (intent == "conversation")
                 return allTools.Where(t => CoreTools.Contains(t.Name)).ToList();
 
-            // All other intents: return full tool set — let LLM decide
+            // When GitNexus is available, hide overlapping built-in tools
+            if (gitNexusAvailable)
+                return allTools.Where(t => !GitNexusOverlapTools.Contains(t.Name)).ToList();
+
+            // GitNexus unavailable: return full tool set (keep built-in fallbacks)
             return allTools;
         }
 
@@ -128,43 +122,6 @@ namespace AICA.Core.Agent
 
             // Default: read (covers most simple questions)
             return "read";
-        }
-
-        /// <summary>
-        /// Get tool names for a given intent. Returns null for "full" (all tools).
-        /// </summary>
-        private static HashSet<string> GetToolNamesForIntent(string intent)
-        {
-            switch (intent)
-            {
-                case "conversation":
-                    return CoreTools;
-
-                case "read":
-                    var readSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
-                    foreach (var t in ReadTools) readSet.Add(t);
-                    return readSet;
-
-                case "command":
-                    var commandSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
-                    foreach (var t in ReadTools) commandSet.Add(t);
-                    commandSet.Add("run_command");
-                    return commandSet;
-
-                case "analyze":
-                case "bug_fix":
-                    var analyzeSet = new HashSet<string>(CoreTools, StringComparer.OrdinalIgnoreCase);
-                    foreach (var t in ReadTools) analyzeSet.Add(t);
-                    foreach (var t in ContextTools) analyzeSet.Add(t);
-                    return analyzeSet;
-
-                case "modify":
-                    // Modify needs everything
-                    return null;
-
-                default:
-                    return null;
-            }
         }
     }
 }

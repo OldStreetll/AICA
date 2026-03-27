@@ -321,12 +321,8 @@ namespace AICA.ToolWindows
             // Phase 2: Upgrade to native MCP definitions in background (better descriptions + parameters)
             try
             {
-                var grepTool = new GrepSearchTool();
-                Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback =
-                    (call, ctx, ui, ct) => grepTool.ExecuteAsync(call, ctx, ui, ct);
-
                 var gitNexusTools = McpBridgeTool.CreateAllTools(
-                    GitNexusProcessManager.Instance, grepFallback);
+                    GitNexusProcessManager.Instance);
 
                 foreach (var tool in gitNexusTools)
                 {
@@ -343,7 +339,7 @@ namespace AICA.ToolWindows
                     try
                     {
                         var nativeTools = await McpBridgeTool.CreateAllToolsAsync(
-                            GitNexusProcessManager.Instance, grepFallback).ConfigureAwait(false);
+                            GitNexusProcessManager.Instance).ConfigureAwait(false);
                         if (nativeTools.Count > 0)
                         {
                             foreach (var tool in nativeTools)

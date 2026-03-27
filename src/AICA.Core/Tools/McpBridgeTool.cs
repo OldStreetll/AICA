@@ -17,7 +17,6 @@ namespace AICA.Core.Tools
     {
         private readonly IGitNexusProcessManager _processManager;
         private readonly string _mcpToolName;
-        private readonly Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> _fallbackHandler;
         private readonly ToolDefinition _definition;
         private readonly ToolMetadata _metadata;
 
@@ -30,8 +29,7 @@ namespace AICA.Core.Tools
             string description,
             ToolDefinition definition,
             ToolMetadata metadata,
-            IGitNexusProcessManager processManager,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> fallbackHandler)
+            IGitNexusProcessManager processManager)
         {
             Name = aicaName;
             _mcpToolName = mcpToolName;
@@ -39,7 +37,6 @@ namespace AICA.Core.Tools
             _definition = definition;
             _metadata = metadata;
             _processManager = processManager;
-            _fallbackHandler = fallbackHandler;
         }
 
         public ToolDefinition GetDefinition() => _definition;
@@ -66,13 +63,9 @@ namespace AICA.Core.Tools
 
             if (!ready || client == null)
             {
-                // Fallback if available, otherwise error
-                if (_fallbackHandler != null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus unavailable, falling back for {Name}");
-                    return await _fallbackHandler(call, context, uiContext, ct).ConfigureAwait(false);
-                }
-                return ToolResult.Fail($"GitNexus MCP server is not available. Tool '{Name}' cannot execute without GitNexus.");
+                return ToolResult.Fail(
+                    $"GitNexus MCP server is not available. Tool '{Name}' cannot execute. " +
+                    "Use grep_search or read_file as alternatives for code exploration.");
             }
 
             // Step 2: Forward arguments to MCP tool
@@ -113,24 +106,20 @@ namespace AICA.Core.Tools
 
         /// <summary>
         /// Create all 6 GitNexus bridge tools.
+        /// No fallback — each tool returns a clear error if GitNexus is unavailable,
+        /// letting the LLM choose an alternative tool explicitly.
         /// </summary>
-        /// <param name="processManager">GitNexus process manager (injected for testability).</param>
-        /// <param name="grepFallback">
-        /// Optional fallback for search-type tools when GitNexus is unavailable.
-        /// Typically a delegate that invokes GrepSearchTool.
-        /// </param>
         public static IReadOnlyList<McpBridgeTool> CreateAllTools(
-            IGitNexusProcessManager processManager,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback = null)
+            IGitNexusProcessManager processManager)
         {
             if (processManager == null)
                 throw new ArgumentNullException(nameof(processManager));
 
             return new[]
             {
-                CreateContextTool(processManager, grepFallback),
-                CreateImpactTool(processManager, grepFallback),
-                CreateQueryTool(processManager, grepFallback),
+                CreateContextTool(processManager),
+                CreateImpactTool(processManager),
+                CreateQueryTool(processManager),
                 CreateDetectChangesTool(processManager),
                 CreateRenameTool(processManager),
                 CreateCypherTool(processManager)
@@ -143,7 +132,6 @@ namespace AICA.Core.Tools
         /// </summary>
         public static async Task<IReadOnlyList<McpBridgeTool>> CreateAllToolsAsync(
             IGitNexusProcessManager processManager,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback = null,
             CancellationToken ct = default)
         {
             if (processManager == null)
@@ -171,11 +159,11 @@ namespace AICA.Core.Tools
             if (mcpDefs != null && mcpDefs.Count > 0)
             {
                 var mcpLookup = mcpDefs.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
-                return BuildToolsFromNativeDefinitions(mcpLookup, processManager, grepFallback);
+                return BuildToolsFromNativeDefinitions(mcpLookup, processManager);
             }
 
             // Fallback to hardcoded definitions
-            return CreateAllTools(processManager, grepFallback);
+            return CreateAllTools(processManager);
         }
 
         /// <summary>
@@ -184,18 +172,17 @@ namespace AICA.Core.Tools
         /// </summary>
         private static IReadOnlyList<McpBridgeTool> BuildToolsFromNativeDefinitions(
             Dictionary<string, McpToolDefinition> mcpLookup,
-            IGitNexusProcessManager pm,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback)
+            IGitNexusProcessManager pm)
         {
             // Map: AICA tool name → MCP tool name → ToolMetadata factory
             var toolSpecs = new[]
             {
-                new { AicaName = "gitnexus_context",        McpName = "context",        Category = ToolCategory.Analysis, Tags = new[] { "search", "read", "context", "gitnexus" },  Fallback = grepFallback, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_impact",         McpName = "impact",         Category = ToolCategory.Analysis, Tags = new[] { "search", "analysis", "gitnexus" },         Fallback = grepFallback, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_query",          McpName = "query",          Category = ToolCategory.Search,   Tags = new[] { "search", "gitnexus" },                     Fallback = grepFallback, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_detect_changes", McpName = "detect_changes", Category = ToolCategory.Analysis, Tags = new[] { "search", "analysis", "gitnexus" },         Fallback = (Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>>)null, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_rename",         McpName = "rename",         Category = ToolCategory.FileWrite, Tags = new[] { "modify", "refactor", "gitnexus" },        Fallback = (Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>>)null, IsModifying = true,  RequiresConfirmation = true,  Timeout = 60 },
-                new { AicaName = "gitnexus_cypher",         McpName = "cypher",         Category = ToolCategory.Analysis, Tags = new[] { "search", "analysis", "gitnexus" },         Fallback = (Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>>)null, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_context",        McpName = "context",        Category = ToolCategory.Analysis,  Tags = new[] { "search", "read", "context", "gitnexus" },  IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_impact",         McpName = "impact",         Category = ToolCategory.Analysis,  Tags = new[] { "search", "analysis", "gitnexus" },         IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_query",          McpName = "query",          Category = ToolCategory.Search,    Tags = new[] { "search", "gitnexus" },                     IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_detect_changes", McpName = "detect_changes", Category = ToolCategory.Analysis,  Tags = new[] { "search", "analysis", "gitnexus" },         IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_rename",         McpName = "rename",         Category = ToolCategory.FileWrite, Tags = new[] { "modify", "refactor", "gitnexus" },         IsModifying = true,  RequiresConfirmation = true,  Timeout = 60 },
+                new { AicaName = "gitnexus_cypher",         McpName = "cypher",         Category = ToolCategory.Analysis,  Tags = new[] { "search", "analysis", "gitnexus" },         IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
             };
 
             var tools = new List<McpBridgeTool>();
@@ -235,7 +222,7 @@ namespace AICA.Core.Tools
                 };
 
                 System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: {spec.AicaName} native desc ({nativeDesc.Length} chars): {(nativeDesc.Length > 120 ? nativeDesc.Substring(0, 120) + "..." : nativeDesc)}");
-                tools.Add(new McpBridgeTool(spec.AicaName, spec.McpName, nativeDesc, def, meta, pm, spec.Fallback));
+                tools.Add(new McpBridgeTool(spec.AicaName, spec.McpName, nativeDesc, def, meta, pm));
             }
 
             System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: Built {tools.Count} tools from native MCP definitions");
@@ -309,13 +296,16 @@ namespace AICA.Core.Tools
         }
 
         private static McpBridgeTool CreateContextTool(
-            IGitNexusProcessManager pm,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> fallback)
+            IGitNexusProcessManager pm)
         {
             var def = new ToolDefinition
             {
                 Name = "gitnexus_context",
-                Description = "Get 360° symbol context: callers, callees, execution flow participation, and related symbols. Use this to deeply understand how a function, class, or variable is used across the codebase.",
+                Description = "360-degree view of a single code symbol.\n" +
+                    "Shows categorized incoming/outgoing references (calls, imports, extends, implements, methods, properties, overrides), process participation, and file location.\n\n" +
+                    "WHEN TO USE: After query() to understand a specific symbol in depth. When you need to know all callers, callees, and what execution flows a symbol participates in.\n" +
+                    "AFTER THIS: Use impact() if planning changes.\n\n" +
+                    "Handles disambiguation: if multiple symbols share the same name, returns candidates for you to pick from.",
                 Parameters = new ToolParameters
                 {
                     Properties = new Dictionary<string, ToolParameterProperty>
@@ -345,17 +335,20 @@ namespace AICA.Core.Tools
                 RequiresNetwork = false
             };
 
-            return new McpBridgeTool("gitnexus_context", "context", def.Description, def, meta, pm, fallback);
+            return new McpBridgeTool("gitnexus_context", "context", def.Description, def, meta, pm);
         }
 
         private static McpBridgeTool CreateImpactTool(
-            IGitNexusProcessManager pm,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> fallback)
+            IGitNexusProcessManager pm)
         {
             var def = new ToolDefinition
             {
                 Name = "gitnexus_impact",
-                Description = "Analyze blast radius: what code will be affected or broken if a symbol is changed. Use before refactoring to understand downstream impact.",
+                Description = "Analyze the blast radius of changing a code symbol.\n" +
+                    "Returns affected symbols grouped by depth, plus risk assessment, affected execution flows, and affected modules.\n\n" +
+                    "WHEN TO USE: Before making code changes — especially refactoring, renaming, or modifying shared code. Shows what would break.\n" +
+                    "AFTER THIS: Review d=1 items (WILL BREAK). Use context() on high-risk symbols.\n\n" +
+                    "Depth groups:\n- d=1: WILL BREAK (direct callers/importers)\n- d=2: LIKELY AFFECTED (indirect)\n- d=3: MAY NEED TESTING (transitive)",
                 Parameters = new ToolParameters
                 {
                     Properties = new Dictionary<string, ToolParameterProperty>
@@ -392,17 +385,20 @@ namespace AICA.Core.Tools
                 RequiresNetwork = false
             };
 
-            return new McpBridgeTool("gitnexus_impact", "impact", def.Description, def, meta, pm, fallback);
+            return new McpBridgeTool("gitnexus_impact", "impact", def.Description, def, meta, pm);
         }
 
         private static McpBridgeTool CreateQueryTool(
-            IGitNexusProcessManager pm,
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> fallback)
+            IGitNexusProcessManager pm)
         {
             var def = new ToolDefinition
             {
                 Name = "gitnexus_query",
-                Description = "Hybrid code search combining BM25 keyword matching, semantic search, and reciprocal rank fusion (RRF). More powerful than grep for understanding code intent.",
+                Description = "Query the code knowledge graph for execution flows related to a concept.\n" +
+                    "Returns processes (call chains) ranked by relevance, each with its symbols and file locations.\n\n" +
+                    "WHEN TO USE: Understanding how code works together. Use this when you need execution flows and relationships, not just file matches. Complements grep/IDE search.\n" +
+                    "AFTER THIS: Use context() on a specific symbol for 360-degree view (callers, callees, categorized refs).\n\n" +
+                    "Hybrid ranking: BM25 keyword + semantic vector search, ranked by Reciprocal Rank Fusion.",
                 Parameters = new ToolParameters
                 {
                     Properties = new Dictionary<string, ToolParameterProperty>
@@ -432,7 +428,7 @@ namespace AICA.Core.Tools
                 RequiresNetwork = false
             };
 
-            return new McpBridgeTool("gitnexus_query", "query", def.Description, def, meta, pm, fallback);
+            return new McpBridgeTool("gitnexus_query", "query", def.Description, def, meta, pm);
         }
 
         private static McpBridgeTool CreateDetectChangesTool(IGitNexusProcessManager pm)
@@ -440,7 +436,11 @@ namespace AICA.Core.Tools
             var def = new ToolDefinition
             {
                 Name = "gitnexus_detect_changes",
-                Description = "Map git diff changes to affected execution flows. Shows which features and code paths are impacted by recent changes.",
+                Description = "Analyze uncommitted git changes and find affected execution flows.\n" +
+                    "Maps git diff hunks to indexed symbols, then traces which processes are impacted.\n\n" +
+                    "WHEN TO USE: Before committing — to understand what your changes affect. Pre-commit review, PR preparation.\n" +
+                    "AFTER THIS: Review affected processes. Use context() on high-risk symbols.\n\n" +
+                    "Returns: changed symbols, affected processes, and a risk summary.",
                 Parameters = new ToolParameters
                 {
                     Properties = new Dictionary<string, ToolParameterProperty>
@@ -465,8 +465,7 @@ namespace AICA.Core.Tools
                 RequiresNetwork = false
             };
 
-            // No fallback — returns error if unavailable
-            return new McpBridgeTool("gitnexus_detect_changes", "detect_changes", def.Description, def, meta, pm, null);
+            return new McpBridgeTool("gitnexus_detect_changes", "detect_changes", def.Description, def, meta, pm);
         }
 
         private static McpBridgeTool CreateRenameTool(IGitNexusProcessManager pm)
@@ -474,7 +473,11 @@ namespace AICA.Core.Tools
             var def = new ToolDefinition
             {
                 Name = "gitnexus_rename",
-                Description = "Coordinated multi-file rename: renames a symbol across all files that reference it. Requires user confirmation before applying changes.",
+                Description = "Multi-file coordinated rename using the knowledge graph + text search.\n" +
+                    "Finds all references via graph (high confidence) and regex text search (lower confidence). Preview by default.\n\n" +
+                    "WHEN TO USE: Renaming a function, class, method, or variable across the codebase. Safer than find-and-replace.\n" +
+                    "AFTER THIS: Run detect_changes() to verify no unexpected side effects.\n\n" +
+                    "Each edit is tagged with confidence:\n- \"graph\": found via knowledge graph (high confidence, safe to accept)\n- \"text_search\": found via regex (lower confidence, review carefully)",
                 Parameters = new ToolParameters
                 {
                     Properties = new Dictionary<string, ToolParameterProperty>
@@ -511,8 +514,7 @@ namespace AICA.Core.Tools
                 RequiresNetwork = false
             };
 
-            // No fallback — rename requires GitNexus
-            return new McpBridgeTool("gitnexus_rename", "rename", def.Description, def, meta, pm, null);
+            return new McpBridgeTool("gitnexus_rename", "rename", def.Description, def, meta, pm);
         }
 
         private static McpBridgeTool CreateCypherTool(IGitNexusProcessManager pm)
@@ -520,7 +522,17 @@ namespace AICA.Core.Tools
             var def = new ToolDefinition
             {
                 Name = "gitnexus_cypher",
-                Description = "Execute raw Cypher queries against the GitNexus code knowledge graph. Powerful for complex structural queries like finding all classes that implement an interface, call chains, or dependency patterns.",
+                Description = "Execute Cypher query against the code knowledge graph.\n\n" +
+                    "WHEN TO USE: Complex structural queries that query/context can't answer.\n" +
+                    "AFTER THIS: Use context() on result symbols for deeper context.\n\n" +
+                    "SCHEMA:\n- Nodes: File, Folder, Function, Class, Interface, Method, CodeElement, Community, Process\n" +
+                    "- All edges via single CodeRelation table with 'type' property\n" +
+                    "- Edge types: CONTAINS, DEFINES, CALLS, IMPORTS, EXTENDS, IMPLEMENTS, HAS_METHOD, HAS_PROPERTY, ACCESSES, OVERRIDES, MEMBER_OF, STEP_IN_PROCESS\n\n" +
+                    "EXAMPLES:\n" +
+                    "- Find callers: MATCH (a)-[:CodeRelation {type: 'CALLS'}]->(b:Function {name: \"X\"}) RETURN a.name, a.filePath\n" +
+                    "- Trace a process: MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process) WHERE p.heuristicLabel = \"X\" RETURN s.name, r.step ORDER BY r.step\n" +
+                    "- Find methods: MATCH (c:Class {name: \"X\"})-[r:CodeRelation {type: 'HAS_METHOD'}]->(m:Method) RETURN m.name\n\n" +
+                    "OUTPUT: Returns { markdown, row_count } — results formatted as a Markdown table.",
                 Parameters = new ToolParameters
                 {
                     Properties = new Dictionary<string, ToolParameterProperty>
@@ -550,8 +562,7 @@ namespace AICA.Core.Tools
                 RequiresNetwork = false
             };
 
-            // No fallback — Cypher requires GitNexus
-            return new McpBridgeTool("gitnexus_cypher", "cypher", def.Description, def, meta, pm, null);
+            return new McpBridgeTool("gitnexus_cypher", "cypher", def.Description, def, meta, pm);
         }
     }
 }

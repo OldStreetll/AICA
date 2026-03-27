@@ -168,22 +168,14 @@ namespace AICA.Core.Tests.Tools
         #region ExecuteAsync Tests
 
         [Fact]
-        public async Task ExecuteAsync_WhenServerNotReady_UsesFallback()
+        public async Task ExecuteAsync_WhenServerNotReady_QueryReturnsFail()
         {
-            // Arrange
+            // Arrange — no fallback, all tools return error when GitNexus unavailable
             var mockPm = new Mock<IGitNexusProcessManager>();
             mockPm.Setup(p => p.EnsureRunningAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(false);
 
-            bool fallbackCalled = false;
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> fallback =
-                (c, ctx, ui, ct) =>
-                {
-                    fallbackCalled = true;
-                    return Task.FromResult(ToolResult.Ok("grep fallback result"));
-                };
-
-            var tools = McpBridgeTool.CreateAllTools(mockPm.Object, fallback);
+            var tools = McpBridgeTool.CreateAllTools(mockPm.Object);
             var queryTool = tools[2]; // gitnexus_query
 
             var call = new ToolCall
@@ -196,10 +188,10 @@ namespace AICA.Core.Tests.Tools
             // Act
             var result = await queryTool.ExecuteAsync(call, _mockContext.Object, _mockUI.Object);
 
-            // Assert
-            Assert.True(fallbackCalled);
-            Assert.True(result.Success);
-            Assert.Contains("grep fallback", result.Content);
+            // Assert — returns error with alternative suggestion
+            Assert.False(result.Success);
+            Assert.Contains("not available", result.Error);
+            Assert.Contains("grep_search", result.Error);
         }
 
         [Fact]
@@ -229,22 +221,14 @@ namespace AICA.Core.Tests.Tools
         }
 
         [Fact]
-        public async Task ExecuteAsync_WhenEnsureRunningThrows_UsesFallback()
+        public async Task ExecuteAsync_WhenEnsureRunningThrows_ReturnsFail()
         {
-            // Arrange
+            // Arrange — all tools return error when EnsureRunning throws
             var mockPm = new Mock<IGitNexusProcessManager>();
             mockPm.Setup(p => p.EnsureRunningAsync(It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new InvalidOperationException("Node.js not found"));
 
-            bool fallbackCalled = false;
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> fallback =
-                (c, ctx, ui, ct) =>
-                {
-                    fallbackCalled = true;
-                    return Task.FromResult(ToolResult.Ok("fallback"));
-                };
-
-            var tools = McpBridgeTool.CreateAllTools(mockPm.Object, fallback);
+            var tools = McpBridgeTool.CreateAllTools(mockPm.Object);
             var contextTool = tools[0]; // gitnexus_context
 
             var call = new ToolCall
@@ -257,9 +241,9 @@ namespace AICA.Core.Tests.Tools
             // Act
             var result = await contextTool.ExecuteAsync(call, _mockContext.Object, _mockUI.Object);
 
-            // Assert
-            Assert.True(fallbackCalled);
-            Assert.True(result.Success);
+            // Assert — no fallback, returns error with alternative suggestion
+            Assert.False(result.Success);
+            Assert.Contains("not available", result.Error);
         }
 
         [Fact]
@@ -289,22 +273,14 @@ namespace AICA.Core.Tests.Tools
         }
 
         [Fact]
-        public async Task ExecuteAsync_WhenServerNotReady_ContextUsesGrepFallback()
+        public async Task ExecuteAsync_WhenServerNotReady_ContextReturnsFail()
         {
-            // Arrange — context tool should use grep fallback
+            // Arrange — context returns error with alternative suggestion
             var mockPm = new Mock<IGitNexusProcessManager>();
             mockPm.Setup(p => p.EnsureRunningAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(false);
 
-            string capturedName = null;
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback =
-                (c, ctx, ui, ct) =>
-                {
-                    capturedName = c.Name;
-                    return Task.FromResult(ToolResult.Ok("grep results"));
-                };
-
-            var tools = McpBridgeTool.CreateAllTools(mockPm.Object, grepFallback);
+            var tools = McpBridgeTool.CreateAllTools(mockPm.Object);
             var contextTool = tools[0]; // gitnexus_context
 
             var call = new ToolCall
@@ -317,28 +293,21 @@ namespace AICA.Core.Tests.Tools
             // Act
             var result = await contextTool.ExecuteAsync(call, _mockContext.Object, _mockUI.Object);
 
-            // Assert
-            Assert.True(result.Success);
-            Assert.Equal("gitnexus_context", capturedName);
+            // Assert — returns error, LLM must choose alternative explicitly
+            Assert.False(result.Success);
+            Assert.Contains("not available", result.Error);
+            Assert.Contains("grep_search", result.Error);
         }
 
         [Fact]
-        public async Task ExecuteAsync_WhenServerNotReady_ImpactUsesGrepFallback()
+        public async Task ExecuteAsync_WhenServerNotReady_ImpactReturnsFail()
         {
-            // Arrange — impact tool should use grep fallback
+            // Arrange — impact returns error with alternative suggestion
             var mockPm = new Mock<IGitNexusProcessManager>();
             mockPm.Setup(p => p.EnsureRunningAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(false);
 
-            bool fallbackCalled = false;
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback =
-                (c, ctx, ui, ct) =>
-                {
-                    fallbackCalled = true;
-                    return Task.FromResult(ToolResult.Ok("grep fallback"));
-                };
-
-            var tools = McpBridgeTool.CreateAllTools(mockPm.Object, grepFallback);
+            var tools = McpBridgeTool.CreateAllTools(mockPm.Object);
             var impactTool = tools[1]; // gitnexus_impact
 
             var call = new ToolCall
@@ -352,21 +321,19 @@ namespace AICA.Core.Tests.Tools
             var result = await impactTool.ExecuteAsync(call, _mockContext.Object, _mockUI.Object);
 
             // Assert
-            Assert.True(fallbackCalled);
+            Assert.False(result.Success);
+            Assert.Contains("not available", result.Error);
         }
 
         [Fact]
         public async Task ExecuteAsync_WhenServerNotReady_RenameReturnsError()
         {
-            // Arrange — rename has no fallback (always returns error)
+            // Arrange — all tools return error when GitNexus unavailable
             var mockPm = new Mock<IGitNexusProcessManager>();
             mockPm.Setup(p => p.EnsureRunningAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(false);
 
-            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback =
-                (c, ctx, ui, ct) => Task.FromResult(ToolResult.Ok("should not be called"));
-
-            var tools = McpBridgeTool.CreateAllTools(mockPm.Object, grepFallback);
+            var tools = McpBridgeTool.CreateAllTools(mockPm.Object);
             var renameTool = tools[4]; // gitnexus_rename
 
             var call = new ToolCall
@@ -383,7 +350,7 @@ namespace AICA.Core.Tests.Tools
             // Act
             var result = await renameTool.ExecuteAsync(call, _mockContext.Object, _mockUI.Object);
 
-            // Assert — rename has no fallback, should fail
+            // Assert
             Assert.False(result.Success);
             Assert.Contains("not available", result.Error);
         }
