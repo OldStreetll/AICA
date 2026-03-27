@@ -22,6 +22,8 @@ namespace AICA.Core.Tests.Agent
                 .ReturnsAsync("file content");
             context.Setup(c => c.RequestConfirmationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(true);
+            context.Setup(c => c.EditedFilesInSession)
+                .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
             return context;
         }
 

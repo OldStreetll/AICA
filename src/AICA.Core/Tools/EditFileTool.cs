@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
@@ -125,36 +126,26 @@ namespace AICA.Core.Tools
                     var normalizedContent = NormalizeLineEndings(content);
                     var normalizedOldString = NormalizeLineEndings(oldString);
 
-                    // Check old_string exists
+                    // Check old_string exists — if not, run diagnostic routing (H3)
                     if (!normalizedContent.Contains(normalizedOldString))
                     {
-                        // Provide detailed debugging information with visible whitespace
-                        var preview = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
-                        var oldPreview = oldString.Length > 200 ? oldString.Substring(0, 200) + "..." : oldString;
+                        var diagnosis = DiagnoseEditFailure(
+                            normalizedContent, normalizedOldString, path, context);
 
-                        // Show whitespace characters explicitly
-                        var oldStringVisible = oldString
-                            .Replace("\r", "\\r")
-                            .Replace("\n", "\\n")
-                            .Replace("\t", "\\t")
-                            .Replace(" ", "·");
+                        switch (diagnosis.Kind)
+                        {
+                            case EditDiagnosisKind.IndentationMismatch:
+                            case EditDiagnosisKind.WhitespaceMismatch:
+                                // Auto-fix: use the actual segment found by diagnosis
+                                newContent = replaceAll
+                                    ? normalizedContent.Replace(diagnosis.ActualSegment, newString)
+                                    : ReplaceFirst(normalizedContent, diagnosis.ActualSegment, newString);
+                                goto applyEdit; // skip uniqueness check (already located)
 
-                        var contentVisible = preview
-                            .Replace("\r", "\\r")
-                            .Replace("\n", "\\n")
-                            .Replace("\t", "\\t")
-                            .Replace(" ", "·");
-
-                        return ToolResult.Fail(
-                            $"old_string not found in file.\n\n" +
-                            $"CRITICAL: The string you're searching for does NOT exist in the file.\n\n" +
-                            $"What you're searching for ({oldString.Length} chars, whitespace shown as ·\\n\\r\\t):\n{oldStringVisible}\n\n" +
-                            $"Actual file content ({content.Length} chars total, whitespace shown as ·\\n\\r\\t):\n{contentVisible}\n\n" +
-                            $"Common issues:\n" +
-                            $"1. Missing empty lines (\\n\\n)\n" +
-                            $"2. Missing trailing spaces (shown as ·)\n" +
-                            $"3. Wrong line endings (\\r\\n vs \\n)\n\n" +
-                            $"SOLUTION: Use read_file to see the EXACT content, then copy the EXACT string including ALL whitespace.");
+                            default:
+                                // Return diagnostic message for LLM to self-correct
+                                return ToolResult.Fail(diagnosis.Message);
+                        }
                     }
 
                     // Check uniqueness (unless replace_all)
@@ -179,6 +170,7 @@ namespace AICA.Core.Tools
                 }
 
                 // Show diff and let user apply changes
+                applyEdit:
                 var result = await context.ShowDiffAndApplyAsync(path, content, newContent, ct);
 
                 if (!result.Applied)
@@ -265,16 +257,252 @@ namespace AICA.Core.Tools
             return count;
         }
 
-        private string Truncate(string text, int maxLength)
-        {
-            if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
-                return text;
-            return text.Substring(0, maxLength) + "...";
-        }
-
         public Task HandlePartialAsync(ToolCall call, IUIContext ui, CancellationToken ct = default)
         {
             return Task.CompletedTask;
         }
+
+        #region H3 Edit Diagnostic Routing
+
+        /// <summary>
+        /// Diagnose why old_string was not found and return targeted guidance or auto-fix info.
+        /// </summary>
+        private EditDiagnosis DiagnoseEditFailure(
+            string content, string normalizedOld, string filePath, IAgentContext context)
+        {
+            // 1. StaleContent: file was edited earlier in this session
+            if (context.EditedFilesInSession.Contains(filePath))
+            {
+                var firstLine = normalizedOld.Split('\n')[0].Trim();
+                if (firstLine.Length > 5)
+                {
+                    var anchorIndex = content.IndexOf(firstLine);
+                    if (anchorIndex >= 0)
+                    {
+                        var snippet = ExtractSnippet(content, anchorIndex,
+                            normalizedOld.Split('\n').Length + 4);
+                        return EditDiagnosis.Stale(
+                            "该文件已在本会话中被编辑过，old_string 可能基于旧版本。\n" +
+                            "以下是当前文件中与 old_string 首行匹配位置的实际内容：\n\n" +
+                            snippet + "\n\n" +
+                            "请基于以上最新内容重新构造 old_string。");
+                    }
+                }
+            }
+
+            // 2. IndentationMismatch: matches after TrimStart on each line
+            var trimmedOld = TrimEachLine(normalizedOld);
+            var trimmedContent = TrimEachLine(content);
+            var trimmedIndex = trimmedContent.IndexOf(trimmedOld);
+            if (trimmedIndex >= 0 && trimmedOld.Length > 0)
+            {
+                var segment = LocateOriginalSegment(content, trimmedContent, trimmedIndex, trimmedOld);
+                if (segment != null)
+                    return EditDiagnosis.AutoFix(EditDiagnosisKind.IndentationMismatch, segment);
+            }
+
+            // 3. WhitespaceMismatch: matches after compressing all whitespace
+            var compOld = CompressWhitespace(normalizedOld);
+            var compContent = CompressWhitespace(content);
+            var compIndex = compContent.IndexOf(compOld);
+            if (compIndex >= 0 && compOld.Length > 1)
+            {
+                var segment = LocateSegmentByCompressed(content, compContent, compIndex, compOld);
+                if (segment != null)
+                    return EditDiagnosis.AutoFix(EditDiagnosisKind.WhitespaceMismatch, segment);
+            }
+
+            // 4. NoMatch: try to find the first line as a hint
+            var searchLine = normalizedOld.Split('\n')[0].Trim();
+            if (searchLine.Length > 5)
+            {
+                var nearIndex = content.IndexOf(searchLine);
+                if (nearIndex >= 0)
+                {
+                    var snippet = ExtractSnippet(content, nearIndex,
+                        normalizedOld.Split('\n').Length + 4);
+                    return EditDiagnosis.NoMatch(
+                        "old_string 未找到精确匹配。\n" +
+                        "找到首行相似位置的实际内容：\n\n" +
+                        snippet + "\n\n" +
+                        "请基于以上内容重新构造 old_string。");
+                }
+            }
+
+            // Complete miss — generic error
+            return EditDiagnosis.NoMatch(
+                "old_string not found in file.\n" +
+                "Use read_file to see the exact content, then try again with the correct string.");
+        }
+
+        /// <summary>
+        /// Join each line after TrimStart for indentation-insensitive comparison.
+        /// </summary>
+        private static string TrimEachLine(string text)
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+                lines[i] = lines[i].TrimStart();
+            return string.Join("\n", lines);
+        }
+
+        /// <summary>
+        /// Compress runs of whitespace (spaces/tabs) into a single space for fuzzy matching.
+        /// Preserves newlines as-is.
+        /// </summary>
+        private static string CompressWhitespace(string text)
+        {
+            var sb = new System.Text.StringBuilder(text.Length);
+            bool inSpace = false;
+            foreach (var c in text)
+            {
+                if (c == ' ' || c == '\t')
+                {
+                    if (!inSpace) { sb.Append(' '); inSpace = true; }
+                }
+                else
+                {
+                    sb.Append(c);
+                    inSpace = false;
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Given a match index in the trimmed version, locate the corresponding segment
+        /// in the original content by mapping line-by-line.
+        /// </summary>
+        private static string LocateOriginalSegment(
+            string original, string trimmed, int trimmedMatchIndex, string trimmedOld)
+        {
+            // Count which line in the trimmed content the match starts at
+            int trimmedLineStart = 0;
+            for (int i = 0; i < trimmedMatchIndex; i++)
+            {
+                if (trimmed[i] == '\n') trimmedLineStart++;
+            }
+
+            // Count how many lines the trimmed old_string spans
+            int oldLineCount = 1;
+            foreach (var c in trimmedOld)
+            {
+                if (c == '\n') oldLineCount++;
+            }
+
+            // Extract the same line range from the original content
+            var originalLines = original.Split('\n');
+            if (trimmedLineStart + oldLineCount > originalLines.Length)
+                return null;
+
+            var segment = string.Join("\n",
+                originalLines, trimmedLineStart, oldLineCount);
+            return segment;
+        }
+
+        /// <summary>
+        /// Locate original segment from a match in the compressed version.
+        /// Uses character position mapping between compressed and original.
+        /// </summary>
+        private static string LocateSegmentByCompressed(
+            string original, string compressed, int compMatchIndex, string compOld)
+        {
+            // Map compressed char index back to original char index
+            int origStart = MapCompressedToOriginal(original, compMatchIndex);
+            int origEnd = MapCompressedToOriginal(original, compMatchIndex + compOld.Length);
+
+            if (origStart < 0 || origEnd < 0 || origEnd > original.Length)
+                return null;
+
+            return original.Substring(origStart, origEnd - origStart);
+        }
+
+        /// <summary>
+        /// Map a character index in the compressed string back to the original string.
+        /// </summary>
+        private static int MapCompressedToOriginal(string original, int compressedIndex)
+        {
+            int compIdx = 0;
+            bool inSpace = false;
+            for (int i = 0; i < original.Length; i++)
+            {
+                if (compIdx >= compressedIndex)
+                    return i;
+
+                var c = original[i];
+                if (c == ' ' || c == '\t')
+                {
+                    if (!inSpace) { compIdx++; inSpace = true; }
+                }
+                else
+                {
+                    compIdx++;
+                    inSpace = false;
+                }
+            }
+            // End of original
+            return compIdx >= compressedIndex ? original.Length : -1;
+        }
+
+        /// <summary>
+        /// Extract N lines of context starting from a character index.
+        /// </summary>
+        private static string ExtractSnippet(string content, int charIndex, int lineCount)
+        {
+            // Find the start of the line containing charIndex
+            int lineStart = content.LastIndexOf('\n', Math.Max(0, charIndex - 1));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+            // Collect lineCount lines from lineStart
+            int pos = lineStart;
+            int linesFound = 0;
+            while (pos < content.Length && linesFound < lineCount)
+            {
+                var nextNewline = content.IndexOf('\n', pos);
+                if (nextNewline < 0)
+                {
+                    linesFound++;
+                    break;
+                }
+                pos = nextNewline + 1;
+                linesFound++;
+            }
+
+            var end = Math.Min(pos, content.Length);
+            return content.Substring(lineStart, end - lineStart).TrimEnd('\n');
+        }
+
+        private enum EditDiagnosisKind
+        {
+            StaleContent,
+            IndentationMismatch,
+            WhitespaceMismatch,
+            NoMatch
+        }
+
+        private sealed class EditDiagnosis
+        {
+            public EditDiagnosisKind Kind { get; }
+            public string Message { get; }
+            public string ActualSegment { get; }
+
+            private EditDiagnosis(EditDiagnosisKind kind, string message, string actualSegment = null)
+            {
+                Kind = kind;
+                Message = message;
+                ActualSegment = actualSegment;
+            }
+
+            public static EditDiagnosis Stale(string message)
+                => new EditDiagnosis(EditDiagnosisKind.StaleContent, message);
+
+            public static EditDiagnosis AutoFix(EditDiagnosisKind kind, string actualSegment)
+                => new EditDiagnosis(kind, null, actualSegment);
+
+            public static EditDiagnosis NoMatch(string message)
+                => new EditDiagnosis(EditDiagnosisKind.NoMatch, message);
+        }
+
+        #endregion
     }
 }
