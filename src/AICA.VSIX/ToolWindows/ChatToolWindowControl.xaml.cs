@@ -367,6 +367,9 @@ namespace AICA.ToolWindows
             // H5: Register pre-validation middleware to catch obvious parameter errors
             _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PreValidationMiddleware());
 
+            // H1: Register post-edit verification middleware
+            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.VerificationMiddleware());
+
             // Initialize LLM client
             var clientOptions = new LLMClientOptions
             {

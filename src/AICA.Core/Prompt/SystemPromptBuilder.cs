@@ -486,6 +486,102 @@ namespace AICA.Core.Prompt
         /// 2.1: Add GitNexus MCP tool usage guidance with few-shot examples.
         /// Fixes P1 (repo param), P2 (simple symbol names), P3 (Cypher schema).
         /// </summary>
+        /// <summary>
+        /// 3.2 F5: Add Qt template guidance for UI engineers.
+        /// Injected when intent involves Qt/dialog/widget keywords.
+        /// </summary>
+        public SystemPromptBuilder AddQtTemplateGuidance(string intent)
+        {
+            if (!IsQtRelated(intent))
+                return this;
+
+            _builder.AppendLine("## Qt 界面代码生成规范");
+            _builder.AppendLine();
+            _builder.AppendLine("当用户请求生成 Qt 界面代码时：");
+            _builder.AppendLine("1. 遵循项目 .aica-rules/cpp-qt-specific.md 中的全部规范");
+            _builder.AppendLine("2. 生成完整的 .h + .cpp 文件对，包含：");
+            _builder.AppendLine("   - Q_OBJECT 宏");
+            _builder.AppendLine("   - 构造函数中 setupUi 调用");
+            _builder.AppendLine("   - signal/slot 连接使用新式语法 connect(sender, &Sender::signal, receiver, &Receiver::slot)");
+            _builder.AppendLine("   - 析构函数中资源清理");
+            _builder.AppendLine("3. 对话框模板包含：标准按钮（确认/取消）、布局管理器、TR() 国际化宏");
+            _builder.AppendLine("4. 如果用户问\"这个信号连接到了哪里\"，使用 gitnexus_context() 工具查找 signal/slot 连接关系");
+            _builder.AppendLine();
+
+            return this;
+        }
+
+        private static bool IsQtRelated(string intent)
+        {
+            if (string.IsNullOrEmpty(intent))
+                return false;
+            var lower = intent.ToLowerInvariant();
+            var qtKeywords = new[]
+            {
+                "对话框", "dialog", "widget", "界面", "signal", "slot", "信号", "槽",
+                "qwidget", "qdialog", "qpushbutton", "qlabel", "qspinbox",
+                ".ui", ".qss", "样式", "布局", "layout", "qt"
+            };
+            foreach (var kw in qtKeywords)
+            {
+                if (lower.Contains(kw))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 3.8: Add cross-session memory bank context.
+        /// </summary>
+        public SystemPromptBuilder AddMemoryContext(string memoryContent)
+        {
+            if (string.IsNullOrWhiteSpace(memoryContent))
+                return this;
+
+            _builder.AppendLine("## 项目记忆（跨会话）");
+            _builder.AppendLine();
+            _builder.AppendLine(memoryContent);
+            _builder.AppendLine();
+
+            return this;
+        }
+
+        /// <summary>
+        /// 3.7: Add resume context from a previous session's saved progress.
+        /// </summary>
+        public SystemPromptBuilder AddResumeContext(Storage.TaskProgress progress)
+        {
+            if (progress == null || string.IsNullOrEmpty(progress.OriginalUserRequest))
+                return this;
+
+            _builder.AppendLine("## 断点续做 — 上次会话的进度");
+            _builder.AppendLine();
+            _builder.AppendLine($"原始请求：{progress.OriginalUserRequest}");
+            if (progress.EditedFiles?.Count > 0)
+                _builder.AppendLine($"已编辑文件：{string.Join(", ", progress.EditedFiles)}");
+            if (progress.EditDetails?.Count > 0)
+            {
+                _builder.AppendLine("编辑详情：");
+                foreach (var detail in progress.EditDetails)
+                    _builder.AppendLine($"  - {detail}");
+            }
+            if (!string.IsNullOrEmpty(progress.PlanState))
+                _builder.AppendLine($"计划状态：{progress.PlanState}");
+            if (!string.IsNullOrEmpty(progress.CurrentPhase))
+                _builder.AppendLine($"当前阶段：{progress.CurrentPhase}");
+            if (progress.KeyDiscoveries?.Count > 0)
+            {
+                _builder.AppendLine("关键发现：");
+                foreach (var disc in progress.KeyDiscoveries)
+                    _builder.AppendLine($"  - {disc}");
+            }
+            _builder.AppendLine();
+            _builder.AppendLine("请基于以上进度继续完成任务。已编辑的文件不需要重新编辑。");
+            _builder.AppendLine();
+
+            return this;
+        }
+
         public SystemPromptBuilder AddGitNexusGuidance(string repoName)
         {
             if (string.IsNullOrEmpty(repoName))

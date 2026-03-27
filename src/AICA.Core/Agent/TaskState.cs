@@ -68,6 +68,10 @@ namespace AICA.Core.Agent
         public bool BudgetWarning60Sent { get; set; }
         public bool BudgetWarning80Sent { get; set; }
 
+        // H2: State machine phase tracking [3.4]
+        public string CurrentPhase { get; set; }
+        public int PhaseIterationCount { get; set; }
+
         /// <summary>
         /// Reset failure counters after a successful step.
         /// </summary>

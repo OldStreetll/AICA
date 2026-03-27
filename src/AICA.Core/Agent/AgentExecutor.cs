@@ -95,6 +95,14 @@ namespace AICA.Core.Agent
             var language = ProjectLanguageDetector.DetectLanguage(context?.WorkingDirectory);
             var intent = DynamicToolSelector.ClassifyIntent(userRequest);
 
+            // 3.4 H2: Create state machine for complex tasks
+            var stateMachine = TaskStateMachine.TryCreate(userRequest, complexity);
+            if (stateMachine != null)
+            {
+                _taskState.CurrentPhase = stateMachine.CurrentPhaseName;
+                System.Diagnostics.Debug.WriteLine($"[AICA] H2: State machine activated — template={stateMachine.Template.Name}, phase={_taskState.CurrentPhase}");
+            }
+
             var builder = new SystemPromptBuilder()
                 .AddTools(toolDefinitions)
                 .AddToolDescriptions()
@@ -103,7 +111,30 @@ namespace AICA.Core.Agent
                     context?.WorkingDirectory ?? Environment.CurrentDirectory,
                     context?.SourceRoots)
                 .AddBugFixGuidance(intent, language)  // 1.3a: Bug fix guidance
+                .AddQtTemplateGuidance(userRequest)  // 3.2: F5 Qt template for UI engineers
                 .AddGitNexusGuidance(ResolveGitNexusRepoName(context?.WorkingDirectory)); // 2.1: GitNexus few-shot [P1/P2/P3]
+
+            // 3.8: Load cross-session memory bank
+            if (context?.WorkingDirectory != null)
+            {
+                var memoryContent = await Storage.MemoryBank.LoadAsync(context.WorkingDirectory, ct).ConfigureAwait(false);
+                if (memoryContent != null)
+                {
+                    builder.AddMemoryContext(memoryContent);
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Loaded memory bank ({memoryContent.Length} chars)");
+                }
+            }
+
+            // 3.7: Load saved progress for resume context
+            if (context?.WorkingDirectory != null)
+            {
+                var savedProgress = await Storage.TaskProgressStore.LoadAsync(context.WorkingDirectory, ct).ConfigureAwait(false);
+                if (savedProgress != null)
+                {
+                    builder.AddResumeContext(savedProgress);
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Loaded resume context: {savedProgress.EditedFiles?.Count ?? 0} edited files");
+                }
+            }
 
             // Load and integrate rules from files
             if (context?.WorkingDirectory != null)
@@ -219,9 +250,25 @@ namespace AICA.Core.Agent
             while (_taskState.Iteration < _maxIterations && !ct.IsCancellationRequested && !_taskState.Abort && !_taskState.IsCompleted)
             {
                 _taskState.Iteration++;
+                _taskState.PhaseIterationCount++;
                 _taskState.ApiRequestCount++;
                 var iteration = _taskState.Iteration;
                 _logger?.LogDebug("Agent iteration {Iteration}", iteration);
+
+                // 3.4 H2: Check state machine directive
+                if (stateMachine != null)
+                {
+                    var directive = stateMachine.GetDirective(_taskState, null);
+                    if (directive != null)
+                    {
+                        _taskState.CurrentPhase = stateMachine.CurrentPhaseName;
+                        _taskState.PhaseIterationCount = 0;
+                        if (directive.Mode == PhaseDirectiveMode.Force)
+                        {
+                            conversationHistory.Add(ChatMessage.User(directive.Message));
+                        }
+                    }
+                }
                 System.Diagnostics.Debug.WriteLine($"[AICA] Agent iteration {iteration}");
 
                 // ── Micro-compact old tool results to save context space ──
@@ -1257,6 +1304,19 @@ namespace AICA.Core.Agent
                     System.Diagnostics.Debug.WriteLine($"[AICA] H4 telemetry fire-and-forget failed: {ex.Message}");
                 }
             });
+
+            // 3.7: Save progress for checkpoint resume
+            if (context?.WorkingDirectory != null && _taskState.DidEditFile)
+            {
+                var progress = new Storage.TaskProgress
+                {
+                    OriginalUserRequest = userRequest,
+                    EditedFiles = _taskState.EditedFiles.ToList(),
+                    CurrentPhase = _taskState.CurrentPhase,
+                    PlanState = _taskState.HasActivePlan ? "active" : null
+                };
+                _ = Storage.TaskProgressStore.SaveAsync(context.WorkingDirectory, progress);
+            }
 
             if (_taskState.Iteration >= _maxIterations)
             {

@@ -12,13 +12,26 @@ namespace AICA.Core.Agent
         /// Build the planning directive message injected after the user's request
         /// for complex tasks.
         /// </summary>
-        public static ChatMessage BuildPlanningDirective()
+        public static ChatMessage BuildPlanningDirective(bool isMultiFile = false)
         {
-            return ChatMessage.User(
+            var baseDirective =
                 "[System: Task Planning Required] This is a complex multi-step task. " +
                 "Before doing anything else, you MUST first call the `update_plan` tool to create a plan with 3+ concrete steps (all status 'pending'). " +
                 "Do NOT call any other tool before `update_plan`. " +
-                "After creating the plan, execute each step and call `update_plan` again to update step status (in_progress → completed/failed) as you progress.");
+                "After creating the plan, execute each step and call `update_plan` again to update step status (in_progress → completed/failed) as you progress.";
+
+            if (isMultiFile)
+            {
+                baseDirective +=
+                    "\n\n[跨文件重构五步法] " +
+                    "1. 搜索全部引用（grep_search 或 gitnexus_impact）→ " +
+                    "2. 制定计划（update_plan）→ " +
+                    "3. 逐文件执行修改 → " +
+                    "4. 验证无残留（grep_search 确认旧名称/旧代码不存在）→ " +
+                    "5. 完成报告（attempt_completion）";
+            }
+
+            return ChatMessage.User(baseDirective);
         }
 
         /// <summary>
