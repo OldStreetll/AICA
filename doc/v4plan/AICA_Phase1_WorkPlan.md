@@ -1,6 +1,6 @@
 # AICA 下一阶段工作计划
 
-> 版本: v2.0 | 日期: 2026-03-25
+> 版本: v2.1 | 日期: 2026-03-27
 > 定位: 合并 Harness 工程改造 + 原路线图基础修复/M1/M2，形成可执行的工作计划
 > 前置文档: [项目总结与路线图](agentref/AICA_ProjectReview_and_Roadmap.md) | [产品设计研讨会](AICA_ProductDesign_Workshop.md)
 > 规范来源: Qt-C++ 编程规范.doc + MISRA C++/C
@@ -133,9 +133,27 @@
 | C77 | 问题收集不阻塞阶段 3 | 问题收集与复现穿插进行，CRITICAL/HIGH 立即修复，MEDIUM/LOW 纳入步骤 3.9（M1 反馈修复） | 旧版问题属于阶段 0+1 范围（基础修复 + C++ 专业化），与阶段 3 的 Harness 核心改造无依赖关系 |
 | C78 | GitNexus npx Windows 兼容修复 | `NPX_COMMAND` 在 Windows 上改为 `cmd.exe /c npx`，解决 `UseShellExecute=false` 下无法解析 `.cmd` 脚本的问题 | 用户机器 Node.js v24.14.0 + npx 11.9.0 已安装，但 `Process.Start` 以 `UseShellExecute=false` 模式直接调用 `npx`（实际是 `npx.cmd`）→ `系统找不到指定的文件`。Windows 上 `.cmd` 文件必须通过 `cmd.exe /c` 调用 |
 | C79 | D-01/D-02/D-03/D-04 修复策略确认 | 4 个问题分两批修复：D-04+D-03 立即修复（响应管线 Bug）；D-01+D-02 从阶段 3 提前实施 H7+H6+GitNexus 优先策略（Agent 行为根因） | 非正式部署 4 个问题全部复现（1 CRITICAL + 3 HIGH），临时缓解方案（改 prompt / 插标记）被否决，采用机制性解决方案 |
-| C80 | D-01 双层方案：GitNexus 优先 + H7 | GitNexus 优先（工具选择层）减少迭代需求 + H7 迭代预算感知（AgentExecutor 主循环）兜底安全网。两者无耦合，可独立实施测试 | GitNexus 可用时 3-5 轮完成代码理解，H7 兜底 GitNexus 不可用或 LLM 仍不收敛的场景。覆盖 100% 情况 |
+| C80 | D-01 双层方案：GitNexus 优先 + H7 | ~~GitNexus 优先（工具选择层）~~ **[C88 修正] 消除 System Prompt 工具名不对称偏见** + H7 迭代预算感知（AgentExecutor 主循环）兜底安全网。两者无耦合，可独立实施测试 | GitNexus 可用时 3-5 轮完成代码理解，H7 兜底 GitNexus 不可用或 LLM 仍不收敛的场景。覆盖 100% 情况。**[C87] 根因修正：不是模型能力问题，是 prompt 偏见问题** |
 | C81 | D-02 提前实施 H6 Condense 保护区 | 从阶段 3 步骤 3.6 提前。Condense 时区分"当前任务关键信息"和"历史任务摘要"，新任务只保留历史极简版本 | 根因是 condense 摘要跨任务污染，临时标记方案被否决 |
 | C82 | C33 规范文件审查再次推迟 | 推迟到阶段 3 期间完成，不阻塞步骤 2.3 | D-01~D-06 修复优先，规范文件审查非阻塞项 |
+
+### v2.1 修正（8 项，MCP 工具透传 + System Prompt 重构执行与回退）
+
+> 执行时间：2026-03-27
+> 背景：D-01 根因追踪发现 AICA 手动重写的简化版工具描述丢失了 GitNexus 原生 `WHEN TO USE` 引导。参照 OpenCode（同样使用 MiniMax-M2.5 + GitNexus，工具选择正常）制定 MCP 透传 + System Prompt 精简方案。
+> 参考文档：[MCP 工具透传 + System Prompt 重构计划](AICA_MCP_SystemPrompt_Refactor_Plan.md)
+
+| # | 修正项 | 决定 | 原因 |
+|---|--------|------|------|
+| C83 | Part 1 MCP 工具透传已完成 | McpClient 新增 `ListToolsAsync`；McpBridgeTool 新增 `CreateAllToolsAsync` + `ConvertMcpSchema`；VSIX 层后台异步升级（hardcoded → native）。**保留，不回滚** | 原生描述包含完整参数（uid, file_path, include_content, task_context 等）和 WHEN TO USE 引导，比手动硬编码更准确。复测确认：`ListToolsAsync returned 11 tools` → `Built 6 tools from native MCP definitions` |
+| C84 | McpClient byte/char 编码 Bug 修复 | `ReadMessageAsync` 从 `StreamReader`（按 char 读）改为原始 `Stream`（按 byte 读）。**保留，不回滚** | Content-Length 指定字节数，StreamReader.ReadAsync 读字符数。中文字符（UTF-8 三字节）导致多读，吃掉下一条 MCP 消息头部 → `'C' is invalid after a single JSON value` parse error → 工具调用失败。修复后 parse error 消除 |
+| C85 | TriggerIndexAsync 死锁修复 | stdout/stderr 重定向但未读取 → 管道缓冲区满 → 进程阻塞 → `WaitForExit()` 永不返回。改为可见 cmd 窗口 + 无超时。**保留，不回滚** | 4705 文件项目索引输出大量日志，填满 OS 4KB 管道缓冲区。原 60s 超时也不生效（Task.Run 的 CancellationToken 不中断已运行的 WaitForExit）。改为 cmd.exe 可见窗口后用户可看到进度条和完成状态 |
+| C86 | Part 2 System Prompt 精简**需要回滚** | 删除 AddToolDescriptions + AddGitNexusGuidance + 规则精简 → 复测失败：LLM 仍不选 GitNexus，且任务重复执行 + 幻觉增加。**回滚 Part 2 全部改动** | 精简方案借鉴 OpenCode，但忽略了关键差异：**OpenCode 的 system prompt 不提及任何具体工具名（无偏见）**，而 AICA 精简后仍大量提及 grep_search/find_by_name/list_dir（未提及 gitnexus_*），造成不对称偏见。MiniMax-M2.5 被 system prompt 引导优先选择有名字的工具，忽略只在 function calling API 中有描述的 GitNexus |
+| C87 | D-01 根因修正：不是模型能力问题 | D-01 根因从"MiniMax-M2.5 function calling 能力不足"修正为"System Prompt 工具名不对称偏见" | OpenCode 用完全相同的 MiniMax-M2.5 + GitNexus，工具选择正常。差异在于 OpenCode system prompt **零工具名提及**，AICA system prompt 只提及内置工具不提及 GitNexus |
+| C88 | D-01 修复方案修正 | 原方案"双层：GitNexus 优先策略 + H7"中的 GitNexus 优先策略改为：**消除 System Prompt 工具名不对称偏见（方案 A）**。已执行：规则部分去掉所有具体工具名（grep_search/find_by_name/list_dir/read_file 等 15+ 处 → 0 处），改为泛化表述（"搜索工具"/"文件读取工具"/"内置工具"）。AddGitNexusGuidance 的优先策略和 few-shot 示例暂保留。H7 兜底不变 | 方案 A 复测通过：LLM 自主选择 gitnexus_context → gitnexus_impact → grep_search（补充宏定义搜索），符合预期的工具组合模式。AddGitNexusGuidance 优先策略理论上也是一种偏见（OpenCode 无此引导），但实测效果良好，暂保留观察 |
+| C89 | Part 2 回滚范围确认 | 回滚 SystemPromptBuilder 的 AddBasePrompt/AddCoreRules/AddAdvancedRules/AddComplexRules/BuildSections，回滚 AgentExecutor 调用链，回滚 ExplainCodeCommand。然后在恢复后的规则部分执行方案 A（去工具名偏见）。Part 1 代码不动 | Part 1（透传机制）和 Part 2（prompt 精简）解耦。回滚后 AddToolDescriptions/AddGitNexusGuidance 恢复正常工作 |
+| C90 | 执行结果 | **D-01 修复复测通过。** 右键解释代码：LLM 第 1 轮选 `gitnexus_context`（获取函数上下文），第 2 轮选 `gitnexus_impact`（获取上游调用者），第 3 轮选 `grep_search`（搜索宏常量定义）。工具选择合理，GitNexus 优先+grep 补充的模式正确。MCP 透传链路正常（`ListToolsAsync returned 11 tools` → `Built 6 tools` → `upgraded to 6 native MCP definitions`）。无 parse error | 增量验证路径：回滚 Part 2 → 恢复基线 → 方案 A 去工具名偏见 → 复测通过。D-01 从"LLM 完全不选 GitNexus，盲搜 50 轮"改善为"GitNexus 优先 + grep 补充，2-3 轮完成" |
+| C91 | AddGitNexusGuidance 优先策略偏见暂保留 | "首选 gitnexus → 次选 grep_search → 避免反复搜索"的优先策略理论上是偏见（OpenCode 无此引导），但当前实测效果良好，暂不移除。后续如发现副作用（如 GitNexus 不适用场景仍强制使用），再考虑删除 | OpenCode 的零偏见设计是理想状态；AICA 保留适度引导作为过渡方案，待更多场景验证后决定是否移除 |
 
 ---
 
@@ -785,11 +803,11 @@ priority: 20
 > 复现版本：`aa05da6`（最新 HEAD，含 GitNexus + 规范注入重构 + 数据目录统一）
 > 部署范围：6 人（平台组 3 + 界面组 3）
 > 部署时间：2026-03-23
-> 状态：✅ D-01~D-06 已修复并复验通过（2026-03-27），D-07~D-09 记录待阶段 3 解决
+> 状态：✅ D-01~D-06 已修复并复验通过（2026-03-27）。D-10/D-11 附带修复。D-07~D-09 记录待阶段 3 解决
 
 | # | 问题描述 | 来源 | 影响功能 | 严重程度 | 最新版已修复？ | 修复方案 | 状态 |
 |---|---------|------|---------|---------|--------------|---------|------|
-| D-01 | **代码解释迭代耗尽（50/50）**：右键解释 15 行函数 `prv_FprogCalcN`，LLM 持续 grep_search/read_file 搜索调用链和类型定义，不收敛。Condense 后丢失已收集信息导致重复搜索。53 次工具调用、50 次 API 请求 | 平台组反馈 + 最新版复现确认 | F1 代码理解 | **HIGH** | ❌ 最新版仍存在 | **双层方案：GitNexus 优先（减少迭代需求）+ H7 迭代预算感知（兜底安全网）** | 🔄 已复现，方案已确认 |
+| D-01 | **代码解释迭代耗尽（50/50）**：右键解释 15 行函数 `prv_FprogCalcN`，LLM 持续 grep_search/read_file 搜索调用链和类型定义，不收敛。Condense 后丢失已收集信息导致重复搜索。53 次工具调用、50 次 API 请求 | 平台组反馈 + 最新版复现确认 | F1 代码理解 | **HIGH** | ✅ 已修复 [C83][C84][C85][C88][C90] | **三项修复：1) MCP 工具透传 — 原生描述含 WHEN TO USE 引导 [C83] 2) McpClient byte/char 编码修复 [C84] 3) System Prompt 工具名不对称偏见消除 [C88]。** 复测通过：LLM 自主选择 gitnexus_context → gitnexus_impact → grep_search（补充搜索），工具组合合理。附带修复：TriggerIndexAsync 死锁 [C85] + analyze 可见进度窗口 | ✅ 复验通过 |
 | D-02 | **跨任务上下文污染**：同一对话框先重构再解释，第二个任务继承第一个任务的 condense 摘要，LLM 继续搜索第一个任务的文件/符号（如 SUMMARY_STATION），dedup 频繁触发 `Skipping duplicate tool call`，解释任务不收敛 | 平台组反馈 + 最新版复现确认 | F1 代码理解 | **HIGH** | ✅ 已修复（H6 TASK_BOUNDARY + Condense 保护区） | **复验通过：同一对话先重构再解释，第二个任务未继承第一个任务搜索行为。** 注：右键命令可能每次创建新对话，TASK_BOUNDARY 未触发但效果达到 | ✅ 复验通过 |
 | D-03 | **流式输出被 Task Completed 替代**：LLM 先流式输出 929 字详细解释（用户可见），再调用 `attempt_completion`（425 字摘要），UI 用 Task Completed 块覆盖了原始流式内容，详细解释丢失 | 界面组反馈 + 最新版复现确认 | F1 代码理解 | **HIGH** | ❌ 最新版仍存在 | **立即修复：A) UI 层 preToolContent 显示在 Task Completed 上方共存 + B) System Prompt 引导对话式/简单任务不调用 attempt_completion** | 🔧 待实施 |
 | D-04 | **回答被推理过滤器完全吞掉（零输出）**：同一会话第二次对话，LLM 返回 924 字回答，全部被 BF-02 推理过滤器判定为 meta-reasoning 并抑制（`Suppressed text as thinking`），用户看到空白 | 最新版复现确认 | F1 代码理解 | **CRITICAL** | ✅ 已修复（hasToolCalls 前置检查） | **已修复：对话式响应绕过推理过滤器** | ✅ 复验通过（文字正常输出） |
@@ -798,6 +816,8 @@ priority: 20
 | D-07 | **幻觉纠正消息泄露给用户**：使用工具后 LLM 文本回答触发 DetectToolExecutionClaim 误判，系统注入的纠正消息被 LLM 当作对话内容回应给用户，暴露内部系统行为（"系统显示了一个警告..."） | 步骤 2.3 验收发现 | F1 代码理解 | **MEDIUM** | ❌ | 步骤 3.4 H2 状态机根治：识别"搜索→分析→回答"阶段，回答阶段纯文本响应视为正常，不触发幻觉检测和 nudge | 🔲 阶段 3 |
 | D-08 | **长会话跨任务上下文混淆**：同一会话执行 5+ 任务后，LLM 将早期任务（如 NURBS）混入后续任务回答（G 指令分组）。TASK_BOUNDARY 对长会话效果有限 | 步骤 2.3 验收发现 | F1 代码理解 | **MEDIUM** | ❌ | 步骤 3.4 H2 状态机 + 步骤 3.6 H6 Condense 保护区进一步优化 | 🔲 阶段 3 |
 | D-09 | **Edit 工具修改文件换行符**：edit 工具将原始 CRLF 文件签名改为 LF，应保持文件原有换行符不变 | 工程师反馈 | F4 跨文件实现 | **HIGH** | ❌ | 步骤 3.1 H3 Edit 诊断路由中修复：edit 操作前检测文件原始换行符并保持一致 | 🔲 阶段 3 |
+| D-10 | **TriggerIndexAsync stdout/stderr 死锁**：analyze 进程 stdout/stderr 被重定向但未读取，管道缓冲区（4KB）写满后进程阻塞，`WaitForExit()` 永不返回。60s 超时也不生效（Task.Run 的 CT 不中断已运行的 WaitForExit） | MCP 透传复测发现 | F1 代码理解 | **HIGH** | ✅ 已修复 [C85] | 改为可见 cmd 窗口（`CreateNoWindow=false`）+ 不重定向 stdout/stderr + 无超时 + 用户可见进度条。窗口标题显示项目名，完成后 5 秒自动关闭 | ✅ 已修复 |
+| D-11 | **McpClient Content-Length byte/char 编码错误**：Content-Length 指定字节数，但 `StreamReader.ReadAsync` 按字符数读取。中文字符（UTF-8 三字节 = 一字符）导致多读 → 吃掉下一条 MCP 消息头部 → `JsonDocument.Parse` 报 `'C' is invalid after a single JSON value`（BytePositionInLine: 14514）→ gitnexus_query/gitnexus_impact 调用失败 → MCP server 断开 | MCP 透传复测发现 | F1/F8 代码理解 | **HIGH** | ✅ 已修复 [C84] | `StreamReader` → 原始 `Stream` 字节级读取：`ReadLineFromStreamAsync`（逐字节读行）+ `ReadExactBytesAsync`（精确读 N 字节）→ `Encoding.UTF8.GetString` 解码。修复后 parse error 消除 | ✅ 已修复 |
 
 > **处理原则 [C77]：**
 > - CRITICAL/HIGH：立即修复，进入主线代码
@@ -813,10 +833,10 @@ priority: 20
 >   2. D-03 流式内容保留             ← HIGH，改动小，立即修复
 >
 > 提前实施（从阶段 3 提前，解决 Agent 行为根因）：
->   3. D-01 双层方案：
->      - GitNexus 优先策略            ← 代码理解类任务优先用 gitnexus_context，减少 90% 场景的盲搜迭代
+>   3. D-01 双层方案 [C88 修正]：
+>      - 消除 System Prompt 工具名不对称偏见 ← 根因：prompt 提及 grep_search/find_by_name 但不提及 gitnexus_*。MCP 透传已完成 [C83]，需配合 prompt 修正
 >      - H7 迭代预算感知（原步骤 3.5）← 剩余预算注入 + 到阈值强制总结，兜底 GitNexus 不可用场景
->      - 两者无耦合，可独立实施和测试，互补关系：GitNexus 减少需求，H7 兜底安全网
+>      - 两者无耦合，可独立实施和测试，互补关系：偏见消除让 LLM 自然选 GitNexus，H7 兜底安全网
 >   4. D-02 H6 Condense 保护区（原步骤 3.6）← 压缩时区分任务边界，新任务不继承旧任务搜索细节
 > ```
 

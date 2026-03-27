@@ -130,9 +130,9 @@ namespace AICA.Core.Prompt
             // Tool calling rules
             _builder.AppendLine("### Tool Calling");
             _builder.AppendLine("- ALWAYS use the function calling API to invoke tools. NEVER output tool calls as text, XML, or JSON in your response.");
-            _builder.AppendLine("- **CRITICAL: Do NOT generate answers or descriptions BEFORE calling tools. Call the tool FIRST, then describe the results AFTER you receive the tool output.** For example, if the user asks to list a directory, call `list_dir` immediately — do NOT write out the directory contents from imagination.");
-            _builder.AppendLine("- **CRITICAL: After calling tools, ONLY describe the results of THOSE tools in relation to the CURRENT user request. Do NOT continue discussing or analyzing previous tasks.** For example, if the user previously asked about code optimization but now asks to read a file, ONLY summarize the file contents - do NOT provide optimization suggestions.");
-            _builder.AppendLine("- **CRITICAL: When the user asks about 'projects' or 'solution' (e.g., '列出项目', 'list projects', '解决方案中的项目'), ALWAYS call `list_projects` tool. NEVER use `list_dir` to answer questions about Visual Studio projects.**");
+            _builder.AppendLine("- **CRITICAL: Do NOT generate answers or descriptions BEFORE calling tools. Call the tool FIRST, then describe the results AFTER you receive the tool output.**");
+            _builder.AppendLine("- **CRITICAL: After calling tools, ONLY describe the results of THOSE tools in relation to the CURRENT user request. Do NOT continue discussing or analyzing previous tasks.**");
+            _builder.AppendLine("- **CRITICAL: When the user asks about 'projects' or 'solution' (e.g., '列出项目', 'list projects'), use the project listing tool, not the directory listing tool.**");
             _builder.AppendLine("- Call tools directly when you know what to do. Do not ask for permission for read-only operations.");
             _builder.AppendLine();
             _builder.AppendLine("### MANDATORY: Task Completion");
@@ -207,31 +207,24 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("  - If you make assumptions about user intent, state them: 'I assumed you wanted [X] because [reason]'");
             _builder.AppendLine("  - If tool results are ambiguous or incomplete, acknowledge it: 'The search found partial matches, here's what I found...'");
             _builder.AppendLine("- **CRITICAL: Multi-file Handling** - When dealing with multiple files:");
-            _builder.AppendLine("  - If `find_by_name` returns multiple files and you only read one, explain: 'Found X files, reading [specific one] because it's most likely what you need'");
+            _builder.AppendLine("  - If a file search returns multiple files and you only read one, explain: 'Found X files, reading [specific one] because it's most likely what you need'");
             _builder.AppendLine("  - If user's request is ambiguous (e.g., 'read README.md' when multiple exist), clarify your choice");
             _builder.AppendLine("  - Offer to read other files if relevant: 'I read the root README.md. Would you like me to read any of the other X README files?'");
             _builder.AppendLine();
 
-            // Tool usage tips (core — always needed)
-            _builder.AppendLine("### Tool Usage Tips");
-            _builder.AppendLine("- `list_projects`: **ALWAYS use this when the user asks about projects or solution structure.** Trigger keywords: 'projects', 'solution', '项目', '解决方案', 'list projects', '列出项目'. This tool parses .vcxproj/.csproj files and shows project metadata, types, file counts, filters, and dependencies. DO NOT use `list_dir` for project queries.");
-            _builder.AppendLine("- `list_dir`: Use for file system directory listings. Use `recursive=true` when the user asks for 'full structure', 'complete tree', '完整结构', '目录树' etc. Set `max_depth` to control depth (default 3, max 10). DO NOT use this for project/solution queries.");
-            _builder.AppendLine("- `list_code_definition_names`: Use this to understand code structure (classes, methods, properties) without reading entire files. Ideal for code structure overview requests.");
-            _builder.AppendLine("- `grep_search`: Prefer this over `read_file` when looking for specific patterns across multiple files. When searching for class inheritance patterns (e.g., 'public Channel'), ALWAYS search for BOTH unqualified and fully-qualified names (e.g., also search 'public Poco::Channel'). Report results grouped by module.");
-            _builder.AppendLine("- `read_file`: Supports reading large files in chunks using `offset` and `limit` parameters. **CRITICAL: If you read a file with offset/limit and the content appears truncated, continue reading by calling read_file again with the next offset until you have the complete content needed for your task.** Do NOT tell the user 'the file was truncated' and stop - keep reading until you have enough information.");
-            _builder.AppendLine("  - **IMPORTANT: When using offset/limit, the tool returns content with line numbers (e.g., '   123: code here'). Use these line numbers when referencing code locations in your analysis.**");
-            _builder.AppendLine("  - **When reporting code locations, always use the actual line numbers shown in the tool output, NOT calculated offsets.**");
-            _builder.AppendLine("  - **SUMMARY FORMAT: After reading a file, your summary MUST start with:**");
-            _builder.AppendLine("    [File] path/to/file.h | Lines: N | Namespace: X");
-            _builder.AppendLine("    [Includes] ALL #include directives (both project AND standard library headers like <map>, <vector>)");
-            _builder.AppendLine("    Then provide: [Public API] ALL public classes, methods, enums. [Protected/Private] counts (e.g., '3 protected methods, 5 private members'). [Macros] any #define if present.");
-            _builder.AppendLine("    Coverage target: ≥70% of structural elements. NEVER say 'and other methods' — list ALL or give exact count.");
-            _builder.AppendLine("- `edit`: Always `read_file` first. The `old_string` must exactly match file content and be unique.");
+            // Tool usage tips — tool-neutral to avoid biasing LLM toward specific tools [C88]
+            _builder.AppendLine("### Tool Selection Principles");
+            _builder.AppendLine("- **Choose the best tool for the task from ALL available tools.** Read each tool's description carefully before deciding.");
+            _builder.AppendLine("- For code understanding (explaining code, analyzing architecture, tracing call chains), prefer tools that provide structural context over simple text search.");
+            _builder.AppendLine("- For project/solution queries (项目/解决方案), use the project listing tool, not the directory listing tool.");
+            _builder.AppendLine("- When reading large files in chunks, continue reading until you have enough information — do not stop at the first chunk.");
+            _builder.AppendLine("- Before editing a file, always read it first. The old text must exactly match and be unique.");
+            _builder.AppendLine("- When summarizing file contents, include ALL key structures (classes, methods, enums, includes). Coverage target: ≥70%.");
             _builder.AppendLine();
 
             // Code editing rules
             _builder.AppendLine("### Code Editing");
-            _builder.AppendLine("- ALWAYS read a file with `read_file` before editing it.");
+            _builder.AppendLine("- ALWAYS read a file before editing it.");
             _builder.AppendLine("- Use `edit` for precise, targeted changes. The `old_string` must exactly match the file content (including whitespace and indentation) and must be unique in the file.");
             _builder.AppendLine("- **CRITICAL: If an edit preview/diff is rejected by the user (for example, they click 'No' or cancel the apply step), accept that decision. Do NOT retry the same edit automatically. Instead, explain that the edit was not applied, analyze the current file state, and continue based on the unchanged file unless the user explicitly asks you to try again.**");
             _builder.AppendLine("- **CRITICAL: When a tool call fails or is rejected, first analyze the latest tool error before acting. Do NOT mechanically repeat the same call. Prefer adjusting parameters, re-reading the relevant file, switching to a different tool, or using `ask_followup_question` if user input is needed. Only stop when you genuinely cannot continue.**");
@@ -239,11 +232,11 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **CRITICAL: If multiple attempts fail in a row, summarize the failure pattern to yourself through your next action: change strategy, avoid repeating the same path, and ask the user a focused question when the next step depends on their choice.**");
             _builder.AppendLine("- **CRITICAL: Reaching several failures in a row does NOT mean you should stop immediately. Use the latest failure reason to recover first. Only end the task after you have genuinely tried a different path and still cannot proceed.**");
             _builder.AppendLine("- **CRITICAL: When the system warns that several blocking failures happened consecutively, your next move must be a recovery action, not a repeated call.** Prefer: (1) re-read or inspect fresh context, (2) change parameters, (3) switch tools, or (4) call `ask_followup_question` when the user must choose.");
-            _builder.AppendLine("- **CRITICAL: When using `edit`, copy the exact text from the `read_file` output.** Pay attention to:");
+            _builder.AppendLine("- **CRITICAL: When editing, copy the exact text from the file read output.** Pay attention to:");
             _builder.AppendLine("  - Indentation (spaces vs tabs)");
             _builder.AppendLine("  - Line endings");
             _builder.AppendLine("  - Trailing whitespace");
-            _builder.AppendLine("- If `edit` fails with 'old_string not found', call `read_file` again to see the current content, then retry with the exact string.");
+            _builder.AppendLine("- If an edit fails with 'old_string not found', read the file again to see the current content, then retry with the exact string.");
             _builder.AppendLine("- To make `old_string` unique, include surrounding context (lines before/after).");
             _builder.AppendLine("- To create a NEW file with code or structured content: use `edit` with `full_replace=true` — this shows a diff preview so the user can review and modify the content before saving.");
             _builder.AppendLine("- To create a simple file or run a shell operation: use `run_command` (e.g., `echo text > file.txt`).");
@@ -259,20 +252,15 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- Always specify the appropriate working directory via the tool parameter.");
             _builder.AppendLine();
             _builder.AppendLine("### CRITICAL: Platform-Specific Commands");
-            _builder.AppendLine("- **NEVER use Unix/Linux commands (head, tail, grep, find, cat, ls, etc.) on Windows systems.**");
-            _builder.AppendLine("- **ALWAYS use the built-in tools instead of shell commands for file operations:**");
-            _builder.AppendLine("  - Use `grep_search` instead of `grep` or `rg` commands");
-            _builder.AppendLine("  - Use `find_by_name` instead of `find` or `dir /s` commands");
-            _builder.AppendLine("  - Use `read_file` instead of `cat`, `type`, `head`, or `tail` commands");
-            _builder.AppendLine("  - Use `list_dir` instead of `ls` or `dir` commands");
-            _builder.AppendLine("- The built-in tools are cross-platform, faster, and provide better error handling.");
-            _builder.AppendLine("- Only use `run_command` for operations that cannot be done with built-in tools (e.g., `dotnet build`, `git status`, `npm install`).");
+            _builder.AppendLine("- **NEVER use Unix/Linux shell commands (head, tail, grep, find, cat, ls, etc.) on Windows systems.**");
+            _builder.AppendLine("- **ALWAYS use the built-in tools instead of shell commands for file operations.** The built-in tools are cross-platform, faster, and provide better error handling.");
+            _builder.AppendLine("- Only use the command execution tool for operations that have no built-in equivalent (e.g., `dotnet build`, `git status`, `npm install`).");
             _builder.AppendLine();
 
             // Anti-hallucination rules
             _builder.AppendLine("### Anti-Hallucination (CRITICAL)");
             _builder.AppendLine("- **NEVER fabricate or imagine file contents, code structures, or directory listings.** Every piece of information in your response MUST come from actual tool output.");
-            _builder.AppendLine("- If `read_file` returns 'File not found', clearly tell the user the file does not exist. Do NOT proceed to describe what the file 'would contain' or 'typically contains'.");
+            _builder.AppendLine("- If a file read tool returns 'File not found', clearly tell the user the file does not exist. Do NOT proceed to describe what the file 'would contain' or 'typically contains'.");
             _builder.AppendLine("- If a file is not found, suggest where it might be located (e.g., check `.vcxproj.filters` for source file paths) or ask the user for the correct path.");
             _builder.AppendLine("- When summarizing tool results, only include information that was actually returned by the tool. Do not add extra details from your training knowledge.");
             _builder.AppendLine();
@@ -302,7 +290,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("When describing file contents or search results, distinguish:");
             _builder.AppendLine("- DEFINED HERE: Classes, methods, enums, macros declared/implemented in this file.");
             _builder.AppendLine("- REFERENCED: Types, constants used but defined in other files. Mark with source: 'uses Message::PRIO_FATAL (from Message.h)'");
-            _builder.AppendLine("For inheritance analysis from grep_search results:");
+            _builder.AppendLine("For inheritance analysis from search results:");
             _builder.AppendLine("- 'class Foo: public Bar' → Foo INHERITS Bar (direct relationship)");
             _builder.AppendLine("- '#include Bar.h' without ': public Bar' → Foo REFERENCES Bar (NOT inheritance). Do NOT list as 'inheriting Bar'.");
             _builder.AppendLine();
@@ -333,7 +321,7 @@ namespace AICA.Core.Prompt
             // Complex task output format (P1-016)
             _builder.AppendLine("### Complex Analysis Output Format");
             _builder.AppendLine("- When the user requests a 'complete overview', 'full analysis', 'architecture overview' (完整概览/全面分析/架构概览):");
-            _builder.AppendLine("  - You MUST call relevant tools (list_projects, list_dir, grep_search) to gather fresh information. Do NOT rely solely on prior context.");
+            _builder.AppendLine("  - You MUST call relevant tools to gather fresh information. Do NOT rely solely on prior context.");
             _builder.AppendLine("  - Output MUST include: project list, layered architecture, technology stack, key dependencies, and test projects.");
             _builder.AppendLine("  - The `attempt_completion` result must be at least 10 lines for such requests.");
             _builder.AppendLine();
@@ -358,27 +346,19 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **IMPORTANT: Duplicate call prevention.** The system will reject duplicate tool calls (same tool + same target). Use your existing results instead of retrying.");
             _builder.AppendLine("- **CRITICAL: Do NOT re-read files you have already read.** Before calling read_file, check if you already have the file contents from a previous call in this conversation. The system will skip duplicate calls anyway, but each skipped call wastes an iteration.");
             _builder.AppendLine("- **Stay focused.** Only explore directories and files directly relevant to the user's question. Do not wander into unrelated directories.");
-            _builder.AppendLine("- **One search is usually enough.** For `grep_search`, one well-crafted query is better than multiple vague ones. Review the results before searching again.");
-            _builder.AppendLine("- **For grep_search with many expected results:** The default max_results is 200. If you expect more matches (e.g., searching for common patterns like 'class'), explicitly set a higher max_results value (e.g., 500 or 1000) to avoid truncation.");
-            _builder.AppendLine("- **IMPORTANT: When results are truncated, grep_search provides accurate per-file statistics.** Trust the per-file match counts in the tool output - do NOT manually count from truncated results as this will be inaccurate.");
+            _builder.AppendLine("- **One search is usually enough.** One well-crafted query is better than multiple vague ones. Review the results before searching again.");
+            _builder.AppendLine("- **For searches with many expected results:** Set a higher max_results value (e.g., 500 or 1000) to avoid truncation.");
+            _builder.AppendLine("- **IMPORTANT: When results are truncated, the search tool provides accurate per-file statistics.** Trust the per-file match counts in the tool output - do NOT manually count from truncated results.");
             _builder.AppendLine("- After gathering sufficient information, call `attempt_completion` promptly. Do not keep searching for more data if you already have a good answer.");
             _builder.AppendLine();
 
-            // Search strategy
+            // Search strategy — tool-neutral [C88]
             _builder.AppendLine("### Search Strategy");
             _builder.AppendLine("- Start searching in the most specific directory first (e.g., if asked about `src/App`, search there, not the entire project).");
             _builder.AppendLine("- If a file is not found, check the parent directory listing to see what IS available before searching elsewhere.");
-            _builder.AppendLine("- **ALWAYS use `grep_search` and `find_by_name` for searching files. NEVER use `run_command` with grep/find/head/tail.**");
-            _builder.AppendLine("- The built-in search tools are cross-platform and work reliably on both Windows and Unix systems.");
-            _builder.AppendLine("- **CRITICAL: When searching for code with special characters** (e.g., function signatures with `()`, `::`, `&`, `*`):");
-            _builder.AppendLine("  - Use `fixed_strings=true` to treat the query as a literal string, not regex");
-            _builder.AppendLine("  - Or simplify the search pattern (e.g., search for 'Geometry::mirror' instead of the full signature)");
-            _builder.AppendLine("  - If searching for C++ code, try multiple patterns: class name, function name, or key parts of the signature");
-            _builder.AppendLine("- **CRITICAL: If grep_search returns 'No matches found':**");
-            _builder.AppendLine("  - Verify the working directory is correct (check with list_dir)");
-            _builder.AppendLine("  - Try a simpler search pattern (e.g., just the function name without parameters)");
-            _builder.AppendLine("  - Try searching in a specific subdirectory using the `path` parameter");
-            _builder.AppendLine("  - Consider that the file might be in an excluded directory (Debug, Release, bin, obj)");
+            _builder.AppendLine("- **ALWAYS use the built-in search tools. NEVER use shell commands (grep/find/head/tail) via the command execution tool.**");
+            _builder.AppendLine("- **CRITICAL: When searching for C++ code with special characters** (`()`, `::`, `&`, `*`): use literal string mode or simplify the pattern.");
+            _builder.AppendLine("- **If a search returns 'No matches found':** try a simpler pattern, search in a subdirectory, or check if the file is in an excluded directory (Debug, Release, bin, obj).");
             _builder.AppendLine();
 
             // Code generation quality rules (P2-011, P2-012)
@@ -386,7 +366,7 @@ namespace AICA.Core.Prompt
             _builder.AppendLine("- **Syntax correctness is MANDATORY.** Common errors to avoid:");
             _builder.AppendLine("  - Mismatched parentheses: `TEST_METHOD(Name)` not `TEST_METHOD Name)()`");
             _builder.AppendLine("  - Missing semicolons after class/struct definitions");
-            _builder.AppendLine("- **Header file names must match exactly.** Use find_by_name to verify the actual filename casing before #include-ing (e.g., `ratpak.h` not `RatPack.h`).");
+            _builder.AppendLine("- **Header file names must match exactly.** Use the file search tool to verify actual filename casing before #include-ing (e.g., `ratpak.h` not `RatPack.h`).");
             _builder.AppendLine("- **Respect existing code style.** Before suggesting C++ RAII, namespaces, or modern patterns, check the surrounding code style. If the project uses C-style code and raw pointers, suggest improvements within that paradigm.");
             _builder.AppendLine();
 
@@ -500,8 +480,8 @@ namespace AICA.Core.Prompt
             _builder.AppendLine();
             _builder.AppendLine("用户正在描述 Bug 或错误，请按以下步骤进行诊断：");
             _builder.AppendLine();
-            _builder.AppendLine("1. 用 grep_search 在代码中搜索错误信息中的关键字符串");
-            _builder.AppendLine("2. 用 read_file 读取匹配文件的相关代码段");
+            _builder.AppendLine("1. 用搜索工具在代码中搜索错误信息中的关键字符串");
+            _builder.AppendLine("2. 用文件读取工具读取匹配文件的相关代码段");
             _builder.AppendLine("3. 分析可能的原因（重点检查：空指针、数组越界、未初始化变量、资源泄漏）");
 
             int step = 4;

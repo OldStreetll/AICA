@@ -317,6 +317,8 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new ListProjectsTool());
 
             // Register GitNexus MCP bridge tools (graceful degradation: failure here doesn't affect built-in tools)
+            // Phase 1: Register hardcoded definitions synchronously (immediate availability)
+            // Phase 2: Upgrade to native MCP definitions in background (better descriptions + parameters)
             try
             {
                 var grepTool = new GrepSearchTool();
@@ -331,7 +333,30 @@ namespace AICA.ToolWindows
                     _toolDispatcher.RegisterTool(tool);
                 }
 
-                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: registered {gitNexusTools.Count} bridge tools");
+                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: registered {gitNexusTools.Count} bridge tools (hardcoded)");
+
+                // Background upgrade: replace with native MCP definitions when available
+                var dispatcher = _toolDispatcher;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var nativeTools = await McpBridgeTool.CreateAllToolsAsync(
+                            GitNexusProcessManager.Instance, grepFallback).ConfigureAwait(false);
+                        if (nativeTools.Count > 0)
+                        {
+                            foreach (var tool in nativeTools)
+                            {
+                                dispatcher.RegisterTool(tool); // overwrites hardcoded definitions
+                            }
+                            System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: upgraded to {nativeTools.Count} native MCP definitions");
+                        }
+                    }
+                    catch (Exception ex2)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: native upgrade failed (keeping hardcoded): {ex2.Message}");
+                    }
+                });
             }
             catch (Exception ex)
             {

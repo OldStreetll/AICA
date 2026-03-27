@@ -24,7 +24,7 @@ namespace AICA.Core.Agent
         private volatile GitNexusState _state = GitNexusState.NotStarted;
 
         private const int StartTimeoutMs = 15000;
-        private const int IndexTimeoutMs = 60000;
+        // Index timeout removed — analyze runs in a visible console window with no time limit
         private const string STARTUP_SIGNAL = "MCP server starting";
 
         // Bundled GitNexus entry point (relative to tools/gitnexus/ in AICA project)
@@ -248,38 +248,50 @@ namespace AICA.Core.Agent
             try
             {
                 var (cmd, _, analyzeArgs) = ResolveGitNexusPath();
+                var repoName = Path.GetFileName(repoRoot);
+
+                // Launch in a visible console window so users see the progress bar.
+                // No stdout/stderr redirection — ANSI escape codes render correctly in cmd.
+                // No timeout — large repos may take several minutes with sequential fallback.
                 var psi = new ProcessStartInfo
                 {
-                    FileName = cmd,
-                    Arguments = $"{analyzeArgs} \"{repoRoot}\"",
+                    FileName = "cmd.exe",
+                    Arguments = $"/c title [AICA] GitNexus Indexing: {repoName} & echo. & echo   [AICA] 正在索引代码库，首次索引可能需要几分钟... & echo   Repository: {repoRoot} & echo. & {cmd} {analyzeArgs} \"{repoRoot}\" & echo. & echo   [AICA] 索引完成! & timeout /t 5 /nobreak >nul",
                     WorkingDirectory = repoRoot,
                     UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
+                    CreateNoWindow = false
                 };
 
-                using (var process = new Process { StartInfo = psi })
-                using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] GitNexus: starting analyze in visible console for {repoRoot}");
+
+                using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
                 {
-                    timeoutCts.CancelAfter(IndexTimeoutMs);
+                    var exitTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    process.Exited += (s, e) =>
+                    {
+                        try { exitTcs.TrySetResult(process.ExitCode); }
+                        catch { exitTcs.TrySetResult(-1); }
+                    };
 
                     process.Start();
 
-                    var exitTask = Task.Run(() =>
+                    // Support cancellation (e.g., VS shutdown) — kill the process gracefully
+                    using (ct.Register(() =>
                     {
-                        process.WaitForExit();
-                        return process.ExitCode;
-                    }, timeoutCts.Token);
-
-                    var exitCode = await exitTask.ConfigureAwait(false);
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] GitNexus analyze completed: exit={exitCode}, repo={repoRoot}");
+                        exitTcs.TrySetCanceled();
+                        try { if (!process.HasExited) process.Kill(); } catch { }
+                    }))
+                    {
+                        var exitCode = await exitTcs.Task.ConfigureAwait(false);
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] GitNexus analyze completed: exit={exitCode}, repo={repoRoot}");
+                    }
                 }
             }
             catch (OperationCanceledException)
             {
-                System.Diagnostics.Debug.WriteLine("[AICA] GitNexus analyze timed out");
+                System.Diagnostics.Debug.WriteLine("[AICA] GitNexus analyze cancelled");
             }
             catch (Exception ex)
             {

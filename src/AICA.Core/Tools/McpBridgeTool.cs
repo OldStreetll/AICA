@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
@@ -134,6 +135,176 @@ namespace AICA.Core.Tools
                 CreateRenameTool(processManager),
                 CreateCypherTool(processManager)
             };
+        }
+
+        /// <summary>
+        /// Create GitNexus bridge tools using native MCP tool definitions from tools/list.
+        /// Falls back to hardcoded definitions if ListToolsAsync fails.
+        /// </summary>
+        public static async Task<IReadOnlyList<McpBridgeTool>> CreateAllToolsAsync(
+            IGitNexusProcessManager processManager,
+            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback = null,
+            CancellationToken ct = default)
+        {
+            if (processManager == null)
+                throw new ArgumentNullException(nameof(processManager));
+
+            // Try to get native definitions from MCP server
+            List<McpToolDefinition> mcpDefs = null;
+            try
+            {
+                var ready = await processManager.EnsureRunningAsync(ct).ConfigureAwait(false);
+                var client = ready ? processManager.Client : null;
+                if (client != null)
+                {
+                    mcpDefs = await client.ListToolsAsync(ct).ConfigureAwait(false);
+                    System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: ListToolsAsync returned {mcpDefs.Count} tools");
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: ListToolsAsync failed, using hardcoded fallback: {ex.Message}");
+            }
+
+            // If we got native definitions, build tools from them
+            if (mcpDefs != null && mcpDefs.Count > 0)
+            {
+                var mcpLookup = mcpDefs.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+                return BuildToolsFromNativeDefinitions(mcpLookup, processManager, grepFallback);
+            }
+
+            // Fallback to hardcoded definitions
+            return CreateAllTools(processManager, grepFallback);
+        }
+
+        /// <summary>
+        /// Build bridge tools using native MCP tool definitions.
+        /// Preserves AICA-specific ToolMetadata (Category, Tags, Timeout, etc.).
+        /// </summary>
+        private static IReadOnlyList<McpBridgeTool> BuildToolsFromNativeDefinitions(
+            Dictionary<string, McpToolDefinition> mcpLookup,
+            IGitNexusProcessManager pm,
+            Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>> grepFallback)
+        {
+            // Map: AICA tool name → MCP tool name → ToolMetadata factory
+            var toolSpecs = new[]
+            {
+                new { AicaName = "gitnexus_context",        McpName = "context",        Category = ToolCategory.Analysis, Tags = new[] { "search", "read", "context", "gitnexus" },  Fallback = grepFallback, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_impact",         McpName = "impact",         Category = ToolCategory.Analysis, Tags = new[] { "search", "analysis", "gitnexus" },         Fallback = grepFallback, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_query",          McpName = "query",          Category = ToolCategory.Search,   Tags = new[] { "search", "gitnexus" },                     Fallback = grepFallback, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_detect_changes", McpName = "detect_changes", Category = ToolCategory.Analysis, Tags = new[] { "search", "analysis", "gitnexus" },         Fallback = (Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>>)null, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                new { AicaName = "gitnexus_rename",         McpName = "rename",         Category = ToolCategory.FileWrite, Tags = new[] { "modify", "refactor", "gitnexus" },        Fallback = (Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>>)null, IsModifying = true,  RequiresConfirmation = true,  Timeout = 60 },
+                new { AicaName = "gitnexus_cypher",         McpName = "cypher",         Category = ToolCategory.Analysis, Tags = new[] { "search", "analysis", "gitnexus" },         Fallback = (Func<ToolCall, IAgentContext, IUIContext, CancellationToken, Task<ToolResult>>)null, IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+            };
+
+            var tools = new List<McpBridgeTool>();
+            foreach (var spec in toolSpecs)
+            {
+                // Use native definition if available, otherwise skip (caller already has hardcoded fallback)
+                if (!mcpLookup.TryGetValue(spec.McpName, out var mcpDef))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: No native definition for '{spec.McpName}', skipping");
+                    continue;
+                }
+
+                var nativeDesc = mcpDef.Description ?? spec.AicaName;
+                // Truncate overly long descriptions to prevent function calling token overflow
+                if (nativeDesc.Length > 4000)
+                {
+                    nativeDesc = nativeDesc.Substring(0, 4000) + "...";
+                }
+
+                var def = new ToolDefinition
+                {
+                    Name = spec.AicaName,
+                    Description = nativeDesc,
+                    Parameters = ConvertMcpSchema(mcpDef.InputSchema)
+                };
+
+                var meta = new ToolMetadata
+                {
+                    Name = spec.AicaName,
+                    Description = nativeDesc,
+                    Category = spec.Category,
+                    Tags = spec.Tags,
+                    TimeoutSeconds = spec.Timeout,
+                    RequiresNetwork = false,
+                    IsModifying = spec.IsModifying,
+                    RequiresConfirmation = spec.RequiresConfirmation
+                };
+
+                tools.Add(new McpBridgeTool(spec.AicaName, spec.McpName, nativeDesc, def, meta, pm, spec.Fallback));
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: Built {tools.Count} tools from native MCP definitions");
+            return tools;
+        }
+
+        /// <summary>
+        /// Convert MCP JSON Schema inputSchema to AICA ToolParameters.
+        /// </summary>
+        private static ToolParameters ConvertMcpSchema(JsonElement inputSchema)
+        {
+            var parameters = new ToolParameters
+            {
+                Properties = new Dictionary<string, ToolParameterProperty>(),
+                Required = Array.Empty<string>()
+            };
+
+            if (inputSchema.ValueKind != JsonValueKind.Object)
+                return parameters;
+
+            // Extract required array
+            if (inputSchema.TryGetProperty("required", out var reqArray) &&
+                reqArray.ValueKind == JsonValueKind.Array)
+            {
+                parameters.Required = reqArray.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String)
+                    .Select(e => e.GetString())
+                    .ToArray();
+            }
+
+            // Extract properties
+            if (inputSchema.TryGetProperty("properties", out var props) &&
+                props.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in props.EnumerateObject())
+                {
+                    var paramProp = new ToolParameterProperty();
+
+                    if (prop.Value.TryGetProperty("type", out var typeEl))
+                        paramProp.Type = typeEl.GetString();
+
+                    if (prop.Value.TryGetProperty("description", out var descEl))
+                        paramProp.Description = descEl.GetString();
+
+                    if (prop.Value.TryGetProperty("default", out var defEl))
+                    {
+                        paramProp.Default = defEl.ValueKind switch
+                        {
+                            JsonValueKind.String => defEl.GetString(),
+                            JsonValueKind.Number => defEl.GetDouble(),
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => defEl.GetRawText()
+                        };
+                    }
+
+                    if (prop.Value.TryGetProperty("enum", out var enumEl) &&
+                        enumEl.ValueKind == JsonValueKind.Array)
+                    {
+                        paramProp.Enum = enumEl.EnumerateArray()
+                            .Where(e => e.ValueKind == JsonValueKind.String)
+                            .Select(e => e.GetString())
+                            .ToArray();
+                    }
+
+                    parameters.Properties[prop.Name] = paramProp;
+                }
+            }
+
+            return parameters;
         }
 
         private static McpBridgeTool CreateContextTool(

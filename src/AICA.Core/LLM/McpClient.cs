@@ -11,6 +11,23 @@ using System.Threading.Tasks;
 namespace AICA.Core.LLM
 {
     /// <summary>
+    /// Native MCP tool definition from tools/list.
+    /// </summary>
+    public sealed class McpToolDefinition
+    {
+        public string Name { get; }
+        public string Description { get; }
+        public JsonElement InputSchema { get; }
+
+        public McpToolDefinition(string name, string description, JsonElement inputSchema)
+        {
+            Name = name;
+            Description = description;
+            InputSchema = inputSchema;
+        }
+    }
+
+    /// <summary>
     /// Result of an MCP tool call.
     /// </summary>
     public sealed class McpToolResult
@@ -38,7 +55,7 @@ namespace AICA.Core.LLM
     public sealed class McpClient : IDisposable
     {
         private readonly StreamWriter _writer;
-        private readonly StreamReader _reader;
+        private readonly Stream _inputStream; // raw byte stream — avoids StreamReader byte/char mismatch
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private int _nextId;
         private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending =
@@ -57,6 +74,8 @@ namespace AICA.Core.LLM
         /// <summary>
         /// Create McpClient from process stdin/stdout streams.
         /// Starts background read loop immediately.
+        /// Uses raw byte stream for reading to handle Content-Length (bytes) correctly
+        /// with UTF-8 multi-byte characters.
         /// </summary>
         public McpClient(Stream processStdin, Stream processStdout)
         {
@@ -64,7 +83,7 @@ namespace AICA.Core.LLM
             if (processStdout == null) throw new ArgumentNullException(nameof(processStdout));
 
             _writer = new StreamWriter(processStdin, new UTF8Encoding(false)) { AutoFlush = true };
-            _reader = new StreamReader(processStdout, Encoding.UTF8);
+            _inputStream = processStdout;
             _readLoop = Task.Run(() => ReadLoopAsync(_readCts.Token));
         }
 
@@ -131,6 +150,36 @@ namespace AICA.Core.LLM
             }
         }
 
+        /// <summary>
+        /// Retrieve native tool definitions from the MCP server via tools/list.
+        /// </summary>
+        public async Task<List<McpToolDefinition>> ListToolsAsync(CancellationToken ct)
+        {
+            var result = await SendRequestAsync("tools/list", new Dictionary<string, object>(), ct).ConfigureAwait(false);
+            var tools = new List<McpToolDefinition>();
+
+            if (result.ValueKind == JsonValueKind.Undefined)
+                return tools;
+
+            // MCP tools/list returns { tools: [ { name, description, inputSchema }, ... ] }
+            if (result.TryGetProperty("tools", out var toolsArray) &&
+                toolsArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in toolsArray.EnumerateArray())
+                {
+                    var name = item.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    var description = item.TryGetProperty("description", out var d) ? d.GetString() : "";
+                    var inputSchema = item.TryGetProperty("inputSchema", out var s) ? s.Clone() : default;
+
+                    tools.Add(new McpToolDefinition(name, description, inputSchema));
+                }
+            }
+
+            return tools;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
@@ -148,7 +197,7 @@ namespace AICA.Core.LLM
             }
 
             try { _writer?.Dispose(); } catch { }
-            try { _reader?.Dispose(); } catch { }
+            try { _inputStream?.Dispose(); } catch { }
             _writeLock?.Dispose();
             _readCts?.Dispose();
         }
@@ -232,10 +281,50 @@ namespace AICA.Core.LLM
             }
         }
 
+        /// <summary>
+        /// Read a single line (up to \n) from the raw byte stream. Returns null on EOF.
+        /// </summary>
+        private async Task<string> ReadLineFromStreamAsync()
+        {
+            var bytes = new List<byte>(256);
+            var buf = new byte[1];
+            while (true)
+            {
+                var read = await _inputStream.ReadAsync(buf, 0, 1).ConfigureAwait(false);
+                if (read == 0) return bytes.Count > 0 ? Encoding.UTF8.GetString(bytes.ToArray()) : null;
+                if (buf[0] == (byte)'\n')
+                {
+                    // Strip trailing \r
+                    if (bytes.Count > 0 && bytes[bytes.Count - 1] == (byte)'\r')
+                        bytes.RemoveAt(bytes.Count - 1);
+                    return Encoding.UTF8.GetString(bytes.ToArray());
+                }
+                bytes.Add(buf[0]);
+            }
+        }
+
+        /// <summary>
+        /// Read exactly <paramref name="count"/> bytes from the raw stream. Returns null on premature EOF.
+        /// </summary>
+        private async Task<byte[]> ReadExactBytesAsync(int count)
+        {
+            var buffer = new byte[count];
+            var totalRead = 0;
+            while (totalRead < count)
+            {
+                var read = await _inputStream.ReadAsync(buffer, totalRead, count - totalRead).ConfigureAwait(false);
+                if (read == 0) return null;
+                totalRead += read;
+            }
+            return buffer;
+        }
+
         private async Task<string> ReadMessageAsync(CancellationToken ct)
         {
-            // Try Content-Length framing first, fall back to newline-delimited
-            var headerLine = await _reader.ReadLineAsync().ConfigureAwait(false);
+            // Read from raw byte stream to avoid StreamReader byte/char mismatch.
+            // Content-Length specifies bytes; reading chars via StreamReader would over-read
+            // when the response contains multi-byte UTF-8 characters (e.g., Chinese text).
+            var headerLine = await ReadLineFromStreamAsync().ConfigureAwait(false);
             if (headerLine == null) return null;
 
             if (headerLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
@@ -246,18 +335,12 @@ namespace AICA.Core.LLM
                     return null;
 
                 // Read empty line separator
-                await _reader.ReadLineAsync().ConfigureAwait(false);
+                await ReadLineFromStreamAsync().ConfigureAwait(false);
 
-                // Read exact content
-                var buffer = new char[contentLength];
-                var totalRead = 0;
-                while (totalRead < contentLength)
-                {
-                    var read = await _reader.ReadAsync(buffer, totalRead, contentLength - totalRead).ConfigureAwait(false);
-                    if (read == 0) return null;
-                    totalRead += read;
-                }
-                return new string(buffer, 0, totalRead);
+                // Read exactly contentLength BYTES, then decode to string
+                var rawBytes = await ReadExactBytesAsync(contentLength).ConfigureAwait(false);
+                if (rawBytes == null) return null;
+                return Encoding.UTF8.GetString(rawBytes);
             }
 
             // Newline-delimited: the line itself is the JSON message
