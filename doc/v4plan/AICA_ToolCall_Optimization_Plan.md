@@ -274,9 +274,9 @@ Phase C → WorkPlan 步骤 3.10 Part 3（+3 天）:
 | 优化方向 | WorkPlan 步骤 | 修正编号 | 状态 |
 |---------|-------------|---------|------|
 | 方向 1: 去除工具过滤 | 步骤 3.9（M1 反馈修复 + Phase A） | C93/C96 | 待执行 |
-| 方向 2: 移除 AddToolDescriptions | 步骤 3.10（集成测试 + Phase B） | C94/C97 | 待执行（需隔离测试） |
+| 方向 2: 移除 AddToolDescriptions | 步骤 3.10（集成测试 + Phase B） | C94/C97 | 🔲 部分完成（SystemPromptBuilder.cs:843 仍在调用 AddToolDescriptions，需隔离测试后移除） |
 | 方向 3: 移除优先策略偏见 | 步骤 3.9（M1 反馈修复 + Phase A） | C92/C93/C96 | 待执行（覆盖 C91） |
-| 方向 4: 消除原生描述竞态 | 步骤 3.10（集成测试 + Phase B） | C94/C97 | 待执行 |
+| 方向 4: 消除原生描述竞态 | 步骤 3.10（集成测试 + Phase B） | C94/C97 | ✅ 已完成（ToolDispatcher.cs WaitForMcpUpgradeAsync 实现） |
 | 方向 5: 精简 System Prompt | 步骤 3.10（集成测试 + Phase C） | C95/C97 | 待执行（方向 1-4 完成后） |
 
 ---

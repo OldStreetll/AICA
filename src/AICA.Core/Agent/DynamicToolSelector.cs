@@ -5,29 +5,18 @@ using System.Linq;
 namespace AICA.Core.Agent
 {
     /// <summary>
-    /// Selects tools based on user intent and GitNexus availability.
-    /// Trust-based design: LLM sees tool descriptions and decides which to use.
+    /// Selects tools based on user intent.
+    /// Trust-based design: LLM sees all tool descriptions and decides which to use.
     /// Only conversation intent (greetings) uses a minimal tool set.
-    /// When GitNexus is available, overlapping built-in tools are hidden.
     /// </summary>
     public static class DynamicToolSelector
     {
-        // Core tools always included (conversation-only minimal set)
-        private static readonly HashSet<string> CoreTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        // Minimal tool set for pure conversation (greetings don't need 14 tools)
+        private static readonly HashSet<string> ConversationTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "attempt_completion",
             "ask_followup_question"
         };
 
-        // Tools that overlap with GitNexus capabilities — hidden when GitNexus is available
-        // to reduce tool competition and improve GitNexus selection rate
-        private static readonly HashSet<string> GitNexusOverlapTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "list_code_definition_names",   // gitnexus_context provides richer structural info
-            "find_by_name"                  // gitnexus_query covers file/symbol lookup
-        };
-
-        // Intent classification keywords
         private static readonly string[] ConversationKeywords = new[]
         {
             "你好", "hello", "hi", "hey", "谢谢", "thanks", "再见", "bye"
@@ -62,11 +51,8 @@ namespace AICA.Core.Agent
         };
 
         /// <summary>
-        /// Select tools based on user request intent and GitNexus availability.
-        /// Trust-based design: tools are visible to the LLM so it can choose based
-        /// on its own reasoning and the tool descriptions.
-        /// When GitNexus is available, overlapping built-in tools are hidden to
-        /// reduce competition and improve GitNexus selection rate.
+        /// Select tools for the LLM. Only filters for conversation intent.
+        /// All other intents get the full tool set — trust the LLM to choose.
         /// </summary>
         public static IReadOnlyList<ToolDefinition> SelectTools(
             string userRequest,
@@ -77,21 +63,15 @@ namespace AICA.Core.Agent
             if (allTools == null || allTools.Count == 0)
                 return allTools;
 
-            // Only filter for pure conversation intent (greetings don't need 15 tools)
             var intent = ClassifyIntent(userRequest);
             if (intent == "conversation")
-                return allTools.Where(t => CoreTools.Contains(t.Name)).ToList();
+                return allTools.Where(t => ConversationTools.Contains(t.Name)).ToList();
 
-            // When GitNexus is available, hide overlapping built-in tools
-            if (gitNexusAvailable)
-                return allTools.Where(t => !GitNexusOverlapTools.Contains(t.Name)).ToList();
-
-            // GitNexus unavailable: return full tool set (keep built-in fallbacks)
             return allTools;
         }
 
         /// <summary>
-        /// Classify user request intent for tool selection.
+        /// Classify user request intent.
         /// </summary>
         internal static string ClassifyIntent(string userRequest)
         {
@@ -100,27 +80,21 @@ namespace AICA.Core.Agent
 
             var lower = userRequest.ToLowerInvariant();
 
-            // Short greetings → conversation
             if (userRequest.Length < 15 && ConversationKeywords.Any(k => lower.Contains(k)))
                 return "conversation";
 
-            // Bug fix intent (before modify — "fix" is in both, but bug keywords take priority)
             if (BugFixKeywords.Any(k => lower.Contains(k)))
                 return "bug_fix";
 
-            // Modification intent
             if (ModifyKeywords.Any(k => lower.Contains(k)))
                 return "modify";
 
-            // Command execution intent
             if (CommandKeywords.Any(k => lower.Contains(k)))
                 return "command";
 
-            // Analysis intent
             if (AnalyzeKeywords.Any(k => lower.Contains(k)))
                 return "analyze";
 
-            // Default: read (covers most simple questions)
             return "read";
         }
     }

@@ -52,8 +52,9 @@ namespace AICA.Commands
                     || ext == ".hpp" || ext == ".hxx";
 
                 var codeBlockLang = isCpp ? "cpp" : contentType.ToLowerInvariant();
+                // GitNexus tool guidance removed — MCP Resources (gitnexus://setup) now handles this
                 var extraGuidance = isCpp
-                    ? "。如有 GitNexus 工具可用，请优先使用 gitnexus_context 获取函数上下文。请说明代码所属模块和关键分支含义"
+                    ? "。请说明代码所属模块和关键分支含义"
                     : "";
 
                 var prompt = $"请用中文详细解释以下来自文件 `{fileName}` 的 {contentType} 代码，包括其功能、逻辑和关键细节{extraGuidance}：\n\n```{codeBlockLang}\n{selectedText}\n```";

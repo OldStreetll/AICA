@@ -73,9 +73,14 @@ namespace AICA.Core.Tools
                         {
                             Type = "integer",
                             Description = "Maximum time to wait for command completion in seconds. Default is 30."
+                        },
+                        ["description"] = new ToolParameterProperty
+                        {
+                            Type = "string",
+                            Description = "Brief description of what this command does and why you are running it"
                         }
                     },
-                    Required = new[] { "command" }
+                    Required = new[] { "command", "description" }
                 }
             };
         }

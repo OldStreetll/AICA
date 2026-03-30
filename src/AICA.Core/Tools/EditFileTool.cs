@@ -13,7 +13,7 @@ namespace AICA.Core.Tools
     public class EditFileTool : IAgentTool
     {
         public string Name => "edit";
-        public string Description => "Edit a file by replacing text, or create a new file with full_replace=true. CRITICAL: The old_string must match EXACTLY (including all whitespace, line breaks, and indentation). Use read_file first to see the exact content. Set full_replace=true to replace entire file content or create a new file if it does not exist.";
+        public string Description => "Edit a file by replacing text, or create a new file with full_replace=true. The edit will fail if old_string is not found or is not unique in the file. Use read_file first to see the exact content.";
 
         public ToolMetadata GetMetadata()
         {
@@ -122,9 +122,13 @@ namespace AICA.Core.Tools
                 {
                     // Normal edit mode: require old_string matching
 
-                    // Normalize line endings to handle \r\n vs \n differences
+                    // Detect original line ending style to preserve it after edit [D-09]
+                    var originalLineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
+
+                    // Normalize line endings for matching (compare in \n space)
                     var normalizedContent = NormalizeLineEndings(content);
                     var normalizedOldString = NormalizeLineEndings(oldString);
+                    var normalizedNewString = NormalizeLineEndings(newString);
 
                     // Check old_string exists — if not, run diagnostic routing (H3)
                     if (!normalizedContent.Contains(normalizedOldString))
@@ -138,12 +142,14 @@ namespace AICA.Core.Tools
                             case EditDiagnosisKind.WhitespaceMismatch:
                                 // Auto-fix: use the actual segment found by diagnosis
                                 newContent = replaceAll
-                                    ? normalizedContent.Replace(diagnosis.ActualSegment, newString)
-                                    : ReplaceFirst(normalizedContent, diagnosis.ActualSegment, newString);
-                                goto applyEdit; // skip uniqueness check (already located)
+                                    ? normalizedContent.Replace(diagnosis.ActualSegment, normalizedNewString)
+                                    : ReplaceFirst(normalizedContent, diagnosis.ActualSegment, normalizedNewString);
+                                // Restore original line endings [D-09]
+                                if (originalLineEnding == "\r\n")
+                                    newContent = newContent.Replace("\n", "\r\n");
+                                goto applyEdit;
 
                             default:
-                                // Return diagnostic message for LLM to self-correct
                                 return ToolResult.Fail(diagnosis.Message);
                         }
                     }
@@ -160,13 +166,17 @@ namespace AICA.Core.Tools
                     }
 
                     // Check if old_string equals new_string
-                    if (oldString == newString)
+                    if (NormalizeLineEndings(oldString) == NormalizeLineEndings(newString))
                         return ToolResult.Fail("old_string and new_string are identical. This is a no-op.");
 
-                    // Apply the edit
+                    // Apply the edit in normalized space
                     newContent = replaceAll
-                        ? normalizedContent.Replace(normalizedOldString, newString)
-                        : ReplaceFirst(normalizedContent, normalizedOldString, newString);
+                        ? normalizedContent.Replace(normalizedOldString, normalizedNewString)
+                        : ReplaceFirst(normalizedContent, normalizedOldString, normalizedNewString);
+
+                    // Restore original line endings [D-09]
+                    if (originalLineEnding == "\r\n")
+                        newContent = newContent.Replace("\n", "\r\n");
                 }
 
                 // Show diff and let user apply changes

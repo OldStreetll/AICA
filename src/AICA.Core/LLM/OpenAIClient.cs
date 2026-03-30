@@ -72,11 +72,26 @@ namespace AICA.Core.LLM
             System.Diagnostics.Debug.WriteLine($"[AICA] Model: {request.Model}");
             System.Diagnostics.Debug.WriteLine($"[AICA] Tools count: {request.Tools?.Count ?? 0}");
             System.Diagnostics.Debug.WriteLine($"[AICA] tool_choice: {request.ToolChoice ?? "(null)"}");
+            System.Diagnostics.Debug.WriteLine($"[AICA] API params: temperature={request.Temperature?.ToString() ?? "NOT_SENT"}, top_p={request.TopP?.ToString() ?? "NOT_SENT"}, top_k=NOT_SENT(removed)");
             System.Diagnostics.Debug.WriteLine($"[AICA] Messages count: {request.Messages?.Count ?? 0}");
             if (requestJson.Length < 5000)
                 System.Diagnostics.Debug.WriteLine($"[AICA] Request JSON: {requestJson}");
             else
                 System.Diagnostics.Debug.WriteLine($"[AICA] Request JSON (truncated): {requestJson.Substring(0, 2000)}...");
+
+            // Diagnostic: dump each tool's name + description length + first 200 chars of parameters JSON
+            if (request.Tools != null)
+            {
+                foreach (var t in request.Tools)
+                {
+                    var paramJson = t.Function.Parameters != null
+                        ? JsonSerializer.Serialize(t.Function.Parameters, _jsonOptions)
+                        : "(null)";
+                    var paramPreview = paramJson.Length > 200 ? paramJson.Substring(0, 200) + "..." : paramJson;
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] TOOL_DEF: {t.Function.Name} | desc={t.Function.Description?.Length ?? 0} chars | params={paramJson.Length} chars | {paramPreview}");
+                }
+            }
 
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, GetChatEndpoint())
             {
@@ -352,9 +367,9 @@ namespace AICA.Core.LLM
                 Model = _options.Model,
                 Messages = new List<RequestMessage>(),
                 MaxTokens = _options.MaxTokens,
-                Temperature = _options.Temperature,
-                TopP = _options.TopP,
-                TopK = _options.TopK,
+                Temperature = _options.Temperature > 0 ? _options.Temperature : (double?)null,
+                TopP = _options.TopP > 0 && _options.TopP < 1.0 ? _options.TopP : (double?)null,
+                // top_k omitted — not part of OpenAI standard API, OpenCode never sends it
                 Stream = _options.Stream
             };
 
@@ -397,6 +412,12 @@ namespace AICA.Core.LLM
                 request.Tools = new List<RequestTool>();
                 foreach (var tool in tools)
                 {
+                    // Use raw MCP schema when available (preserves additionalProperties, nested schemas, etc.)
+                    // Fall back to ToolParameters for native AICA tools
+                    object parameters = tool.RawParametersJson.HasValue
+                        ? (object)tool.RawParametersJson.Value
+                        : tool.Parameters;
+
                     request.Tools.Add(new RequestTool
                     {
                         Type = "function",
@@ -404,7 +425,7 @@ namespace AICA.Core.LLM
                         {
                             Name = tool.Name,
                             Description = tool.Description,
-                            Parameters = tool.Parameters
+                            Parameters = parameters
                         }
                     });
                 }
@@ -534,11 +555,11 @@ namespace AICA.Core.LLM
             public string ToolChoice { get; set; }
             [JsonPropertyName("max_tokens")]
             public int MaxTokens { get; set; }
-            public double Temperature { get; set; }
+            public double? Temperature { get; set; }
             [JsonPropertyName("top_p")]
-            public double TopP { get; set; }
-            [JsonPropertyName("top_k")]
-            public int TopK { get; set; }
+            public double? TopP { get; set; }
+            // top_k is NOT part of OpenAI standard API — omit for OpenAI-compatible models (like MiniMax)
+            // OpenCode explicitly marks topK as unsupported and never sends it
             public bool Stream { get; set; }
         }
 
@@ -575,7 +596,7 @@ namespace AICA.Core.LLM
         {
             public string Name { get; set; }
             public string Description { get; set; }
-            public ToolParameters Parameters { get; set; }
+            public object Parameters { get; set; }  // ToolParameters or JsonElement (raw MCP schema)
         }
 
         private class ChatCompletionResponse

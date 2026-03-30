@@ -4,58 +4,46 @@ using Xunit;
 namespace AICA.Core.Tests.Agent
 {
     /// <summary>
-    /// Tests for plan-aware recovery behavior.
-    /// The actual recovery message injection happens inside AgentExecutor.ExecuteAsync,
-    /// which is gated by TaskState.HasActivePlan. These tests verify the state tracking
-    /// that controls recovery path selection.
+    /// Tests for TaskState tracking that controls recovery path selection.
     /// </summary>
     public class PlanAwareRecoveryTests
     {
         [Fact]
         public void Recovery_WithActivePlan_HasActivePlanIsTrue()
         {
-            // Arrange: simulate reaching blocking failure threshold with an active plan
-            var taskState = new TaskState
-            {
-                MaxConsecutiveMistakes = 3,
-                MaxRecoveryPrompts = 2,
-                HasActivePlan = true
-            };
+            var taskState = new TaskState { HasActivePlan = true };
 
-            // Simulate 3 consecutive blocking failures
             taskState.RecordToolFailure(ToolFailureKind.Blocking);
             taskState.RecordToolFailure(ToolFailureKind.Blocking);
             taskState.RecordToolFailure(ToolFailureKind.Blocking);
 
-            // Assert: threshold reached and recovery available
-            Assert.True(taskState.HasReachedBlockingFailureThreshold());
-            Assert.True(taskState.CanPromptRecovery());
+            Assert.Equal(3, taskState.ConsecutiveBlockingFailureCount);
             Assert.True(taskState.HasActivePlan);
-            // When HasActivePlan is true, AgentExecutor injects "update_plan" recovery
-            // instead of "ask_followup_question" recovery
         }
 
         [Fact]
         public void Recovery_WithoutPlan_HasActivePlanIsFalse()
         {
-            // Arrange: simulate reaching blocking failure threshold without a plan
-            var taskState = new TaskState
-            {
-                MaxConsecutiveMistakes = 3,
-                MaxRecoveryPrompts = 2,
-                HasActivePlan = false
-            };
+            var taskState = new TaskState { HasActivePlan = false };
 
-            // Simulate 3 consecutive blocking failures
             taskState.RecordToolFailure(ToolFailureKind.Blocking);
             taskState.RecordToolFailure(ToolFailureKind.Blocking);
             taskState.RecordToolFailure(ToolFailureKind.Blocking);
 
-            // Assert: threshold reached, recovery available, but no active plan
-            Assert.True(taskState.HasReachedBlockingFailureThreshold());
-            Assert.True(taskState.CanPromptRecovery());
+            Assert.Equal(3, taskState.ConsecutiveBlockingFailureCount);
             Assert.False(taskState.HasActivePlan);
-            // When HasActivePlan is false, AgentExecutor injects "ask_followup_question" recovery
+        }
+
+        [Fact]
+        public void ResetFailureCounts_ClearsConsecutiveFailures()
+        {
+            var taskState = new TaskState();
+            taskState.RecordToolFailure(ToolFailureKind.Blocking);
+            taskState.RecordToolFailure(ToolFailureKind.Blocking);
+
+            taskState.ResetFailureCounts();
+
+            Assert.Equal(0, taskState.ConsecutiveBlockingFailureCount);
         }
     }
 }

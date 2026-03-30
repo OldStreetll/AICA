@@ -84,9 +84,18 @@ namespace AICA.Core.Agent
                             };
                             using (var npmProc = Process.Start(npmPsi))
                             {
-                                npmProc.WaitForExit(120000);
-                                System.Diagnostics.Debug.WriteLine(
-                                    $"[AICA] GitNexus: npm install exit={npmProc.ExitCode}");
+                                bool exited = npmProc.WaitForExit(120000);
+                                if (exited)
+                                {
+                                    System.Diagnostics.Debug.WriteLine(
+                                        $"[AICA] GitNexus: npm install exit={npmProc.ExitCode}");
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine(
+                                        "[AICA] GitNexus: npm install timed out (120s), killing process");
+                                    try { npmProc.Kill(); } catch { }
+                                }
                             }
                         }
                         catch (Exception ex)

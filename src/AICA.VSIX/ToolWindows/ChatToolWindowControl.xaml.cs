@@ -307,14 +307,15 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new EditFileTool());
             _toolDispatcher.RegisterTool(new ListDirTool());
             _toolDispatcher.RegisterTool(new GrepSearchTool());
-            _toolDispatcher.RegisterTool(new FindByNameTool());
             _toolDispatcher.RegisterTool(new RunCommandTool());
             _toolDispatcher.RegisterTool(new UpdatePlanTool());
-            _toolDispatcher.RegisterTool(new AttemptCompletionTool());
-            _toolDispatcher.RegisterTool(new CondenseTool());
-            _toolDispatcher.RegisterTool(new ListCodeDefinitionsTool());
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
             _toolDispatcher.RegisterTool(new ListProjectsTool());
+            // Removed: AttemptCompletionTool (natural stop via finish_reason replaces it)
+            // Removed: CondenseTool (auto-condense in AgentExecutor, not exposed to LLM)
+            // Removed: FindByNameTool (grep_search covers this, reduces tool competition)
+            // Removed: ListCodeDefinitionsTool (GitNexus provides richer structural analysis)
+            // Removed: LogAnalysisTool (grep_search + read_file covers this)
 
             // Register GitNexus MCP bridge tools (graceful degradation: failure here doesn't affect built-in tools)
             // Phase 1: Register hardcoded definitions synchronously (immediate availability)
@@ -691,19 +692,30 @@ namespace AICA.ToolWindows
                     }
                 }
 
-                // Regular message rendering
-                // Check if content contains tool call HTML (starts with <div class="tool-call-container">)
-                if (message.Content != null && message.Content.Contains("<div class=\"tool-call-container\">"))
+                // Regular message rendering (includes natural completion with tool logs)
+                bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
+                bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
+
+                // Render tool logs if present (natural completion — no CompletionData but has ToolLogsHtml)
+                if (!string.IsNullOrEmpty(message.ToolLogsHtml))
                 {
-                    // Content contains raw HTML, don't process through Markdown
-                    bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{message.Content}</div></div>");
+                    bodyBuilder.AppendLine($"<div class=\"content\">{message.ToolLogsHtml}</div>");
                 }
-                else
+
+                if (!string.IsNullOrEmpty(message.Content))
                 {
-                    // Regular markdown content
-                    var html = Markdig.Markdown.ToHtml(message.Content ?? string.Empty, _markdownPipeline);
-                    bodyBuilder.AppendLine($"<div class=\"message {roleClass}\"><div class=\"role\">{roleName}</div><div class=\"content\">{html}</div></div>");
+                    if (message.Content.Contains("<div class=\"tool-call-container\">"))
+                    {
+                        bodyBuilder.AppendLine($"<div class=\"content\">{message.Content}</div>");
+                    }
+                    else
+                    {
+                        var html = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
+                        bodyBuilder.AppendLine($"<div class=\"content\">{html}</div>");
+                    }
                 }
+
+                bodyBuilder.AppendLine("</div>");
             }
 
             if (!string.IsNullOrEmpty(streamingContent))

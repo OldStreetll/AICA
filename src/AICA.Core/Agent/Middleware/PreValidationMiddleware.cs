@@ -118,7 +118,8 @@ namespace AICA.Core.Agent.Middleware
 
         private string ValidateGrepSearch(ToolCall call)
         {
-            var query = GetArg(call, "query");
+            // Support both "pattern" (new) and "query" (legacy) parameter names
+            var query = GetArg(call, "pattern") ?? GetArg(call, "query");
             if (string.IsNullOrWhiteSpace(query))
                 return "搜索关键词不能为空。";
 

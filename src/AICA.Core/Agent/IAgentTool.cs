@@ -47,6 +47,13 @@ namespace AICA.Core.Agent
         public string Name { get; set; }
         public string Description { get; set; }
         public ToolParameters Parameters { get; set; }
+
+        /// <summary>
+        /// Raw JSON schema from MCP server. When set, serialized as-is instead of Parameters.
+        /// This preserves additionalProperties, nested schemas, etc. that ToolParameters loses.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public System.Text.Json.JsonElement? RawParametersJson { get; set; }
     }
 
     /// <summary>

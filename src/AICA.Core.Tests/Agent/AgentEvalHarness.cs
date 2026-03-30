@@ -30,8 +30,7 @@ namespace AICA.Core.Tests.Agent
             _uiContext = new MockUIContext();
             _toolDispatcher = new ToolDispatcher();
 
-            // Register the real attempt_completion tool (returns TASK_COMPLETED: prefix that AgentExecutor checks)
-            _toolDispatcher.RegisterTool(new AICA.Core.Tools.AttemptCompletionTool());
+            // attempt_completion removed — AgentExecutor now uses finish_reason natural stop
 
             _executor = new AgentExecutor(
                 _llmClient,

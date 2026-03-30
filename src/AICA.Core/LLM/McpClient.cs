@@ -180,6 +180,61 @@ namespace AICA.Core.LLM
             return tools;
         }
 
+        /// <summary>
+        /// List available MCP resources via resources/list.
+        /// </summary>
+        public async Task<List<McpResourceInfo>> ListResourcesAsync(CancellationToken ct)
+        {
+            var result = await SendRequestAsync("resources/list", new Dictionary<string, object>(), ct).ConfigureAwait(false);
+            var resources = new List<McpResourceInfo>();
+
+            if (result.ValueKind == JsonValueKind.Undefined)
+                return resources;
+
+            if (result.TryGetProperty("resources", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in arr.EnumerateArray())
+                {
+                    var uri = item.TryGetProperty("uri", out var u) ? u.GetString() : null;
+                    if (string.IsNullOrEmpty(uri)) continue;
+                    var name = item.TryGetProperty("name", out var n) ? n.GetString() : uri;
+                    var desc = item.TryGetProperty("description", out var d) ? d.GetString() : "";
+                    resources.Add(new McpResourceInfo(uri, name, desc));
+                }
+            }
+
+            return resources;
+        }
+
+        /// <summary>
+        /// Read a single MCP resource by URI via resources/read.
+        /// </summary>
+        public async Task<string> ReadResourceAsync(string uri, CancellationToken ct)
+        {
+            if (string.IsNullOrEmpty(uri))
+                throw new ArgumentException("Resource URI required", nameof(uri));
+
+            var readParams = new Dictionary<string, object> { ["uri"] = uri };
+            var result = await SendRequestAsync("resources/read", readParams, ct).ConfigureAwait(false);
+
+            // MCP resources/read returns { contents: [ { uri, text, mimeType } ] }
+            if (result.TryGetProperty("contents", out var contents) && contents.ValueKind == JsonValueKind.Array)
+            {
+                var sb = new StringBuilder();
+                foreach (var item in contents.EnumerateArray())
+                {
+                    if (item.TryGetProperty("text", out var textEl))
+                    {
+                        if (sb.Length > 0) sb.Append('\n');
+                        sb.Append(textEl.GetString());
+                    }
+                }
+                return sb.ToString();
+            }
+
+            return string.Empty;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
@@ -417,6 +472,23 @@ namespace AICA.Core.LLM
 
             // Fallback: serialize the entire result
             return result.GetRawText();
+        }
+    }
+
+    /// <summary>
+    /// MCP resource metadata from resources/list.
+    /// </summary>
+    public sealed class McpResourceInfo
+    {
+        public string Uri { get; }
+        public string Name { get; }
+        public string Description { get; }
+
+        public McpResourceInfo(string uri, string name, string description)
+        {
+            Uri = uri;
+            Name = name;
+            Description = description;
         }
     }
 

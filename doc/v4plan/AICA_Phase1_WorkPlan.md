@@ -173,7 +173,7 @@
 ### v2.3 执行记录（阶段 3 核心功能完成）
 
 > 执行时间：2026-03-27
-> 背景：阶段 3 步骤 3.1-3.8 全部实现，加上计划外的 GitNexus 工具选择竞争消除优化。步骤 3.9 的 Phase A 在阶段 2 已提前完成，3.10 的 Phase B 同样已完成。剩余 3.10 Phase C + 3.11 正式发布。
+> 背景：阶段 3 步骤 3.1-3.8 全部实现，加上计划外的 GitNexus 工具选择竞争消除优化。步骤 3.9 的 Phase A 在阶段 2 已提前完成，3.10 的 Phase B 部分完成（方向 4 竞态消除 ✅，方向 2 AddToolDescriptions 移除尚未落地）。剩余 Phase B 方向 2 + Phase C + 3.11 正式发布。
 
 | # | 实施项 | 说明 | commit |
 |---|--------|------|--------|
@@ -184,7 +184,7 @@
 | C102 | 3.7 断点续做 | TaskProgress + TaskProgressStore 持久化到 .aica/progress/latest.json。新会话自动加载并注入 SystemPrompt | `a389880` |
 | C103 | 3.8 Memory Bank | MemoryBank 跨会话记忆存储在 .aica/memory/*.md，上限 4000 字符。自动加载 | `a389880` |
 | C104 | GitNexus 工具竞争消除 | 移除 grepFallback 静默降级 + GitNexus 可用时隐藏 list_code_definition_names/find_by_name + 硬编码描述升级为完整 WHEN TO USE 版 | `c4c46d7` |
-| C105 | 3.9 Phase A 确认 | ToolCall Phase A+B 在 v2.2 期间已完成（`4881ff7`）。3.9 仅剩 M1 反馈修复（需要用户反馈数据） | — |
+| C105 | 3.9 Phase A 确认 | ToolCall Phase A 已完成（`4881ff7`）；Phase B 方向 4（竞态消除）已完成，方向 2（移除 AddToolDescriptions）待执行。3.9 仅剩 M1 反馈修复（需要用户反馈数据） | — |
 | C106 | 测试回归 | 480 tests, 476 pass, 4 pre-existing failures。所有新代码无回归 | — |
 
 ---
@@ -1610,7 +1610,7 @@ condensed.AddRange(recentMessages);
 | 3.7 | 断点续做 | ✅ `a389880` | AgentExecutor + SystemPromptBuilder + Storage | 改动+新建 | ~120 | Complex 任务 |
 | 3.8 | Memory Bank | ✅ `a389880` | MemoryBank.cs (新) + SystemPromptBuilder + AgentExecutor | 新建+改动 | ~120 | **~40 人** |
 | 3.9 | M1 反馈修复 + ToolCall Phase A | ✅ Phase A 已完成 `4881ff7` | DynamicToolSelector + SystemPromptBuilder | 改动 | ~10（Phase A）| — |
-| 3.10 | 集成测试 + ToolCall Phase B+C [C97] | 🔲 Phase B 已完成，Phase C 待执行 | SystemPromptBuilder + AgentExecutor | 测试+改动 | ~80（Phase C） | — |
+| 3.10 | 集成测试 + ToolCall Phase B+C [C97] | 🔲 Phase B 部分完成（方向 4 竞态消除 ✅，方向 2 AddToolDescriptions 移除 🔲），Phase C 待执行 | SystemPromptBuilder + AgentExecutor | 测试+改动 | ~80（Phase C） | — |
 | 3.11 | 正式发布 [C47] | 🔲 待 3.10 完成 | 编译 + 全量部署 | 操作 | 0 行代码 | ~40 人 |
 
 **额外完成（计划外）：** GitNexus 工具选择竞争消除 `c4c46d7` — 移除 grepFallback + 隐藏重叠工具 + 升级硬编码描述

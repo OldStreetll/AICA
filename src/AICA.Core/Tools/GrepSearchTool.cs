@@ -16,7 +16,7 @@ namespace AICA.Core.Tools
     public class GrepSearchTool : IAgentTool
     {
         public string Name => "grep_search";
-        public string Description => "Search for text patterns in files. Use this to find code, functions, classes, or specific text across the codebase. Supports regex patterns and file filtering. Returns matching lines with file paths and line numbers.";
+        public string Description => "Fast content search tool that works with any codebase size. Searches file contents using regular expressions. Returns matching lines with file paths and line numbers.";
 
         public ToolDefinition GetDefinition()
         {
@@ -29,46 +29,35 @@ namespace AICA.Core.Tools
                     Type = "object",
                     Properties = new Dictionary<string, ToolParameterProperty>
                     {
-                        ["query"] = new ToolParameterProperty
+                        ["pattern"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "The search pattern (regex by default, or fixed string if fixed_strings is true)"
+                            Description = "The regex search pattern"
                         },
                         ["path"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "Directory or file path to search in (relative to workspace root). Defaults to workspace root."
+                            Description = "Directory or file path to search in. Defaults to workspace root."
                         },
-                        ["includes"] = new ToolParameterProperty
+                        ["include"] = new ToolParameterProperty
                         {
                             Type = "string",
-                            Description = "File glob pattern to include (e.g. '*.cs', '*.py'). Optional."
-                        },
-                        ["fixed_strings"] = new ToolParameterProperty
-                        {
-                            Type = "boolean",
-                            Description = "If true, treat query as a literal string instead of regex. Default is false."
-                        },
-                        ["case_sensitive"] = new ToolParameterProperty
-                        {
-                            Type = "boolean",
-                            Description = "If true, search is case-sensitive. Default is false."
-                        },
-                        ["max_results"] = new ToolParameterProperty
-                        {
-                            Type = "integer",
-                            Description = "Maximum number of matching lines to return. Default is 50."
+                            Description = "File glob pattern to filter (e.g. '*.cs', '*.cpp')"
                         }
                     },
-                    Required = new[] { "query" }
+                    Required = new[] { "pattern" }
                 }
             };
         }
 
         public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
-            if (!call.Arguments.TryGetValue("query", out var queryObj) || queryObj == null)
-                return ToolResult.Fail("Missing required parameter: query");
+            // Support both "pattern" (new) and "query" (legacy) parameter names
+            if (!call.Arguments.TryGetValue("pattern", out var queryObj) || queryObj == null)
+            {
+                if (!call.Arguments.TryGetValue("query", out queryObj) || queryObj == null)
+                    return ToolResult.Fail("Missing required parameter: pattern");
+            }
 
             var query = queryObj.ToString();
             if (string.IsNullOrEmpty(query))
@@ -83,7 +72,11 @@ namespace AICA.Core.Tools
             }
 
             string includePattern = null;
-            if (call.Arguments.TryGetValue("includes", out var includesObj) && includesObj != null)
+            // Support both "include" (new) and "includes" (legacy)
+            object includesObj = null;
+            if (!call.Arguments.TryGetValue("include", out includesObj) || includesObj == null)
+                call.Arguments.TryGetValue("includes", out includesObj);
+            if (includesObj != null)
             {
                 // Handle JsonElement arrays: ["*.h", "*.cpp"] -> "*.h,*.cpp"
                 if (includesObj is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -204,9 +197,10 @@ namespace AICA.Core.Tools
 
                             try
                             {
-                                // Skip files larger than 1MB to avoid reading huge generated files
+                                // Skip files larger than 5MB to avoid reading huge generated files
+                                // (was 1MB, raised to support large C/C++ source files like decoder.c at 1.4MB)
                                 var fileInfo = new FileInfo(file);
-                                if (fileInfo.Length > 1024 * 1024)
+                                if (fileInfo.Length > 5 * 1024 * 1024)
                                 {
                                     continue;
                                 }

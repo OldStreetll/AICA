@@ -68,13 +68,24 @@ namespace AICA.Core.Tools
                     "Use grep_search or read_file as alternatives for code exploration.");
             }
 
-            // Step 2: Forward arguments to MCP tool
+            // Step 2: Forward arguments to MCP tool, auto-inject repo if missing
             var mcpArgs = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             if (call.Arguments != null)
             {
                 foreach (var kvp in call.Arguments)
                 {
                     mcpArgs[kvp.Key] = kvp.Value;
+                }
+            }
+
+            // Auto-inject repo parameter when LLM omits it (P1 fix, moved from system prompt)
+            if (!mcpArgs.ContainsKey("repo") && context?.WorkingDirectory != null)
+            {
+                var repoName = ResolveRepoName(context.WorkingDirectory);
+                if (repoName != null)
+                {
+                    mcpArgs["repo"] = repoName;
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Auto-injected repo=\"{repoName}\" for {Name}");
                 }
             }
 
@@ -102,6 +113,21 @@ namespace AICA.Core.Tools
         public Task HandlePartialAsync(ToolCall call, IUIContext ui, CancellationToken ct = default)
         {
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Resolve git repo name from working directory for auto-injection.
+        /// </summary>
+        private static string ResolveRepoName(string workingDirectory)
+        {
+            var dir = workingDirectory;
+            for (int i = 0; i < 10 && !string.IsNullOrEmpty(dir); i++)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir, ".git")))
+                    return System.IO.Path.GetFileName(dir);
+                dir = System.IO.Path.GetDirectoryName(dir);
+            }
+            return null;
         }
 
         /// <summary>
@@ -206,7 +232,8 @@ namespace AICA.Core.Tools
                 {
                     Name = spec.AicaName,
                     Description = nativeDesc,
-                    Parameters = ConvertMcpSchema(mcpDef.InputSchema)
+                    Parameters = ConvertMcpSchema(mcpDef.InputSchema),
+                    RawParametersJson = mcpDef.InputSchema  // Preserve full MCP schema for API serialization
                 };
 
                 var meta = new ToolMetadata
