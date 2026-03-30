@@ -13,7 +13,10 @@ namespace AICA.Core.Tools
     public class EditFileTool : IAgentTool
     {
         public string Name => "edit";
-        public string Description => "Edit a file by replacing text, or create a new file with full_replace=true. The edit will fail if old_string is not found or is not unique in the file. Use read_file first to see the exact content.";
+        public string Description =>
+            "Replace specific text in an existing file. old_string must match exactly and be unique. " +
+            "Use read_file first to see exact content. " +
+            "Do NOT use this to create new files — use write_file instead.";
 
         public ToolMetadata GetMetadata()
         {
@@ -61,15 +64,10 @@ namespace AICA.Core.Tools
                             Type = "boolean",
                             Description = "If true, replace all occurrences. Default is false.",
                             Default = false
-                        },
-                        ["full_replace"] = new ToolParameterProperty
-                        {
-                            Type = "boolean",
-                            Description = "If true, replace the entire file content with new_string. If the file does not exist, it will be created. When using this mode, old_string is ignored and can be set to any value (e.g., empty string). Default is false.",
-                            Default = false
                         }
+                        // v2.1 O1: full_replace removed — use write_file for creating new files
                     },
-                    Required = new[] { "file_path", "new_string" }
+                    Required = new[] { "file_path", "old_string", "new_string" }
                 }
             };
         }
@@ -82,30 +80,34 @@ namespace AICA.Core.Tools
                 var path = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "file_path");
                 var newString = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "new_string");
                 var replaceAll = ToolParameterValidator.GetOptionalParameter<bool>(call.Arguments, "replace_all", false);
-                var fullReplace = ToolParameterValidator.GetOptionalParameter<bool>(call.Arguments, "full_replace", false);
 
-                // For non-full_replace mode, old_string is required
-                string oldString = null;
-                if (!fullReplace)
+                // v2.1 O1: full_replace removed — redirect LLM to write_file
+                var fullReplace = ToolParameterValidator.GetOptionalParameter<bool>(call.Arguments, "full_replace", false);
+                if (fullReplace)
                 {
-                    oldString = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "old_string");
+                    return ToolResult.Fail(
+                        "full_replace is no longer supported by 'edit'. " +
+                        "To create a new file or overwrite an entire file, use the 'write_file' tool instead.");
                 }
+
+                var oldString = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "old_string");
 
                 // Validate path access
                 if (!context.IsPathAccessible(path))
                     return ToolErrorHandler.HandleError(ToolErrorHandler.AccessDenied(path));
 
-                // Check file exists — full_replace on a new file creates it (with user confirmation)
+                // Check file exists
                 if (!await context.FileExistsAsync(path, ct))
                 {
-                    if (fullReplace && !string.IsNullOrEmpty(newString))
-                    {
-                        var createResult = await context.ShowDiffAndApplyAsync(path, string.Empty, newString, ct);
-                        if (!createResult.Applied)
-                            return ToolResult.Ok("File creation cancelled by user.");
-                        return ToolResult.Ok($"Created new file: {path}");
-                    }
                     return ToolErrorHandler.HandleError(ToolErrorHandler.NotFound(path));
+                }
+
+                // v2.1 T6: Check for external modifications before editing
+                if (FileTimeTracker.Instance.HasExternalModification(path))
+                {
+                    return ToolResult.Fail(
+                        $"⚠️ File '{path}' has been modified externally since last read.\n" +
+                        "Use read_file to get the latest content before editing.");
                 }
 
                 // Read current content
@@ -113,12 +115,6 @@ namespace AICA.Core.Tools
 
                 string newContent;
 
-                if (fullReplace)
-                {
-                    // Full replace mode: replace entire file content
-                    newContent = newString;
-                }
-                else
                 {
                     // Normal edit mode: require old_string matching
 
@@ -130,28 +126,47 @@ namespace AICA.Core.Tools
                     var normalizedOldString = NormalizeLineEndings(oldString);
                     var normalizedNewString = NormalizeLineEndings(newString);
 
-                    // Check old_string exists — if not, run diagnostic routing (H3)
-                    if (!normalizedContent.Contains(normalizedOldString))
+                    // v2.1 T5: Cascading fuzzy match (Level 0-3) before H3 diagnostic fallback
+                    var cascadeResult = FindWithCascade(normalizedContent, normalizedOldString);
+                    if (cascadeResult == null)
                     {
+                        // All levels failed → fall back to H3 diagnostic (StaleContent + NoMatch hints)
                         var diagnosis = DiagnoseEditFailure(
                             normalizedContent, normalizedOldString, path, context);
+                        return ToolResult.Fail(diagnosis.Message);
+                    }
 
-                        switch (diagnosis.Kind)
-                        {
-                            case EditDiagnosisKind.IndentationMismatch:
-                            case EditDiagnosisKind.WhitespaceMismatch:
-                                // Auto-fix: use the actual segment found by diagnosis
-                                newContent = replaceAll
-                                    ? normalizedContent.Replace(diagnosis.ActualSegment, normalizedNewString)
-                                    : ReplaceFirst(normalizedContent, diagnosis.ActualSegment, normalizedNewString);
-                                // Restore original line endings [D-09]
-                                if (originalLineEnding == "\r\n")
-                                    newContent = newContent.Replace("\n", "\r\n");
-                                goto applyEdit;
+                    // Log which level matched (for future analysis of match distribution)
+                    if (cascadeResult.Value.Level != MatchLevel.Exact)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] EditFileTool: fuzzy match Level={cascadeResult.Value.Level} for {path}");
+                    }
 
-                            default:
-                                return ToolResult.Fail(diagnosis.Message);
-                        }
+                    if (cascadeResult.Value.Level == MatchLevel.Exact)
+                    {
+                        // Exact match — use standard Contains path (handles replace_all + uniqueness check)
+                        // fall through to existing logic below
+                    }
+                    else
+                    {
+                        // Fuzzy match — replace the actual matched segment
+                        var actualSegment = normalizedContent.Substring(
+                            cascadeResult.Value.MatchIndex, cascadeResult.Value.MatchLength);
+                        newContent = replaceAll
+                            ? normalizedContent.Replace(actualSegment, normalizedNewString)
+                            : ReplaceFirst(normalizedContent, actualSegment, normalizedNewString);
+                        // Restore original line endings [D-09]
+                        if (originalLineEnding == "\r\n")
+                            newContent = newContent.Replace("\n", "\r\n");
+                        goto applyEdit;
+                    }
+
+                    // Level 0 exact match: check old_string exists
+                    if (!normalizedContent.Contains(normalizedOldString))
+                    {
+                        // Should not reach here (FindWithCascade Level 0 would have caught it)
+                        return ToolResult.Fail("old_string not found in file. Use read_file to see exact content.");
                     }
 
                     // Check uniqueness (unless replace_all)
@@ -195,6 +210,9 @@ namespace AICA.Core.Tools
                     );
                 }
 
+                // v2.1 T6: Record edit for conflict detection
+                FileTimeTracker.Instance.RecordEdit(path);
+
                 // Read the actual saved content (user may have modified it in the diff view)
                 var finalContent = await context.ReadFileAsync(path, ct);
 
@@ -214,15 +232,8 @@ namespace AICA.Core.Tools
                 }
                 else
                 {
-                    if (fullReplace)
-                    {
-                        return ToolResult.Ok($"File content completely replaced: {path}");
-                    }
-                    else
-                    {
-                        var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
-                        return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
-                    }
+                    var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
+                    return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
                 }
             }
             catch (ToolParameterException ex)
@@ -272,10 +283,123 @@ namespace AICA.Core.Tools
             return Task.CompletedTask;
         }
 
-        #region H3 Edit Diagnostic Routing
+        #region v2.1 T5: Cascading Fuzzy Match
 
         /// <summary>
-        /// Diagnose why old_string was not found and return targeted guidance or auto-fix info.
+        /// Match level used by FindWithCascade.
+        /// </summary>
+        private enum MatchLevel
+        {
+            Exact,                  // Level 0: exact string match
+            LineTrimmed,            // Level 1: line-end whitespace ignored (NEW in v2.1)
+            IndentationFlexible,    // Level 2: leading whitespace ignored (extracted from H3)
+            WhitespaceNormalized    // Level 3: all whitespace compressed (extracted from H3)
+        }
+
+        private struct CascadeMatch
+        {
+            public int MatchIndex;
+            public int MatchLength;
+            public MatchLevel Level;
+        }
+
+        /// <summary>
+        /// Try to find old_string in content using cascading match strategies.
+        /// Returns null if all levels fail — caller should fall back to H3 diagnostic.
+        /// All levels require a unique match (reject if multiple candidates).
+        /// </summary>
+        private CascadeMatch? FindWithCascade(string content, string oldString)
+        {
+            // Level 0: Exact match
+            var exactIndex = content.IndexOf(oldString, StringComparison.Ordinal);
+            if (exactIndex >= 0)
+            {
+                return new CascadeMatch { MatchIndex = exactIndex, MatchLength = oldString.Length, Level = MatchLevel.Exact };
+            }
+
+            // Level 1: Line-end whitespace ignored (TrimEnd per line)
+            var level1Result = FindLineTrimmed(content, oldString);
+            if (level1Result != null)
+                return level1Result;
+
+            // Level 2: Indentation-flexible (TrimStart per line, from H3)
+            var trimmedOld = TrimEachLine(oldString);
+            var trimmedContent = TrimEachLine(content);
+            var trimmedIndex = trimmedContent.IndexOf(trimmedOld);
+            if (trimmedIndex >= 0 && trimmedOld.Length > 0)
+            {
+                var segment = LocateOriginalSegment(content, trimmedContent, trimmedIndex, trimmedOld);
+                if (segment != null)
+                {
+                    var segIndex = content.IndexOf(segment, StringComparison.Ordinal);
+                    if (segIndex >= 0)
+                        return new CascadeMatch { MatchIndex = segIndex, MatchLength = segment.Length, Level = MatchLevel.IndentationFlexible };
+                }
+            }
+
+            // Level 3: Whitespace-normalized (compress runs, from H3)
+            var compOld = CompressWhitespace(oldString);
+            var compContent = CompressWhitespace(content);
+            var compIndex = compContent.IndexOf(compOld);
+            if (compIndex >= 0 && compOld.Length > 1)
+            {
+                var segment = LocateSegmentByCompressed(content, compContent, compIndex, compOld);
+                if (segment != null)
+                {
+                    var segIndex = content.IndexOf(segment, StringComparison.Ordinal);
+                    if (segIndex >= 0)
+                        return new CascadeMatch { MatchIndex = segIndex, MatchLength = segment.Length, Level = MatchLevel.WhitespaceNormalized };
+                }
+            }
+
+            return null; // All levels failed
+        }
+
+        /// <summary>
+        /// Level 1: Match after trimming trailing whitespace from each line.
+        /// New in v2.1 — covers LLM-generated old_string with trailing spaces.
+        /// </summary>
+        private CascadeMatch? FindLineTrimmed(string content, string oldString)
+        {
+            var trimmedOld = TrimEndEachLine(oldString);
+            var trimmedContent = TrimEndEachLine(content);
+            var index = trimmedContent.IndexOf(trimmedOld, StringComparison.Ordinal);
+            if (index < 0 || trimmedOld.Length == 0)
+                return null;
+
+            // Check uniqueness
+            var lastIndex = trimmedContent.LastIndexOf(trimmedOld, StringComparison.Ordinal);
+            if (index != lastIndex)
+                return null; // Multiple matches — reject
+
+            // Map back to original content using line positions
+            var segment = LocateOriginalSegment(content, trimmedContent, index, trimmedOld);
+            if (segment == null) return null;
+
+            var segIndex = content.IndexOf(segment, StringComparison.Ordinal);
+            if (segIndex < 0) return null;
+
+            return new CascadeMatch { MatchIndex = segIndex, MatchLength = segment.Length, Level = MatchLevel.LineTrimmed };
+        }
+
+        /// <summary>
+        /// TrimEnd each line (preserve leading whitespace, remove trailing spaces/tabs).
+        /// </summary>
+        private static string TrimEndEachLine(string text)
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+                lines[i] = lines[i].TrimEnd(' ', '\t');
+            return string.Join("\n", lines);
+        }
+
+        #endregion
+
+        #region H3 Edit Diagnostic Routing (StaleContent + NoMatch only)
+
+        /// <summary>
+        /// Diagnose why old_string was not found. Called only after FindWithCascade fails all levels.
+        /// v2.1: IndentationMismatch and WhitespaceMismatch auto-fix moved to FindWithCascade.
         /// </summary>
         private EditDiagnosis DiagnoseEditFailure(
             string content, string normalizedOld, string filePath, IAgentContext context)
@@ -300,29 +424,7 @@ namespace AICA.Core.Tools
                 }
             }
 
-            // 2. IndentationMismatch: matches after TrimStart on each line
-            var trimmedOld = TrimEachLine(normalizedOld);
-            var trimmedContent = TrimEachLine(content);
-            var trimmedIndex = trimmedContent.IndexOf(trimmedOld);
-            if (trimmedIndex >= 0 && trimmedOld.Length > 0)
-            {
-                var segment = LocateOriginalSegment(content, trimmedContent, trimmedIndex, trimmedOld);
-                if (segment != null)
-                    return EditDiagnosis.AutoFix(EditDiagnosisKind.IndentationMismatch, segment);
-            }
-
-            // 3. WhitespaceMismatch: matches after compressing all whitespace
-            var compOld = CompressWhitespace(normalizedOld);
-            var compContent = CompressWhitespace(content);
-            var compIndex = compContent.IndexOf(compOld);
-            if (compIndex >= 0 && compOld.Length > 1)
-            {
-                var segment = LocateSegmentByCompressed(content, compContent, compIndex, compOld);
-                if (segment != null)
-                    return EditDiagnosis.AutoFix(EditDiagnosisKind.WhitespaceMismatch, segment);
-            }
-
-            // 4. NoMatch: try to find the first line as a hint
+            // 2. NoMatch: try to find the first line as a hint
             var searchLine = normalizedOld.Split('\n')[0].Trim();
             if (searchLine.Length > 5)
             {
@@ -485,9 +587,8 @@ namespace AICA.Core.Tools
         private enum EditDiagnosisKind
         {
             StaleContent,
-            IndentationMismatch,
-            WhitespaceMismatch,
             NoMatch
+            // v2.1: IndentationMismatch and WhitespaceMismatch moved to FindWithCascade
         }
 
         private sealed class EditDiagnosis
@@ -505,9 +606,6 @@ namespace AICA.Core.Tools
 
             public static EditDiagnosis Stale(string message)
                 => new EditDiagnosis(EditDiagnosisKind.StaleContent, message);
-
-            public static EditDiagnosis AutoFix(EditDiagnosisKind kind, string actualSegment)
-                => new EditDiagnosis(kind, null, actualSegment);
 
             public static EditDiagnosis NoMatch(string message)
                 => new EditDiagnosis(EditDiagnosisKind.NoMatch, message);

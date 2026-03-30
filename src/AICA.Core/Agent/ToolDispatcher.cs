@@ -17,6 +17,27 @@ namespace AICA.Core.Agent
         private readonly ILogger<ToolDispatcher> _logger;
         private TaskCompletionSource<bool> _mcpUpgradeTcs;
 
+        /// <summary>
+        /// v2.1 O11: Alias mapping for LLM tool name hallucinations.
+        /// Maps common tool names from LLM training data to AICA's actual tool names.
+        /// Only used when exact name lookup fails — does not affect normal tool calls.
+        /// NOTE: If a future MCP server registers a tool with an alias name, the alias
+        /// will not trigger (exact lookup succeeds first). Review if adding new MCP servers.
+        /// </summary>
+        private static readonly Dictionary<string, string> ToolAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["grep"] = "grep_search",
+            ["bash"] = "run_command",
+            ["shell"] = "run_command",
+            ["search"] = "grep_search",
+            ["find"] = "glob",
+            ["cat"] = "read_file",
+            ["read"] = "read_file",
+            ["write"] = "write_file",
+            ["ls"] = "list_dir",
+            ["list"] = "list_dir",
+        };
+
         public ToolDispatcher(ILogger<ToolDispatcher> logger = null)
         {
             _logger = logger;
@@ -87,6 +108,28 @@ namespace AICA.Core.Agent
         }
 
         /// <summary>
+        /// v2.1 O11: Resolve tool by name with alias fallback.
+        /// Returns null if tool not found and no alias matches.
+        /// If alias resolved, updates call.Name via out parameter.
+        /// </summary>
+        private IAgentTool ResolveTool(string name, out string resolvedName)
+        {
+            resolvedName = name;
+            if (_tools.TryGetValue(name, out var tool))
+                return tool;
+
+            // Alias fallback
+            if (ToolAliases.TryGetValue(name, out var realName) && _tools.TryGetValue(realName, out tool))
+            {
+                _logger?.LogInformation("Tool alias resolved: {Alias} → {RealName}", name, realName);
+                resolvedName = realName;
+                return tool;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Execute a tool call through the pipeline
         /// </summary>
         public async Task<ToolResult> ExecuteAsync(
@@ -97,10 +140,17 @@ namespace AICA.Core.Agent
         {
             if (call == null) throw new ArgumentNullException(nameof(call));
 
-            if (!_tools.TryGetValue(call.Name, out var tool))
+            var tool = ResolveTool(call.Name, out var resolvedName);
+            if (tool == null)
             {
                 _logger?.LogWarning("Unknown tool: {ToolName}", call.Name);
                 return ToolResult.Fail($"Unknown tool: {call.Name}");
+            }
+
+            // Apply resolved name if alias was used
+            if (resolvedName != call.Name)
+            {
+                call = new ToolCall { Id = call.Id, Name = resolvedName, Arguments = call.Arguments };
             }
 
             try
@@ -129,8 +179,9 @@ namespace AICA.Core.Agent
             IUIContext uiContext,
             CancellationToken ct = default)
         {
-            if (call == null || !_tools.TryGetValue(call.Name, out var tool))
-                return;
+            if (call == null) return;
+            var tool = ResolveTool(call.Name, out _);
+            if (tool == null) return;
 
             try
             {

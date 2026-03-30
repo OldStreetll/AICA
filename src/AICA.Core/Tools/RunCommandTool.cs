@@ -17,7 +17,11 @@ namespace AICA.Core.Tools
         private readonly Security.ICommandSandbox _sandbox;
 
         public string Name => "run_command";
-        public string Description => "Execute a terminal/shell command (e.g., 'dotnet build', 'git status', 'npm install'). Returns stdout, stderr, and exit code. Commands require user approval. Use timeout_seconds parameter for long-running commands.";
+        public string Description =>
+            "Execute a shell command and return stdout, stderr, and exit code. Requires user approval. " +
+            "Use ONLY for build, test, git, and system commands. " +
+            "Do NOT use for file operations — use read_file, edit, write_file, grep_search, glob, list_dir instead. " +
+            "Do NOT use cat, grep, find, ls, or similar shell commands when dedicated tools exist.";
 
         /// <summary>
         /// Optional external command safety checker (injected by VS layer)
@@ -103,7 +107,7 @@ namespace AICA.Core.Tools
                     {
                         return ToolResult.Fail($"Unix command '{firstWord}' is not available on Windows. Please use the appropriate built-in tool instead:\n" +
                             "- Use 'grep_search' instead of 'grep'\n" +
-                            "- Use 'find_by_name' instead of 'find'\n" +
+                            "- Use 'glob' instead of 'find'\n" +
                             "- Use 'read_file' instead of 'cat', 'head', or 'tail'\n" +
                             "- Use 'list_dir' instead of 'ls'");
                     }

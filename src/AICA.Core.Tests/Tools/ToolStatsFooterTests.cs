@@ -88,60 +88,7 @@ namespace AICA.Core.Tests.Tools
             Assert.Contains("[TOOL_EXACT_STATS: matches=0", result.Content);
         }
 
-        [Fact]
-        public async Task FindByName_Result_ContainsStats()
-        {
-            // Create files and a directory matching a pattern
-            File.WriteAllText(Path.Combine(_tempDir, "test.cs"), "");
-            File.WriteAllText(Path.Combine(_tempDir, "test2.cs"), "");
-            Directory.CreateDirectory(Path.Combine(_tempDir, "testdir"));
-
-            var tool = new FindByNameTool();
-            var call = new ToolCall
-            {
-                Id = "1",
-                Name = "find_by_name",
-                Arguments = new Dictionary<string, object>
-                {
-                    ["pattern"] = "test",
-                    ["path"] = "."
-                }
-            };
-
-            var result = await tool.ExecuteAsync(call, _context.Object, _uiContext.Object);
-
-            Assert.True(result.Success);
-            Assert.Contains("[TOOL_EXACT_STATS:", result.Content);
-            Assert.Contains("total_results=", result.Content);
-            Assert.Contains("files=", result.Content);
-            Assert.Contains("directories=", result.Content);
-        }
-
-        [Fact]
-        public async Task ListCodeDefs_ContainsStats()
-        {
-            // Create a simple C# file with a class definition
-            File.WriteAllText(Path.Combine(_tempDir, "Sample.cs"),
-                "namespace Test\n{\n    public class Sample\n    {\n        public void Foo() { }\n    }\n}\n");
-
-            var tool = new ListCodeDefinitionsTool();
-            var call = new ToolCall
-            {
-                Id = "1",
-                Name = "list_code_definition_names",
-                Arguments = new Dictionary<string, object>
-                {
-                    ["path"] = "."
-                }
-            };
-
-            var result = await tool.ExecuteAsync(call, _context.Object, _uiContext.Object);
-
-            Assert.True(result.Success);
-            Assert.Contains("[TOOL_EXACT_STATS:", result.Content);
-            Assert.Contains("files_scanned=", result.Content);
-            Assert.Contains("definitions=", result.Content);
-        }
+        // v2.0: FindByName_Result_ContainsStats and ListCodeDefs_ContainsStats removed (tools deleted)
 
         [Fact]
         public async Task ListDir_NonRecursive_ContainsStats()

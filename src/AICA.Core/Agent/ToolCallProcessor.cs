@@ -371,7 +371,8 @@ namespace AICA.Core.Agent
                 sortedKeys.Sort(StringComparer.Ordinal);
                 foreach (var key in sortedKeys)
                 {
-                    if (call.Name == "read_file" && (key == "offset" || key == "limit")) continue;
+                    // v2.1 O12: offset/limit now included in signature so different chunks produce different signatures
+                    // (was: if read_file, skip offset/limit → all chunks had same signature → false "Duplicate call")
                     if (call.Name == "grep_search" && key == "max_results") continue;
 
                     sb.Append('|').Append(key).Append('=');

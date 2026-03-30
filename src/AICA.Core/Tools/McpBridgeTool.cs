@@ -222,6 +222,16 @@ namespace AICA.Core.Tools
                 }
 
                 var nativeDesc = mcpDef.Description ?? spec.AicaName;
+
+                // v2.1 O10 [C2]: For gitnexus_cypher, always use the hand-crafted trimmed description
+                // instead of MCP native (which is ~2762 chars with full examples).
+                // The trimmed version (~600 chars) keeps WHEN TO USE + schema but drops examples.
+                if (spec.AicaName == "gitnexus_cypher")
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: {spec.AicaName} using trimmed hardcoded desc (skipping native {nativeDesc.Length} chars)");
+                    continue; // Skip — keep the hardcoded trimmed version from CreateCypherTool
+                }
+
                 // Truncate overly long descriptions to prevent function calling token overflow
                 if (nativeDesc.Length > 4000)
                 {
@@ -549,16 +559,15 @@ namespace AICA.Core.Tools
             var def = new ToolDefinition
             {
                 Name = "gitnexus_cypher",
+                // v2.1 O10 [C2]: Trimmed from ~2762 chars to ~600 chars. Removed EXAMPLES section.
+                // Full schema with examples available via gitnexus://setup MCP Resource.
                 Description = "Execute Cypher query against the code knowledge graph.\n\n" +
-                    "WHEN TO USE: Complex structural queries that query/context can't answer.\n" +
-                    "AFTER THIS: Use context() on result symbols for deeper context.\n\n" +
-                    "SCHEMA:\n- Nodes: File, Folder, Function, Class, Interface, Method, CodeElement, Community, Process\n" +
+                    "WHEN TO USE: Complex structural queries that gitnexus_query/gitnexus_context can't answer.\n" +
+                    "AFTER THIS: Use gitnexus_context on result symbols for deeper context.\n\n" +
+                    "SCHEMA:\n" +
+                    "- Nodes: File, Folder, Function, Class, Interface, Method, CodeElement, Community, Process\n" +
                     "- All edges via single CodeRelation table with 'type' property\n" +
                     "- Edge types: CONTAINS, DEFINES, CALLS, IMPORTS, EXTENDS, IMPLEMENTS, HAS_METHOD, HAS_PROPERTY, ACCESSES, OVERRIDES, MEMBER_OF, STEP_IN_PROCESS\n\n" +
-                    "EXAMPLES:\n" +
-                    "- Find callers: MATCH (a)-[:CodeRelation {type: 'CALLS'}]->(b:Function {name: \"X\"}) RETURN a.name, a.filePath\n" +
-                    "- Trace a process: MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process) WHERE p.heuristicLabel = \"X\" RETURN s.name, r.step ORDER BY r.step\n" +
-                    "- Find methods: MATCH (c:Class {name: \"X\"})-[r:CodeRelation {type: 'HAS_METHOD'}]->(m:Method) RETURN m.name\n\n" +
                     "OUTPUT: Returns { markdown, row_count } — results formatted as a Markdown table.",
                 Parameters = new ToolParameters
                 {

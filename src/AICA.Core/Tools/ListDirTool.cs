@@ -13,9 +13,11 @@ namespace AICA.Core.Tools
     public class ListDirTool : IAgentTool
     {
         public string Name => "list_dir";
-        public string Description => "List files and directories in the specified path. " +
-            "Use recursive=true when user asks for full/complete structure, directory tree, 完整结构, 目录树. " +
-            "For large projects, set max_depth=2 or 3 to avoid excessive output.";
+        public string Description =>
+            "List files and directories in a single path, showing sizes and item counts. " +
+            "Use for browsing a directory's contents. " +
+            "Do NOT use for finding files by pattern — use 'glob' instead. " +
+            "Use recursive=true only for directory tree overview, with max_depth=2-3 for large projects.";
 
         private static readonly HashSet<string> ExcludedDirs = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
         {

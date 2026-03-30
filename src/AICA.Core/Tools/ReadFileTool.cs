@@ -13,7 +13,10 @@ namespace AICA.Core.Tools
     public class ReadFileTool : IAgentTool
     {
         public string Name => "read_file";
-        public string Description => "Read the contents of a file. Use this to view file content before making changes. Supports reading specific line ranges with offset and limit parameters.";
+        public string Description =>
+            "Read file contents with optional line range (offset/limit). " +
+            "Always read a file before using 'edit' to ensure old_string matches exactly. " +
+            "For finding files by name, use 'glob'. For searching file contents, use 'grep_search'.";
 
         public ToolMetadata GetMetadata()
         {
@@ -134,6 +137,10 @@ namespace AICA.Core.Tools
                         content = truncated.ToString();
                     }
                 }
+
+                // v2.1 T6: Record file state for conflict detection
+                if (resolvedPath != null)
+                    FileTimeTracker.Instance.RecordRead(resolvedPath);
 
                 return ToolResult.Ok(content);
             }

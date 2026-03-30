@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,12 +13,26 @@ using AICA.Core.Agent;
 namespace AICA.Core.Tools
 {
     /// <summary>
-    /// Tool for searching text patterns in files within the workspace
+    /// Tool for searching text patterns in files within the workspace.
+    /// v2.1 T4: Dual-path strategy — ripgrep for large projects, C# fallback for small/unavailable.
     /// </summary>
     public class GrepSearchTool : IAgentTool
     {
         public string Name => "grep_search";
-        public string Description => "Fast content search tool that works with any codebase size. Searches file contents using regular expressions. Returns matching lines with file paths and line numbers.";
+        public string Description =>
+            "Search file contents using regex patterns. Returns matching lines with file paths and line numbers. " +
+            "Do NOT use for finding files by name — use 'glob' instead. " +
+            "Do NOT use for reading entire files — use 'read_file' instead.";
+
+        /// <summary>File count threshold for choosing rg vs C# search engine.</summary>
+        private const int RipgrepThreshold = 200;
+
+        /// <summary>Timeout for ripgrep process (seconds).</summary>
+        private const int RipgrepTimeoutSeconds = 30;
+
+        /// <summary>Cached ripgrep path (null = not searched, empty = not found).</summary>
+        private static string _ripgrepPath;
+        private static readonly object _ripgrepLock = new object();
 
         public ToolDefinition GetDefinition()
         {
@@ -155,7 +171,22 @@ namespace AICA.Core.Tools
                 return ToolResult.Fail($"Invalid regex pattern: {ex.Message}");
             }
 
-            // Execute search - ConfigureAwait(false) to avoid deadlock with UI thread
+            // v2.1 T4: Dual-path strategy — try ripgrep for large projects
+            var rgPath = FindRipgrep();
+            if (rgPath != null)
+            {
+                var fileCount = QuickFileCount(fullPath, RipgrepThreshold + 1);
+                if (fileCount >= RipgrepThreshold)
+                {
+                    var rgResult = SearchWithRipgrep(rgPath, query, fullPath,
+                        includePattern, caseSensitive, maxResults, context.WorkingDirectory, ct);
+                    if (rgResult != null)
+                        return rgResult; // ripgrep succeeded
+                    // else: fallback to C# below
+                }
+            }
+
+            // C# in-memory search (small projects or ripgrep unavailable)
             return await Task.Run(() =>
             {
                 var results = new StringBuilder();
@@ -449,5 +480,241 @@ namespace AICA.Core.Tools
                 IsExperimental = false
             };
         }
+
+        #region v2.1 T4: Ripgrep Integration
+
+        /// <summary>
+        /// Find ripgrep executable. Cached after first call.
+        /// Search order: VSIX embedded → PATH → null (fallback to C#).
+        /// </summary>
+        internal static string FindRipgrep()
+        {
+            lock (_ripgrepLock)
+            {
+                if (_ripgrepPath != null)
+                    return _ripgrepPath.Length == 0 ? null : _ripgrepPath;
+
+                // 1. VSIX assembly directory: tools/ripgrep/rg.exe
+                try
+                {
+                    var asmDir = Path.GetDirectoryName(typeof(GrepSearchTool).Assembly.Location);
+                    if (!string.IsNullOrEmpty(asmDir))
+                    {
+                        var embedded = Path.Combine(asmDir, "tools", "ripgrep", "rg.exe");
+                        if (File.Exists(embedded))
+                        {
+                            _ripgrepPath = embedded;
+                            return _ripgrepPath;
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+
+                // 2. PATH lookup via "where rg"
+                try
+                {
+                    var psi = new ProcessStartInfo("where", "rg")
+                    {
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    var proc = Process.Start(psi);
+                    if (proc != null)
+                    {
+                        var output = proc.StandardOutput.ReadLine();
+                        proc.WaitForExit(3000);
+                        if (!string.IsNullOrEmpty(output) && File.Exists(output.Trim()))
+                        {
+                            _ripgrepPath = output.Trim();
+                            return _ripgrepPath;
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+
+                _ripgrepPath = string.Empty; // Not found
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Quick count of files in a directory tree (stops at threshold).
+        /// Used to decide rg vs C# path.
+        /// </summary>
+        private static int QuickFileCount(string directory, int stopAt)
+        {
+            int count = 0;
+            try
+            {
+                var dirs = new Stack<string>();
+                dirs.Push(directory);
+                while (dirs.Count > 0 && count < stopAt)
+                {
+                    var dir = dirs.Pop();
+                    var dirName = Path.GetFileName(dir);
+                    if (dirName != null && (dirName == ".git" || dirName == ".vs" || dirName == "node_modules" || dirName == "bin" || dirName == "obj"))
+                        continue;
+                    try
+                    {
+                        count += Directory.GetFiles(dir).Length;
+                        if (count >= stopAt) return count;
+                        foreach (var sub in Directory.GetDirectories(dir))
+                            dirs.Push(sub);
+                    }
+                    catch { /* skip inaccessible */ }
+                }
+            }
+            catch { /* ignore */ }
+            return count;
+        }
+
+        /// <summary>
+        /// Execute search using ripgrep process with --json output.
+        /// Returns null if rg fails (caller should fallback to C#).
+        /// </summary>
+        private ToolResult SearchWithRipgrep(string rgPath, string query, string searchDir,
+            string includePattern, bool caseSensitive, int maxResults, string workingDirectory, CancellationToken ct)
+        {
+            try
+            {
+                var args = new StringBuilder();
+                args.Append("--json ");
+                args.Append($"--max-count={maxResults} ");
+                args.Append("--max-filesize=50M ");
+
+                // Excluded directories
+                args.Append("--glob=\"!.git\" --glob=\"!.vs\" --glob=\"!bin\" --glob=\"!obj\" ");
+                args.Append("--glob=\"!node_modules\" --glob=\"!packages\" --glob=\"!.nuget\" ");
+                args.Append("--glob=\"!TestResults\" ");
+
+                // Exclude binary extensions
+                args.Append("--glob=\"!*.exe\" --glob=\"!*.dll\" --glob=\"!*.pdb\" --glob=\"!*.obj\" ");
+                args.Append("--glob=\"!*.png\" --glob=\"!*.jpg\" --glob=\"!*.zip\" --glob=\"!*.vsix\" ");
+
+                if (!caseSensitive)
+                    args.Append("--ignore-case ");
+
+                // Include pattern
+                if (!string.IsNullOrEmpty(includePattern))
+                {
+                    var cleaned = includePattern.Trim().TrimStart('[').TrimEnd(']')
+                        .Replace("\"", "").Replace("'", "");
+                    foreach (var p in cleaned.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var trimmed = p.Trim();
+                        if (!string.IsNullOrEmpty(trimmed))
+                            args.Append($"--glob=\"{trimmed}\" ");
+                    }
+                }
+
+                // Pattern and search path
+                args.Append($"-- \"{query.Replace("\"", "\\\"")}\" ");
+                args.Append($"\"{searchDir}\"");
+
+                var psi = new ProcessStartInfo(rgPath, args.ToString())
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8
+                };
+
+                var proc = Process.Start(psi);
+                if (proc == null)
+                    return null; // Fallback to C#
+
+                var results = new StringBuilder();
+                int matchCount = 0;
+                int filesMatched = 0;
+                string currentFile = null;
+                var fileMatchCounts = new Dictionary<string, int>();
+
+                // Read JSON lines from stdout
+                using (var reader = proc.StandardOutput)
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (ct.IsCancellationRequested) break;
+
+                        try
+                        {
+                            using (var doc = JsonDocument.Parse(line))
+                            {
+                                var root = doc.RootElement;
+                                if (!root.TryGetProperty("type", out var typeElem))
+                                    continue;
+
+                                var type = typeElem.GetString();
+                                if (type == "match" && matchCount < maxResults)
+                                {
+                                    var data = root.GetProperty("data");
+                                    var path = data.GetProperty("path").GetProperty("text").GetString();
+                                    var lineNum = data.GetProperty("line_number").GetInt32();
+                                    var lineText = data.GetProperty("lines").GetProperty("text").GetString()?.TrimEnd('\n', '\r');
+
+                                    // Relative path
+                                    var relPath = path;
+                                    if (relPath.StartsWith(workingDirectory, StringComparison.OrdinalIgnoreCase))
+                                        relPath = relPath.Substring(workingDirectory.Length).TrimStart('/', '\\');
+                                    relPath = relPath.Replace('/', Path.DirectorySeparatorChar);
+
+                                    if (relPath != currentFile)
+                                    {
+                                        currentFile = relPath;
+                                        results.AppendLine($"\n{relPath}:");
+                                        filesMatched++;
+                                    }
+
+                                    results.AppendLine($"  {lineNum}: {lineText?.Trim()}");
+                                    matchCount++;
+
+                                    if (!fileMatchCounts.ContainsKey(relPath))
+                                        fileMatchCounts[relPath] = 0;
+                                    fileMatchCounts[relPath]++;
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // Skip malformed JSON lines
+                        }
+                    }
+                }
+
+                // Wait for process with timeout
+                if (!proc.WaitForExit(RipgrepTimeoutSeconds * 1000))
+                {
+                    try { proc.Kill(); } catch { /* ignore */ }
+                }
+
+                if (matchCount == 0)
+                {
+                    return ToolResult.Ok($"No matches found for '{query}'.\n[TOOL_EXACT_STATS: matches=0, files_matched=0, engine=ripgrep]");
+                }
+
+                var totalMatches = fileMatchCounts.Values.Sum();
+                var summary = new StringBuilder();
+                summary.AppendLine($"Found {totalMatches} match(es) in {filesMatched} file(s) [engine: ripgrep]");
+
+                if (totalMatches > maxResults)
+                {
+                    summary.AppendLine($"[Display truncated at {maxResults} results]");
+                }
+
+                var output = summary.ToString() + results.ToString();
+                output += $"\n[TOOL_EXACT_STATS: matches={totalMatches}, files_matched={filesMatched}, engine=ripgrep]";
+                return ToolResult.Ok(output);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] ripgrep failed: {ex.Message}, falling back to C#");
+                return null; // Fallback to C#
+            }
+        }
+
+        #endregion
     }
 }

@@ -97,6 +97,14 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
+  <!-- v2.1 T4: Include ripgrep binary for high-performance code search -->
+  <ItemGroup>
+    <Content Include="..\..\tools\ripgrep\rg.exe">
+      <Link>tools\ripgrep\rg.exe</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
   <!-- D-06: Include bundled GitNexus (dist + vendor + package.json) in VSIX [C61: 2MB MAX_FILE_SIZE] -->
   <ItemGroup>
     <Content Include="..\..\tools\gitnexus\dist\**\*">

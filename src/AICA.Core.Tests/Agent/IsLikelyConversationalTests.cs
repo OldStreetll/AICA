@@ -3,54 +3,61 @@ using Xunit;
 
 namespace AICA.Core.Tests.Agent
 {
+    /// <summary>
+    /// Tests for conversation intent classification.
+    /// v2.0: IsLikelyConversational moved from AgentExecutor to DynamicToolSelector.ClassifyIntent.
+    /// </summary>
     public class IsLikelyConversationalTests
     {
+        private static bool IsConversational(string input)
+            => DynamicToolSelector.ClassifyIntent(input) == "conversation";
+
         [Fact]
         public void ShortGreeting_ReturnsTrue()
         {
-            Assert.True(AgentExecutor.IsLikelyConversational("你好"));
+            Assert.True(IsConversational("你好"));
         }
 
         [Fact]
         public void ChineseQuestion_IsShiMe_ReturnsFalse()
         {
-            Assert.False(AgentExecutor.IsLikelyConversational("Logger 是什么"));
+            Assert.False(IsConversational("Logger 是什么"));
         }
 
         [Fact]
         public void ChineseQuestion_ZenMe_ReturnsFalse()
         {
-            Assert.False(AgentExecutor.IsLikelyConversational("怎么用"));
+            Assert.False(IsConversational("怎么用"));
         }
 
         [Fact]
         public void ChineseQuestion_NaXie_ReturnsFalse()
         {
-            Assert.False(AgentExecutor.IsLikelyConversational("有哪些"));
+            Assert.False(IsConversational("有哪些"));
         }
 
         [Fact]
         public void LongMessage_ReturnsFalse()
         {
-            Assert.False(AgentExecutor.IsLikelyConversational("请帮我分析一下这个项目的架构设计"));
+            Assert.False(IsConversational("请帮我分析一下这个项目的架构设计"));
         }
 
         [Fact]
         public void ShortTaskKeyword_ReturnsFalse()
         {
-            Assert.False(AgentExecutor.IsLikelyConversational("查找bug"));
+            Assert.False(IsConversational("查找bug"));
         }
 
         [Fact]
         public void EmptyMessage_ReturnsTrue()
         {
-            Assert.True(AgentExecutor.IsLikelyConversational(""));
+            Assert.True(IsConversational(""));
         }
 
         [Fact]
         public void ShortEnglishGreeting_ReturnsTrue()
         {
-            Assert.True(AgentExecutor.IsLikelyConversational("hi"));
+            Assert.True(IsConversational("hi"));
         }
     }
 }

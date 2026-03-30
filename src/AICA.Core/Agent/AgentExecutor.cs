@@ -564,6 +564,9 @@ namespace AICA.Core.Agent
             var normalized = readPath.TrimEnd('/', '\\');
             if (_taskState.EditedFiles.Contains(normalized)) return true;
 
+            // NOTE [C4]: After O12 fix (offset/limit included in signature), this branch is effectively
+            // dead code for chunked reads — different offsets produce different signatures and won't trigger
+            // dedup. Kept for safety; clean up in v2.2.
             if (_taskState.TruncatedFiles.Contains(normalized))
             {
                 var hasOffset = toolCall.Arguments != null &&

@@ -12,7 +12,10 @@ namespace AICA.Core.Tools
     public class UpdatePlanTool : IAgentTool
     {
         public string Name => "update_plan";
-        public string Description => "Update the task plan with current progress. Use this to track multi-step tasks.";
+        public string Description =>
+            "Track progress of multi-step tasks. Update step status (pending/in_progress/completed) " +
+            "and add explanation of current progress. " +
+            "Use this proactively during complex tasks to show progress to the user.";
 
         public ToolDefinition GetDefinition()
         {

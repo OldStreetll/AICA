@@ -311,11 +311,8 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new UpdatePlanTool());
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
             _toolDispatcher.RegisterTool(new ListProjectsTool());
-            // Removed: AttemptCompletionTool (natural stop via finish_reason replaces it)
-            // Removed: CondenseTool (auto-condense in AgentExecutor, not exposed to LLM)
-            // Removed: FindByNameTool (grep_search covers this, reduces tool competition)
-            // Removed: ListCodeDefinitionsTool (GitNexus provides richer structural analysis)
-            // Removed: LogAnalysisTool (grep_search + read_file covers this)
+            _toolDispatcher.RegisterTool(new WriteFileTool());  // v2.1 T2: separated from edit full_replace
+            _toolDispatcher.RegisterTool(new GlobTool());       // v2.1 T3: file pattern matching
 
             // Register GitNexus MCP bridge tools (graceful degradation: failure here doesn't affect built-in tools)
             // Phase 1: Register hardcoded definitions synchronously (immediate availability)
