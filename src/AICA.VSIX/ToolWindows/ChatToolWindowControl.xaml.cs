@@ -313,6 +313,7 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new ListProjectsTool());
             _toolDispatcher.RegisterTool(new WriteFileTool());  // v2.1 T2: separated from edit full_replace
             _toolDispatcher.RegisterTool(new GlobTool());       // v2.1 T3: file pattern matching
+            _toolDispatcher.RegisterTool(new ValidateFileTool()); // v2.3: LSP semantic validation
 
             // Register GitNexus MCP bridge tools (graceful degradation: failure here doesn't affect built-in tools)
             // Phase 1: Register hardcoded definitions synchronously (immediate availability)

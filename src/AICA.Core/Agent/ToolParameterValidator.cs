@@ -233,5 +233,40 @@ namespace AICA.Core.Agent
                 throw new ToolParameterException(
                     $"Parameter '{paramName}' length {value.Length} is outside range [{minLength}, {maxLength}]");
         }
+
+        /// <summary>
+        /// Extract an array-of-objects parameter from Arguments.
+        /// After OpenAIClient.ConvertJsonElement, arrays are List&lt;object&gt;
+        /// and objects are Dictionary&lt;string, object&gt;.
+        /// Returns null if parameter not present (distinguishes from empty list).
+        /// </summary>
+        public static List<Dictionary<string, object>> GetListOfDicts(
+            Dictionary<string, object> arguments,
+            string paramName)
+        {
+            if (arguments == null)
+                throw new ArgumentNullException(nameof(arguments));
+
+            if (!arguments.TryGetValue(paramName, out var value) || value == null)
+                return null;
+
+            if (value is List<object> list)
+            {
+                var result = new List<Dictionary<string, object>>(list.Count);
+                foreach (var item in list)
+                {
+                    if (item is Dictionary<string, object> dict)
+                        result.Add(dict);
+                    else
+                        throw new ToolParameterException(
+                            $"Parameter '{paramName}' must be an array of objects, " +
+                            $"but element is {item?.GetType().Name ?? "null"}");
+                }
+                return result;
+            }
+
+            throw new ToolParameterException(
+                $"Parameter '{paramName}' must be an array, but got {value.GetType().Name}");
+        }
     }
 }

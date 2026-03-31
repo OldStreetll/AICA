@@ -246,5 +246,71 @@ namespace AICA.Core.Tests.Agent
             Assert.Throws<ToolParameterException>(() =>
                 ToolParameterValidator.ValidateStringLength("toolong", 1, 5, "value"));
         }
+
+        // v2.3: GetListOfDicts tests
+
+        [Fact]
+        public void GetListOfDicts_WithValidList_ReturnsDicts()
+        {
+            var dict1 = new Dictionary<string, object> { ["key"] = "value1" };
+            var dict2 = new Dictionary<string, object> { ["key"] = "value2" };
+            var args = new Dictionary<string, object>
+            {
+                ["items"] = new List<object> { dict1, dict2 }
+            };
+
+            var result = ToolParameterValidator.GetListOfDicts(args, "items");
+
+            Assert.NotNull(result);
+            Assert.Equal(2, result.Count);
+            Assert.Equal("value1", result[0]["key"]);
+            Assert.Equal("value2", result[1]["key"]);
+        }
+
+        [Fact]
+        public void GetListOfDicts_WithMissingParam_ReturnsNull()
+        {
+            var args = new Dictionary<string, object>();
+            var result = ToolParameterValidator.GetListOfDicts(args, "items");
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void GetListOfDicts_WithEmptyList_ReturnsEmptyList()
+        {
+            var args = new Dictionary<string, object>
+            {
+                ["items"] = new List<object>()
+            };
+
+            var result = ToolParameterValidator.GetListOfDicts(args, "items");
+
+            Assert.NotNull(result);
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void GetListOfDicts_WithNonArrayType_ThrowsException()
+        {
+            var args = new Dictionary<string, object>
+            {
+                ["items"] = "not an array"
+            };
+
+            Assert.Throws<ToolParameterException>(() =>
+                ToolParameterValidator.GetListOfDicts(args, "items"));
+        }
+
+        [Fact]
+        public void GetListOfDicts_WithNonObjectElement_ThrowsException()
+        {
+            var args = new Dictionary<string, object>
+            {
+                ["items"] = new List<object> { "not a dict" }
+            };
+
+            Assert.Throws<ToolParameterException>(() =>
+                ToolParameterValidator.GetListOfDicts(args, "items"));
+        }
     }
 }

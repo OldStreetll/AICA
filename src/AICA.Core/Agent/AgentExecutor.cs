@@ -121,7 +121,14 @@ namespace AICA.Core.Agent
                 UserMessageTokens = userRequest?.Length ?? 0
             };
 
-            int conversationBudget = (int)(_maxTokenBudget * 0.85);
+            // v2.4: Account for tool definition token overhead in budget
+            int toolDefinitionTokens = toolDefinitions.Sum(t =>
+                Context.ContextManager.EstimateTokens(t.Description ?? "") +
+                Context.ContextManager.EstimateTokens(
+                    System.Text.Json.JsonSerializer.Serialize(t.Parameters ?? new ToolParameters())));
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] Tool definitions: {toolDefinitions.Count} tools, ~{toolDefinitionTokens} tokens overhead");
+            int conversationBudget = (int)(_maxTokenBudget * 0.85) - toolDefinitionTokens;
             bool budgetWarningSent = false;
 
             // ══════════════════════════════════════════════════════════
@@ -425,7 +432,9 @@ namespace AICA.Core.Agent
                     context?.SourceRoots)
                 .AddBugFixGuidance(intent, language)
                 .AddQtTemplateGuidance(userRequest)
-                .AddGitNexusGuidance(ResolveGitNexusRepoName(context?.WorkingDirectory));
+                .AddGitNexusGuidance(ResolveGitNexusRepoName(context?.WorkingDirectory))
+                // v2.3: Inject project structure into prompt (reduces list_projects calls)
+                .AddProjectStructure(context?.GetProjects());
 
             // Load MCP resources (GitNexus setup instructions + codebase context)
             // This is what OpenCode does — inject resource content so the LLM knows how to use MCP tools
@@ -563,14 +572,48 @@ namespace AICA.Core.Agent
                     result.ContextOverflow = true;
                     return result;
                 }
+                catch (LLM.LLMException lex) when (attempt < MaxRetries)
+                {
+                    // v2.3: Structured error classification for differentiated recovery
+                    var errorKind = lex.Classify();
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] LLM error classified as {errorKind} (attempt {attempt + 1}/{MaxRetries}): {lex.Message}");
+
+                    switch (errorKind)
+                    {
+                        case LLM.LLMErrorKind.ContextOverflow:
+                            result.ContextOverflow = true;
+                            return result;
+                        case LLM.LLMErrorKind.RateLimited:
+                            // Rate limited: longer backoff
+                            int rlDelay = 2000 * (1 << attempt) + _jitterRandom.Next(0, 1000);
+                            System.Diagnostics.Debug.WriteLine($"[AICA] Rate limited, waiting {rlDelay}ms");
+                            await Task.Delay(rlDelay, ct).ConfigureAwait(false);
+                            break;
+                        case LLM.LLMErrorKind.Retryable:
+                            int baseDelay2 = 1000 * (1 << attempt);
+                            int jitter2 = _jitterRandom.Next(0, baseDelay2 / 2);
+                            await Task.Delay(baseDelay2 + jitter2, ct).ConfigureAwait(false);
+                            break;
+                        case LLM.LLMErrorKind.AuthError:
+                            result.Error = $"Authentication error: {lex.Message}. Check API key configuration.";
+                            return result;
+                        case LLM.LLMErrorKind.ModelNotFound:
+                            result.Error = $"Model not found: {lex.Message}. Check model name in settings.";
+                            return result;
+                        default: // BadRequest, Fatal
+                            result.Error = lex.Message;
+                            return result;
+                    }
+                }
                 catch (Exception ex) when (attempt < MaxRetries && IsTransientException(ex))
                 {
-                    // Exponential backoff with jitter (OpenCode style)
-                    int baseDelay = 1000 * (1 << attempt); // 1s, 2s, 4s
+                    // Non-LLMException transient errors (network, IO)
+                    int baseDelay = 1000 * (1 << attempt);
                     int jitter = _jitterRandom.Next(0, baseDelay / 2);
                     int delay = baseDelay + jitter;
                     System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] LLM transient error (attempt {attempt + 1}/{MaxRetries}), retrying in {delay}ms: {ex.Message}");
+                        $"[AICA] Transient error (attempt {attempt + 1}/{MaxRetries}), retrying in {delay}ms: {ex.Message}");
                     await Task.Delay(delay, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -759,7 +802,14 @@ namespace AICA.Core.Agent
                 || msg.Contains("maximum context length")
                 || msg.Contains("token limit")
                 || msg.Contains("too many tokens")
-                || msg.Contains("context window");
+                || msg.Contains("context window")
+                // v2.4: MiniMax-specific error patterns (Chinese + English variants)
+                || msg.Contains("上下文长度")
+                || msg.Contains("令牌限制")
+                || msg.Contains("超出模型")
+                || msg.Contains("exceeds the model")
+                || msg.Contains("input is too long")
+                || msg.Contains("max_tokens");
         }
 
         private List<string> ExtractPathCandidates(string text)

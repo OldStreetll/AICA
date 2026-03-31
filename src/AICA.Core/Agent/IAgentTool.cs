@@ -76,6 +76,18 @@ namespace AICA.Core.Agent
         public string Description { get; set; }
         public string[] Enum { get; set; }
         public object Default { get; set; }
+
+        /// <summary>v2.3: Schema for array items (when Type="array")</summary>
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public ToolParameterProperty Items { get; set; }
+
+        /// <summary>v2.3: Properties for nested objects (when Type="object")</summary>
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public System.Collections.Generic.Dictionary<string, ToolParameterProperty> Properties { get; set; }
+
+        /// <summary>v2.3: Required fields for nested objects</summary>
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string[] Required { get; set; }
     }
 
     /// <summary>

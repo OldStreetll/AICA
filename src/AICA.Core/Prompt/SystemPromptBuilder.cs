@@ -216,6 +216,57 @@ namespace AICA.Core.Prompt
             return this;
         }
 
+        /// <summary>
+        /// v2.3: Inject solution project structure into system prompt.
+        /// This replaces the need for LLM to call list_projects tool on every session.
+        /// </summary>
+        public SystemPromptBuilder AddProjectStructure(Dictionary<string, Workspace.ProjectInfo> projects)
+        {
+            if (projects == null || projects.Count == 0)
+                return this;
+
+            _builder.AppendLine("## Solution Structure");
+            _builder.AppendLine($"The solution contains {projects.Count} project(s):");
+            _builder.AppendLine();
+
+            foreach (var kvp in projects)
+            {
+                var p = kvp.Value;
+                _builder.AppendLine($"### {p.Name ?? kvp.Key}");
+                if (!string.IsNullOrEmpty(p.ProjectType))
+                    _builder.AppendLine($"- Type: {p.ProjectType}");
+                if (!string.IsNullOrEmpty(p.ProjectDirectory))
+                    _builder.AppendLine($"- Directory: {p.ProjectDirectory}");
+
+                if (p.Filters != null && p.Filters.Count > 0)
+                {
+                    _builder.AppendLine("- Filters:");
+                    foreach (var filter in p.Filters)
+                    {
+                        _builder.AppendLine($"  - {filter.Key}: {filter.Value.Count} file(s)");
+                    }
+                }
+
+                if (p.Dependencies != null && p.Dependencies.Count > 0)
+                {
+                    _builder.AppendLine($"- Dependencies: {string.Join(", ", p.Dependencies.Take(10))}");
+                    if (p.Dependencies.Count > 10)
+                        _builder.Append($" ... and {p.Dependencies.Count - 10} more");
+                }
+
+                var fileCount = p.SourceFiles?.Count ?? 0;
+                if (fileCount > 0)
+                    _builder.AppendLine($"- Source files: {fileCount}");
+
+                _builder.AppendLine();
+            }
+
+            _builder.AppendLine("Use this structure to understand the codebase. " +
+                                "You can still call list_projects with show_files=true to see individual file lists.");
+            _builder.AppendLine();
+            return this;
+        }
+
         public SystemPromptBuilder AddCustomInstructions(string instructions)
         {
             if (!string.IsNullOrWhiteSpace(instructions))

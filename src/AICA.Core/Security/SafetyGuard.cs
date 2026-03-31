@@ -17,10 +17,15 @@ namespace AICA.Core.Security
         private readonly List<Regex> _ignorePatterns;
         private readonly string _workingDirectory;
         private readonly HashSet<string> _sourceRoots;
+        private readonly PermissionRuleEngine _ruleEngine;
+
+        /// <summary>v2.3: Permission rule engine for glob+action+level checks</summary>
+        public PermissionRuleEngine RuleEngine => _ruleEngine;
 
         public SafetyGuard(SafetyGuardOptions options)
         {
             _workingDirectory = options?.WorkingDirectory ?? Environment.CurrentDirectory;
+            _ruleEngine = new PermissionRuleEngine(options?.PermissionRules);
             _sourceRoots = new HashSet<string>(
                 (options?.SourceRoots ?? Array.Empty<string>())
                     .Where(r => !string.IsNullOrEmpty(r))
@@ -218,6 +223,49 @@ namespace AICA.Core.Security
             return CommandCheckResult.RequiresApproval($"Command '{executable}' requires user approval");
         }
 
+        /// <summary>
+        /// v2.3: Check path access with permission rule overlay.
+        /// First evaluates glob+action rules; falls back to standard CheckPathAccess if no rule matches.
+        /// </summary>
+        public PathAccessResult CheckPathAccessWithRules(string path, PermissionAction action)
+        {
+            // 1. Standard path checks (protected paths, .aicaignore, directory boundaries)
+            var baseResult = CheckPathAccess(path);
+            if (!baseResult.IsAllowed)
+                return baseResult;
+
+            // 2. Permission rule evaluation (glob + action + level)
+            var relativePath = path;
+            var workDirPrefix = _workingDirectory.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            try
+            {
+                var fullPath = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(_workingDirectory, path));
+                if (fullPath.StartsWith(workDirPrefix, StringComparison.OrdinalIgnoreCase))
+                    relativePath = fullPath.Substring(workDirPrefix.Length);
+            }
+            catch { }
+
+            var ruleResult = _ruleEngine.Evaluate(relativePath, action);
+            if (ruleResult != null)
+            {
+                switch (ruleResult.Level)
+                {
+                    case PermissionLevel.Deny:
+                        return PathAccessResult.Denied(
+                            ruleResult.Reason ?? $"Denied by permission rule: {ruleResult.MatchedPattern}");
+                    case PermissionLevel.Ask:
+                        // Allowed but flagged for confirmation
+                        var askResult = baseResult;
+                        askResult.Reason = ruleResult.Reason ?? $"Requires confirmation (rule: {ruleResult.MatchedPattern})";
+                        return askResult;
+                    case PermissionLevel.Allow:
+                        return baseResult; // Explicitly allowed
+                }
+            }
+
+            return baseResult;
+        }
+
         private static bool IsDangerousCommandPattern(string command)
         {
             var lower = command.ToLowerInvariant();
@@ -248,7 +296,122 @@ namespace AICA.Core.Security
         public string[] CommandWhitelist { get; set; }
         public string[] CommandBlacklist { get; set; }
         public string AicaIgnorePath { get; set; }
+        /// <summary>v2.3: Permission rules (glob + action + level)</summary>
+        public List<PermissionRule> PermissionRules { get; set; }
     }
+
+    #region v2.3: Permission Rule System (glob + action + three-level control)
+
+    /// <summary>
+    /// Action category for permission rules.
+    /// </summary>
+    public enum PermissionAction
+    {
+        Read,
+        Write,
+        Execute
+    }
+
+    /// <summary>
+    /// Permission level (three-level control).
+    /// </summary>
+    public enum PermissionLevel
+    {
+        Allow,
+        Ask,
+        Deny
+    }
+
+    /// <summary>
+    /// A permission rule matching glob pattern + action to a permission level.
+    /// Rules are evaluated in order; first match wins.
+    /// </summary>
+    public class PermissionRule
+    {
+        /// <summary>Glob pattern (e.g., "*.cpp", "src/**", ".env*")</summary>
+        public string Pattern { get; set; }
+        /// <summary>Action this rule applies to</summary>
+        public PermissionAction Action { get; set; }
+        /// <summary>Permission level when matched</summary>
+        public PermissionLevel Level { get; set; }
+        /// <summary>Optional human-readable reason</summary>
+        public string Reason { get; set; }
+    }
+
+    /// <summary>
+    /// v2.3: Evaluates permission rules (glob + action + three-level control).
+    /// First-match-wins ordering. Falls back to default behavior if no rule matches.
+    /// </summary>
+    public class PermissionRuleEngine
+    {
+        private readonly List<(Regex Pattern, PermissionAction Action, PermissionLevel Level, string Reason)> _compiledRules;
+
+        public PermissionRuleEngine(IEnumerable<PermissionRule> rules)
+        {
+            _compiledRules = new List<(Regex, PermissionAction, PermissionLevel, string)>();
+
+            if (rules == null) return;
+
+            foreach (var rule in rules)
+            {
+                if (string.IsNullOrWhiteSpace(rule.Pattern)) continue;
+                var regex = GlobToRegex(rule.Pattern);
+                _compiledRules.Add((
+                    new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.Compiled),
+                    rule.Action, rule.Level, rule.Reason));
+            }
+        }
+
+        /// <summary>
+        /// Evaluate a path + action against the rule set.
+        /// Returns null if no rule matches (caller uses default behavior).
+        /// </summary>
+        public PermissionEvalResult Evaluate(string relativePath, PermissionAction action)
+        {
+            if (string.IsNullOrEmpty(relativePath))
+                return null;
+
+            var normalized = relativePath.Replace('\\', '/');
+
+            foreach (var rule in _compiledRules)
+            {
+                if (rule.Action != action)
+                    continue;
+
+                if (rule.Pattern.IsMatch(normalized))
+                {
+                    return new PermissionEvalResult
+                    {
+                        Level = rule.Level,
+                        MatchedPattern = rule.Pattern.ToString(),
+                        Reason = rule.Reason
+                    };
+                }
+            }
+
+            return null; // No rule matched — use default
+        }
+
+        private static string GlobToRegex(string glob)
+        {
+            var normalized = glob.Replace('\\', '/');
+            var regex = "^" + Regex.Escape(normalized)
+                .Replace("\\*\\*\\/", "(.*/)?")
+                .Replace("\\*\\*", ".*")
+                .Replace("\\*", "[^/]*")
+                .Replace("\\?", "[^/]") + "$";
+            return regex;
+        }
+    }
+
+    public class PermissionEvalResult
+    {
+        public PermissionLevel Level { get; set; }
+        public string MatchedPattern { get; set; }
+        public string Reason { get; set; }
+    }
+
+    #endregion
 
     public class PathAccessResult
     {

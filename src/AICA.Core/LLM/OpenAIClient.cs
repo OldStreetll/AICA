@@ -484,8 +484,10 @@ namespace AICA.Core.LLM
                 }
                 return dict;
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] ParseArguments failed: {ex.Message}. JSON ({json?.Length ?? 0} chars): {(json?.Length > 200 ? json.Substring(0, 200) + "..." : json)}");
                 return new Dictionary<string, object>();
             }
         }
@@ -720,5 +722,53 @@ namespace AICA.Core.LLM
             _forceTransient ||
             StatusCode == 429 || StatusCode == 500 || StatusCode == 502 ||
             StatusCode == 503 || StatusCode == 504;
+
+        /// <summary>
+        /// v2.3: Classify this exception into a structured error kind for differential handling.
+        /// </summary>
+        public LLMErrorKind Classify()
+        {
+            if (IsContextExceeded)
+                return LLMErrorKind.ContextOverflow;
+
+            if (StatusCode == 429)
+                return LLMErrorKind.RateLimited;
+
+            if (IsTransient)
+                return LLMErrorKind.Retryable;
+
+            if (StatusCode == 401 || StatusCode == 403)
+                return LLMErrorKind.AuthError;
+
+            if (StatusCode == 404)
+                return LLMErrorKind.ModelNotFound;
+
+            if (StatusCode >= 400 && StatusCode < 500)
+                return LLMErrorKind.BadRequest;
+
+            return LLMErrorKind.Fatal;
+        }
+    }
+
+    /// <summary>
+    /// v2.3: Structured error classification for LLM communication failures.
+    /// Enables AgentExecutor to apply differentiated recovery strategies.
+    /// </summary>
+    public enum LLMErrorKind
+    {
+        /// <summary>Context window exceeded — trigger condense and retry</summary>
+        ContextOverflow,
+        /// <summary>Rate limited (429) — exponential backoff retry</summary>
+        RateLimited,
+        /// <summary>Transient server error (5xx, network) — retry with backoff</summary>
+        Retryable,
+        /// <summary>Authentication/authorization error (401/403) — fatal, inform user</summary>
+        AuthError,
+        /// <summary>Model not found (404) — fatal, check config</summary>
+        ModelNotFound,
+        /// <summary>Client error (4xx) — likely malformed request, do not retry</summary>
+        BadRequest,
+        /// <summary>Unknown/unrecoverable error — stop execution</summary>
+        Fatal
     }
 }

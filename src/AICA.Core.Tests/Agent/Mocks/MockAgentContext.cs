@@ -101,6 +101,16 @@ namespace AICA.Core.Tests.Agent.Mocks
         // H6: Edited files tracking
         public IReadOnlyCollection<string> EditedFilesInSession => Array.Empty<string>();
 
+        // v2.3: Diagnostics (returns empty by default; override via MockDiagnostics)
+        public List<FileDiagnostic> MockDiagnostics { get; set; } = new List<FileDiagnostic>();
+
+        public Task<List<FileDiagnostic>> GetDiagnosticsAsync(string filePath, CancellationToken ct = default)
+        {
+            var filtered = MockDiagnostics.FindAll(d =>
+                string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(filtered);
+        }
+
         // --- Test helpers ---
 
         /// <summary>

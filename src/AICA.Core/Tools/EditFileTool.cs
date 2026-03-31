@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
@@ -16,8 +17,12 @@ namespace AICA.Core.Tools
 
         public string Name => "edit";
         public string Description =>
-            "Replace specific text in an existing file. old_string must match exactly and be unique. " +
-            "Use read_file first to see exact content. " +
+            "Replace text in files. Three modes:\n" +
+            "1. Single edit: file_path + old_string + new_string (one replacement)\n" +
+            "2. Multi-edit: file_path + edits array (multiple replacements in one file, shown as single diff)\n" +
+            "3. Multi-file: files array with per-file edits (each file shown as separate diff)\n" +
+            "old_string must match uniquely. Use read_file first to see exact content.\n" +
+            "Limits: max 50 edits per file, max 20 files per call.\n" +
             "Do NOT use this to create new files — use write_file instead.";
 
         public ToolMetadata GetMetadata()
@@ -64,12 +69,60 @@ namespace AICA.Core.Tools
                         ["replace_all"] = new ToolParameterProperty
                         {
                             Type = "boolean",
-                            Description = "If true, replace all occurrences. Default is false.",
+                            Description = "If true, replace all occurrences (single edit mode only). Default is false.",
                             Default = false
+                        },
+                        // v2.3: Multi-edit mode (same file, multiple replacements)
+                        ["edits"] = new ToolParameterProperty
+                        {
+                            Type = "array",
+                            Description = "Array of edits for multi-edit mode. Each edit has old_string and new_string. " +
+                                          "When provided, all edits are applied to the same file and shown as a single diff preview. (max 50)",
+                            Items = new ToolParameterProperty
+                            {
+                                Type = "object",
+                                Properties = new Dictionary<string, ToolParameterProperty>
+                                {
+                                    ["old_string"] = new ToolParameterProperty { Type = "string", Description = "The exact text to replace" },
+                                    ["new_string"] = new ToolParameterProperty { Type = "string", Description = "The replacement text" }
+                                },
+                                Required = new[] { "old_string", "new_string" }
+                            }
+                        },
+                        // v2.3: Multi-file mode (multiple files, each with edits)
+                        ["files"] = new ToolParameterProperty
+                        {
+                            Type = "array",
+                            Description = "Array of file edits for multi-file mode. Each entry has file_path and edits array. " +
+                                          "Each file is shown as a separate diff preview for independent confirmation. (max 20)",
+                            Items = new ToolParameterProperty
+                            {
+                                Type = "object",
+                                Properties = new Dictionary<string, ToolParameterProperty>
+                                {
+                                    ["file_path"] = new ToolParameterProperty { Type = "string", Description = "Path to the file" },
+                                    ["edits"] = new ToolParameterProperty
+                                    {
+                                        Type = "array",
+                                        Description = "Edits to apply to this file",
+                                        Items = new ToolParameterProperty
+                                        {
+                                            Type = "object",
+                                            Properties = new Dictionary<string, ToolParameterProperty>
+                                            {
+                                                ["old_string"] = new ToolParameterProperty { Type = "string", Description = "Text to replace" },
+                                                ["new_string"] = new ToolParameterProperty { Type = "string", Description = "Replacement text" }
+                                            },
+                                            Required = new[] { "old_string", "new_string" }
+                                        }
+                                    }
+                                },
+                                Required = new[] { "file_path", "edits" }
+                            }
                         }
-                        // v2.1 O1: full_replace removed — use write_file for creating new files
                     },
-                    Required = new[] { "file_path", "old_string", "new_string" }
+                    // v2.3: Required is empty — validated at runtime based on mode
+                    Required = Array.Empty<string>()
                 }
             };
         }
@@ -78,6 +131,30 @@ namespace AICA.Core.Tools
         {
             try
             {
+                // v2.3: Detect call mode (files → multi-file, edits → multi-edit, else → single edit)
+                var filesDicts = ToolParameterValidator.GetListOfDicts(call.Arguments, "files");
+                var editsDicts = ToolParameterValidator.GetListOfDicts(call.Arguments, "edits");
+
+                if (filesDicts != null)
+                {
+                    var files = filesDicts.Select(d => new FileEditEntry
+                    {
+                        FilePath = ToolParameterValidator.GetRequiredParameter<string>(d, "file_path"),
+                        Edits = ParseEditsFromDicts(
+                            ToolParameterValidator.GetListOfDicts(d, "edits")
+                            ?? throw new ToolParameterException("Each file entry must have an 'edits' array"))
+                    }).ToList();
+                    return (await ExecuteMultiFileAsync(files, context, ct)).ToolResult;
+                }
+
+                if (editsDicts != null)
+                {
+                    var path2 = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "file_path");
+                    var edits = ParseEditsFromDicts(editsDicts);
+                    return (await ExecuteMultiEditAsync(path2, edits, context, ct)).ToolResult;
+                }
+
+                // Mode A: Single edit (existing path — zero changes below)
                 // Validate required parameters
                 var path = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "file_path");
                 var newString = ToolParameterValidator.GetRequiredParameter<string>(call.Arguments, "new_string");
@@ -239,7 +316,8 @@ namespace AICA.Core.Tools
                     var editResult = ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
                     if (!string.IsNullOrEmpty(_lastMatchLevel))
                         editResult.Metadata = new Dictionary<string, string> { ["fuzzy_match_level"] = _lastMatchLevel };
-                    return editResult;
+                    // v2.3: Append diagnostics after successful edit
+                    return await AppendDiagnosticsAsync(editResult, path, context, ct);
                 }
             }
             catch (ToolParameterException ex)
@@ -288,6 +366,294 @@ namespace AICA.Core.Tools
         {
             return Task.CompletedTask;
         }
+
+        #region v2.3: Multi-edit and Multi-file support
+
+        private sealed class EditEntry
+        {
+            public string OldString { get; set; }
+            public string NewString { get; set; }
+        }
+
+        private sealed class FileEditEntry
+        {
+            public string FilePath { get; set; }
+            public List<EditEntry> Edits { get; set; }
+        }
+
+        private enum MultiEditOutcome
+        {
+            Applied,
+            Cancelled,
+            Failed
+        }
+
+        private sealed class MultiEditResult
+        {
+            public MultiEditOutcome Outcome { get; set; }
+            public ToolResult ToolResult { get; set; }
+        }
+
+        /// <summary>
+        /// v2.3: Append IDE diagnostics to a successful edit result.
+        /// Non-fatal — if diagnostics retrieval fails, the original result is returned unchanged.
+        /// </summary>
+        private static async Task<ToolResult> AppendDiagnosticsAsync(
+            ToolResult result, string filePath, IAgentContext context, CancellationToken ct)
+        {
+            if (!result.Success)
+                return result;
+
+            try
+            {
+                var diagnostics = await context.GetDiagnosticsAsync(filePath, ct);
+                if (diagnostics != null && diagnostics.Count > 0)
+                {
+                    var formatted = string.Join("\n", diagnostics.Select(d =>
+                        $"  Line {d.Line}, Col {d.Column}: [{d.Severity}] {d.Message}" +
+                        (string.IsNullOrEmpty(d.Code) ? "" : $" ({d.Code})")));
+                    result.Content += $"\n\n⚠️ DIAGNOSTICS ({diagnostics.Count} issue(s) detected after edit):\n{formatted}\n" +
+                                      "Fix these issues before proceeding.";
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch
+            {
+                // Non-fatal: diagnostics unavailable, return original result
+            }
+
+            return result;
+        }
+
+        private static List<EditEntry> ParseEditsFromDicts(List<Dictionary<string, object>> dicts)
+        {
+            return dicts.Select(d => new EditEntry
+            {
+                OldString = ToolParameterValidator.GetRequiredParameter<string>(d, "old_string"),
+                NewString = ToolParameterValidator.GetRequiredParameter<string>(d, "new_string")
+            }).ToList();
+        }
+
+        /// <summary>
+        /// FindWithCascade + uniqueness enforcement for multi-edit mode.
+        /// Returns (match, error). If error is non-null, the edit should be rejected.
+        /// </summary>
+        private (CascadeMatch? Match, string Error) FindWithCascadeUnique(string content, string oldString)
+        {
+            var match = FindWithCascade(content, oldString);
+            if (match == null)
+                return (null, null); // no match — caller handles diagnostic
+
+            // Verify uniqueness at Level 0 (Exact): check for second occurrence
+            if (match.Value.Level == MatchLevel.Exact)
+            {
+                var first = content.IndexOf(oldString, StringComparison.Ordinal);
+                var second = content.IndexOf(oldString, first + 1, StringComparison.Ordinal);
+                if (second >= 0)
+                    return (null, "old_string appears multiple times in the file. " +
+                                  "Provide more surrounding context to make it unique. " +
+                                  "replace_all is not supported in multi-edit mode.");
+            }
+            // Levels 1-3: internal implementation already enforces uniqueness
+
+            return (match, null);
+        }
+
+        /// <summary>
+        /// v2.3: Execute multiple edits on a single file. All edits are aggregated into
+        /// one diff preview for a single user confirmation.
+        /// </summary>
+        private async Task<MultiEditResult> ExecuteMultiEditAsync(
+            string path, List<EditEntry> edits, IAgentContext context, CancellationToken ct)
+        {
+            // 1. Validate
+            if (edits.Count == 0)
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolResult.Fail("edits array is empty") };
+            if (edits.Count > 50)
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolResult.Fail("Too many edits (max 50 per call)") };
+
+            // 2. Path checks + read file
+            if (!context.IsPathAccessible(path))
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolErrorHandler.HandleError(ToolErrorHandler.AccessDenied(path)) };
+            if (!await context.FileExistsAsync(path, ct))
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolErrorHandler.HandleError(ToolErrorHandler.NotFound(path)) };
+            if (FileTimeTracker.Instance.HasExternalModification(path))
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolResult.Fail($"⚠️ File '{path}' has been modified externally. Use read_file first.") };
+
+            var content = await context.ReadFileAsync(path, ct);
+            var originalLineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
+            var normalized = NormalizeLineEndings(content);
+
+            // 3. Collect all match positions (with no-op and uniqueness checks)
+            var matches = new List<(int Index, int Length, string NewText, int EditIndex)>();
+            for (int i = 0; i < edits.Count; i++)
+            {
+                var normOld = NormalizeLineEndings(edits[i].OldString);
+                var normNew = NormalizeLineEndings(edits[i].NewString);
+
+                // No-op detection
+                if (normOld == normNew)
+                    return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                        ToolResult = ToolResult.Fail($"Edit #{i + 1}: old_string and new_string are identical.") };
+
+                // Uniqueness-enforced fuzzy match
+                var (cascade, uniqueError) = FindWithCascadeUnique(normalized, normOld);
+                if (uniqueError != null)
+                    return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                        ToolResult = ToolResult.Fail($"Edit #{i + 1}: {uniqueError}") };
+                if (cascade == null)
+                {
+                    var diagnosis = DiagnoseEditFailure(normalized, normOld, path, context);
+                    return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                        ToolResult = ToolResult.Fail($"Edit #{i + 1} failed: {diagnosis.Message}") };
+                }
+                matches.Add((cascade.Value.MatchIndex, cascade.Value.MatchLength, normNew, i));
+            }
+
+            // 4. Sort by position + overlap detection
+            matches.Sort((a, b) => a.Index.CompareTo(b.Index));
+            for (int i = 1; i < matches.Count; i++)
+            {
+                if (matches[i].Index < matches[i - 1].Index + matches[i - 1].Length)
+                    return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                        ToolResult = ToolResult.Fail(
+                            $"Edits #{matches[i - 1].EditIndex + 1} and #{matches[i].EditIndex + 1} have overlapping regions.") };
+            }
+
+            // 5. Apply edits in reverse order (avoids offset drift)
+            var sb = new StringBuilder(normalized);
+            for (int i = matches.Count - 1; i >= 0; i--)
+            {
+                sb.Remove(matches[i].Index, matches[i].Length);
+                sb.Insert(matches[i].Index, matches[i].NewText);
+            }
+            var newContent = sb.ToString();
+
+            // 6. Restore original line endings
+            if (originalLineEnding == "\r\n")
+                newContent = newContent.Replace("\n", "\r\n");
+
+            // 7. Single diff confirmation
+            var diffResult = await context.ShowDiffAndApplyAsync(path, content, newContent, ct);
+            if (!diffResult.Applied)
+            {
+                return new MultiEditResult
+                {
+                    Outcome = MultiEditOutcome.Cancelled,
+                    ToolResult = ToolResult.Ok(
+                        $"MULTI-EDIT CANCELLED BY USER — {edits.Count} edits NOT applied to {path}\n\n" +
+                        "The user chose not to apply the proposed edits. Respect this decision and do NOT retry " +
+                        "the same edits automatically unless the user explicitly asks.")
+                };
+            }
+
+            // 8. Record edit for conflict detection
+            FileTimeTracker.Instance.RecordEdit(path);
+
+            // 9. User manual edit detection (aligned with Mode A)
+            var finalContent = await context.ReadFileAsync(path, ct);
+            bool wasModifiedByUser = finalContent != newContent;
+
+            if (wasModifiedByUser)
+            {
+                var originalLines = content.Split('\n').Length;
+                var finalLines = finalContent.Split('\n').Length;
+                var lineDiff = finalLines - originalLines;
+                var diffText = lineDiff > 0 ? $"+{lineDiff}" : lineDiff < 0 ? $"{lineDiff}" : "0";
+
+                return new MultiEditResult
+                {
+                    Outcome = MultiEditOutcome.Applied,
+                    ToolResult = ToolResult.Ok(
+                        $"⚠️ USER MANUALLY EDITED THE FILE — YOUR SUGGESTION WAS NOT USED ⚠️\n\n" +
+                        $"File: {path}\n" +
+                        $"Original: {originalLines} lines → User's version: {finalLines} lines ({diffText})\n" +
+                        $"Attempted edits: {edits.Count}\n\n" +
+                        $"📄 ACTUAL FILE CONTENT (as saved by user):\n{finalContent}\n\n" +
+                        $"⚠️ CRITICAL: You MUST read and analyze the actual content above.")
+                };
+            }
+
+            var editResult = ToolResult.Ok($"File edited: {path} ({edits.Count} edits applied in one diff)");
+            editResult.Metadata = new Dictionary<string, string>
+            {
+                ["edit_mode"] = "multi_edit",
+                ["edit_count"] = edits.Count.ToString()
+            };
+            // v2.3: Append diagnostics after successful multi-edit
+            editResult = await AppendDiagnosticsAsync(editResult, path, context, ct);
+            return new MultiEditResult { Outcome = MultiEditOutcome.Applied, ToolResult = editResult };
+        }
+
+        /// <summary>
+        /// v2.3: Execute edits across multiple files. Each file gets its own
+        /// diff preview for independent confirmation.
+        /// </summary>
+        private async Task<MultiEditResult> ExecuteMultiFileAsync(
+            List<FileEditEntry> files, IAgentContext context, CancellationToken ct)
+        {
+            if (files.Count == 0)
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolResult.Fail("files array is empty") };
+            if (files.Count > 20)
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed,
+                    ToolResult = ToolResult.Fail("Too many files (max 20 per call)") };
+
+            var results = new List<string>();
+            int applied = 0, cancelled = 0, failed = 0;
+
+            foreach (var file in files)
+            {
+                var mer = await ExecuteMultiEditAsync(file.FilePath, file.Edits, context, ct);
+                switch (mer.Outcome)
+                {
+                    case MultiEditOutcome.Applied:
+                        applied++;
+                        results.Add($"✅ {file.FilePath}: {file.Edits.Count} edit(s) applied");
+                        break;
+                    case MultiEditOutcome.Cancelled:
+                        cancelled++;
+                        results.Add($"⏭️ {file.FilePath}: skipped by user");
+                        break;
+                    case MultiEditOutcome.Failed:
+                        failed++;
+                        results.Add($"❌ {file.FilePath}: {mer.ToolResult.Error ?? mer.ToolResult.Content ?? "failed"}");
+                        break;
+                }
+            }
+
+            var summary = $"Multi-file edit: {applied} applied, {cancelled} skipped, {failed} failed\n" +
+                          string.Join("\n", results);
+
+            var outcome = applied > 0 ? MultiEditOutcome.Applied
+                        : cancelled > 0 ? MultiEditOutcome.Cancelled
+                        : MultiEditOutcome.Failed;
+
+            var toolResult = outcome != MultiEditOutcome.Failed
+                ? ToolResult.Ok(summary)
+                : ToolResult.Fail(summary);
+
+            if (outcome == MultiEditOutcome.Applied)
+            {
+                toolResult.Metadata = new Dictionary<string, string>
+                {
+                    ["edit_mode"] = "multi_file",
+                    ["file_count"] = files.Count.ToString(),
+                    ["applied"] = applied.ToString(),
+                    ["cancelled"] = cancelled.ToString(),
+                    ["failed"] = failed.ToString()
+                };
+            }
+
+            return new MultiEditResult { Outcome = outcome, ToolResult = toolResult };
+        }
+
+        #endregion
 
         #region v2.1 T5: Cascading Fuzzy Match
 

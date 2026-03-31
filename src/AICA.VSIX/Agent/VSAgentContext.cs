@@ -782,5 +782,123 @@ namespace AICA.Agent
 
             return Uri.UnescapeDataString(baseUri.MakeRelativeUri(fullUri).ToString().Replace('/', Path.DirectorySeparatorChar));
         }
+
+        #region v2.3: LSP Semantic Validation — Error List Polling
+
+        /// <summary>
+        /// Poll VS2022 Error List for diagnostics on a specific file.
+        /// Waits until results stabilize (2 consecutive identical reads at 500ms intervals, max 5s).
+        /// </summary>
+        public async Task<List<FileDiagnostic>> GetDiagnosticsAsync(string filePath, CancellationToken ct = default)
+        {
+            try
+            {
+                var fullPath = ResolveFilePath(filePath) ?? filePath;
+                List<FileDiagnostic> previousSnapshot = null;
+                var maxAttempts = 10; // 10 * 500ms = 5 seconds max
+
+                for (int attempt = 0; attempt < maxAttempts; attempt++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await Task.Delay(500, ct);
+
+                    var currentSnapshot = await ReadErrorListAsync(fullPath);
+
+                    // Stabilization check: 2 consecutive identical results
+                    if (previousSnapshot != null && DiagnosticsEqual(previousSnapshot, currentSnapshot))
+                        return currentSnapshot;
+
+                    previousSnapshot = currentSnapshot;
+                }
+
+                // Timeout: return last snapshot
+                return previousSnapshot ?? new List<FileDiagnostic>();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] GetDiagnosticsAsync error: {ex.Message}");
+                return new List<FileDiagnostic>();
+            }
+        }
+
+        private async Task<List<FileDiagnostic>> ReadErrorListAsync(string fullPath)
+        {
+            var result = new List<FileDiagnostic>();
+
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            try
+            {
+                var errorList = _dte.ToolWindows.ErrorList;
+                var errorItems = errorList.ErrorItems;
+
+                for (int i = 1; i <= errorItems.Count; i++) // 1-indexed
+                {
+                    try
+                    {
+                        var item = errorItems.Item(i);
+                        var itemPath = item.FileName;
+
+                        if (string.IsNullOrEmpty(itemPath))
+                            continue;
+
+                        // Match by full path (case-insensitive on Windows)
+                        if (!string.Equals(Path.GetFullPath(itemPath), Path.GetFullPath(fullPath),
+                                StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        var severity = "info";
+                        // ErrorItem doesn't expose severity enum directly; infer from description prefix
+                        // VS2022 Error List items accessed through DTE always have a known category
+                        // We check if the error list was filtered to show errors vs warnings
+                        // For POC, classify based on the error list's current filter state
+                        // A more robust approach would use ITableManager API
+                        var desc = item.Description ?? "";
+
+                        result.Add(new FileDiagnostic
+                        {
+                            FilePath = itemPath,
+                            Line = item.Line,
+                            Column = item.Column,
+                            Severity = "error", // DTE ErrorItems default to errors when ErrorList.ShowErrors=true
+                            Message = desc,
+                            Code = item.Project ?? ""
+                        });
+                    }
+                    catch
+                    {
+                        // Skip items that can't be read (e.g., stale entries)
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] ReadErrorListAsync: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        private static bool DiagnosticsEqual(List<FileDiagnostic> a, List<FileDiagnostic> b)
+        {
+            if (a.Count != b.Count)
+                return false;
+
+            for (int i = 0; i < a.Count; i++)
+            {
+                if (a[i].Line != b[i].Line ||
+                    a[i].Column != b[i].Column ||
+                    a[i].Message != b[i].Message)
+                    return false;
+            }
+
+            return true;
+        }
+
+        #endregion
     }
 }
