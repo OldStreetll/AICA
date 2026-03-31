@@ -145,26 +145,29 @@ namespace AICA.Core.Agent
                         $"[AICA] Max-steps message injected ({_taskState.Iteration}/{_maxIterations})");
                 }
 
-                // ── Auto-condense when message count is high (multi-condense support) ──
+                // ── Auto-condense based on estimated token usage (OpenCode-inspired) ──
+                // Trigger when accumulated tokens reach 70% of conversation budget,
+                // with re-condense gap protection to avoid excessive condensation.
+                var estimatedTokens = history.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                var condenseThreshold = (int)(conversationBudget * 0.70);
                 var reCondenseGap = TokenBudgetManager.ComputeReCondenseGap(_maxTokenBudget);
                 if (_taskState.CanCondenseAgain(history.Count, reCondenseGap)
-                    && history.Count >= TokenBudgetManager.ComputeCondenseMessageThreshold(_maxTokenBudget))
+                    && estimatedTokens >= condenseThreshold
+                    && history.Count >= 6) // minimum message count safety floor
                 {
-                    int compressible = history.Count(m => m.Role != ChatRole.System);
-                    if (compressible >= TokenBudgetManager.ComputeCondenseCompressibleThreshold(_maxTokenBudget))
-                    {
-                        // LLM-based condense (OpenCode style) with programmatic fallback
-                        var summary = await ConversationCompactor.GenerateSummaryAsync(
-                            _llmClient, history, ct).ConfigureAwait(false);
-                        LastCondenseSummary = summary;
-                        var msgBefore = history.Count;
-                        CondenseUpToMessageCount = msgBefore;
-                        history = ConversationCompactor.BuildCondensedHistory(history, summary);
-                        _taskState.RecordCondense(history.Count);
-                        telemetryBuilder.RecordCondenseEvent(msgBefore, history.Count, Context.ContextManager.EstimateTokens(summary), "proactive");
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] LLM-based condense #{_taskState.CondenseCount} complete, messages reduced to {history.Count}");
-                    }
+                    // LLM-based condense (OpenCode style) with programmatic fallback
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Condense triggered: ~{estimatedTokens} tokens >= {condenseThreshold} threshold ({history.Count} messages)");
+                    var summary = await ConversationCompactor.GenerateSummaryAsync(
+                        _llmClient, history, ct).ConfigureAwait(false);
+                    LastCondenseSummary = summary;
+                    var msgBefore = history.Count;
+                    CondenseUpToMessageCount = msgBefore;
+                    history = ConversationCompactor.BuildCondensedHistory(history, summary);
+                    _taskState.RecordCondense(history.Count);
+                    telemetryBuilder.RecordCondenseEvent(msgBefore, history.Count, Context.ContextManager.EstimateTokens(summary), "proactive");
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] LLM-based condense #{_taskState.CondenseCount} complete, messages {msgBefore} → {history.Count}");
                 }
 
                 // ── Call LLM with retry ──
