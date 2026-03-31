@@ -381,15 +381,22 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 
 #### 设计细节
 
-**多次 Condense 触发逻辑（替换 AgentExecutor.cs:121-137）：**
+**Condense 触发逻辑（基于 token 估算，对齐 OpenCode 思路）：**
 
 ```
-条件: _taskState.CanCondenseAgain(history.Count)
-  AND history.Count >= ComputeCondenseMessageThreshold(_maxTokenBudget)
-  AND compressibleCount >= ComputeCondenseCompressibleThreshold(_maxTokenBudget)
+estimatedTokens = history.Sum(m => EstimateTokens(m.Content))
+condenseThreshold = conversationBudget * 0.70
+
+条件: _taskState.CanCondenseAgain(history.Count, reCondenseGap)
+  AND estimatedTokens >= condenseThreshold
+  AND history.Count >= 6  (安全下限)
 ```
 
-`CanCondenseAgain(currentCount)` 逻辑：
+> **v2.2 实施改进**: 原方案基于消息条数阈值（`budget/1500*0.6`），177K context 下需 70 条消息才触发。
+> 测试发现实际场景中 10 次工具调用（含大文件读取）就可能接近 context limit，但消息数远不到 70。
+> 改为基于累计 token 估算后，condense 自适应实际内容量，不再受消息条数限制。
+
+`CanCondenseAgain(currentCount, reCondenseGap)` 逻辑：
 - `CondenseCount == 0` → 允许（首次）
 - `currentCount - LastCondenseAtMessageCount >= ReCondenseGap` → 允许（间隔足够）
 - 否则 → 不允许（避免频繁压缩）
@@ -415,7 +422,7 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 #### 验证策略
 
 - 单元测试：`CanCondenseAgain` 边界条件（首次/间隔不足/间隔足够/emergency 后重置）
-- 集成测试：模拟 100+ 条消息会话，验证触发 2-3 次 condense
+- 集成测试：含大文件读取的 10-15 轮工具调用会话，验证 token 累计触发 condense
 - 回归测试：emergency condense 仍在 `context_length_exceeded` 时触发
 
 #### 回滚策略
@@ -424,7 +431,7 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 
 #### 成功标准
 
-- [ ] 100+ 条消息会话中成功触发 2+ 次 condense，质量不断崖
+- [ ] 含大文件读取的会话中 token 累计达到 70% budget 时自动触发 condense，支持多次
 - [ ] 累积式摘要不超过 3000 tokens
 - [ ] Emergency condense 不受间隔限制
 
@@ -684,7 +691,7 @@ if (complexity == TaskComplexity.Complex)
 
 ### 12.7 全局成功标准
 
-- [ ] 步骤1: 100+ 条消息会话中成功触发 2+ 次 condense，质量不断崖
+- [ ] 步骤1: token 累计达 70% budget 时自动触发 condense，支持多次，质量不断崖
 - [ ] 步骤2: 工具列表中无 update_plan，编译通过，全部测试通过
 - [ ] 步骤5: 修改 config.json 后对应组件使用新值；无 config.json 时行为不变
 - [ ] 步骤6: telemetry JSONL 中包含 condenseEvents / tokenUsage / fuzzyMatchDistribution
