@@ -27,6 +27,23 @@ namespace AICA.Core.Agent
     }
 
     /// <summary>
+    /// No-op IUIContext for PlanAgent — planning phase has no UI interaction.
+    /// </summary>
+    internal class NullUIContext : IUIContext
+    {
+        public static readonly NullUIContext Instance = new NullUIContext();
+        public Task ShowMessageAsync(string message, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateStreamingContentAsync(string content, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ShowProgressAsync(string message, int? percentComplete = null, CancellationToken ct = default) => Task.CompletedTask;
+        public Task HideProgressAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> ShowConfirmationAsync(string title, string message, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<DiffPreviewResult> ShowDiffPreviewAsync(string filePath, string originalContent, string newContent, CancellationToken ct = default)
+            => Task.FromResult(DiffPreviewResult.Approved(newContent));
+        public Task<FollowupQuestionResult> ShowFollowupQuestionAsync(string question, System.Collections.Generic.List<QuestionOption> options, bool allowCustomInput = false, CancellationToken ct = default)
+            => Task.FromResult<FollowupQuestionResult>(null);
+    }
+
+    /// <summary>
     /// Lightweight planning agent that explores the codebase with read-only tools
     /// and generates a structured implementation plan for complex tasks.
     /// Runs as a mini agent loop inside AgentExecutor, with independent token budget.
@@ -172,7 +189,7 @@ namespace AICA.Core.Agent
                         using (var toolCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                         {
                             toolCts.CancelAfter(TimeSpan.FromSeconds(15));
-                            result = await _toolDispatcher.ExecuteAsync(toolCall, context, null, toolCts.Token)
+                            result = await _toolDispatcher.ExecuteAsync(toolCall, context, NullUIContext.Instance, toolCts.Token)
                                 .ConfigureAwait(false);
                         }
                         System.Diagnostics.Debug.WriteLine(
