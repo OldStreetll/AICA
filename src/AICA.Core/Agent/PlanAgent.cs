@@ -147,13 +147,11 @@ namespace AICA.Core.Agent
 
                 var responseText = assistantText.ToString().Trim();
 
-                // If no tool calls → LLM has finished exploring, this is the plan
+                // If no tool calls → LLM has finished exploring, proceed to finalize
                 if (toolCalls.Count == 0)
                 {
-                    if (responseText.Length < 20)
-                        return PlanResult.Fail("Plan too short");
-
-                    return PlanResult.Ok(responseText);
+                    history.Add(ChatMessage.Assistant(responseText));
+                    break;
                 }
 
                 // LLM wants to use tools — execute read-only tools and continue
@@ -211,12 +209,46 @@ namespace AICA.Core.Agent
                 }
             }
 
-            // Max iterations reached — use whatever text we have
-            var lastAssistant = history.LastOrDefault(m => m.Role == ChatRole.Assistant);
-            if (lastAssistant != null && !string.IsNullOrEmpty(lastAssistant.Content) && lastAssistant.Content.Length > 20)
-                return PlanResult.Ok(lastAssistant.Content);
+            // ── Finalize: one more LLM call without tools to generate structured plan ──
+            return await FinalizePlanAsync(history, ct).ConfigureAwait(false);
+        }
 
-            return PlanResult.Fail("Planning did not produce a result within iteration limit");
+        private const string FinalizePlanPrompt =
+            "Based on everything you have explored above, now output your FINAL implementation plan. " +
+            "Use EXACTLY this format and nothing else:\n\n" +
+            "## Goal\n[What the user wants to accomplish]\n\n" +
+            "## Key Discoveries\n[Important findings from your exploration]\n\n" +
+            "## Steps\n1. [First step — file path and action]\n2. [Second step — file path and action]\n...\n\n" +
+            "Output the plan NOW. Do not call any tools. Do not explain what you will do — just output the plan.";
+
+        private async Task<PlanResult> FinalizePlanAsync(List<ChatMessage> history, CancellationToken ct)
+        {
+            try
+            {
+                // Add finalize instruction and call LLM without tools
+                history.Add(ChatMessage.User(FinalizePlanPrompt));
+
+                var planText = new StringBuilder();
+                await foreach (var chunk in _llmClient.StreamChatAsync(history, null, ct).ConfigureAwait(false))
+                {
+                    if (chunk.Type == LLMChunkType.Text && chunk.Text != null)
+                        planText.Append(chunk.Text);
+                }
+
+                var result = planText.ToString().Trim();
+                if (result.Length < 30)
+                    return PlanResult.Fail("Finalized plan too short");
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] PlanAgent finalized plan: {result.Length} chars");
+                return PlanResult.Ok(result);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] PlanAgent finalize failed: {ex.Message}");
+                return PlanResult.Fail($"Finalize error: {ex.Message}");
+            }
         }
     }
 }
