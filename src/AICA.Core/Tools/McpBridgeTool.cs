@@ -194,45 +194,74 @@ namespace AICA.Core.Tools
 
         /// <summary>
         /// Build bridge tools using native MCP tool definitions.
-        /// Preserves AICA-specific ToolMetadata (Category, Tags, Timeout, etc.).
+        /// Iterates over ALL tools returned by the MCP server — known tools get AICA-specific
+        /// metadata (Category, Tags, etc.), unknown tools get sensible defaults.
+        /// This ensures new MCP tools are automatically registered without hardcoding.
         /// </summary>
         private static IReadOnlyList<McpBridgeTool> BuildToolsFromNativeDefinitions(
             Dictionary<string, McpToolDefinition> mcpLookup,
             IGitNexusProcessManager pm)
         {
-            // Map: AICA tool name → MCP tool name → ToolMetadata factory
-            var toolSpecs = new[]
+            // Known tools: AICA-specific metadata overrides
+            var knownSpecs = new Dictionary<string, (string AicaName, ToolCategory Category, string[] Tags, bool IsModifying, bool RequiresConfirmation, int Timeout)>(StringComparer.OrdinalIgnoreCase)
             {
-                new { AicaName = "gitnexus_context",        McpName = "context",        Category = ToolCategory.Analysis,  Tags = new[] { "search", "read", "context", "gitnexus" },  IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_impact",         McpName = "impact",         Category = ToolCategory.Analysis,  Tags = new[] { "search", "analysis", "gitnexus" },         IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_query",          McpName = "query",          Category = ToolCategory.Search,    Tags = new[] { "search", "gitnexus" },                     IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_detect_changes", McpName = "detect_changes", Category = ToolCategory.Analysis,  Tags = new[] { "search", "analysis", "gitnexus" },         IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
-                new { AicaName = "gitnexus_rename",         McpName = "rename",         Category = ToolCategory.FileWrite, Tags = new[] { "modify", "refactor", "gitnexus" },         IsModifying = true,  RequiresConfirmation = true,  Timeout = 60 },
-                new { AicaName = "gitnexus_cypher",         McpName = "cypher",         Category = ToolCategory.Analysis,  Tags = new[] { "search", "analysis", "gitnexus" },         IsModifying = false, RequiresConfirmation = false, Timeout = 30 },
+                ["context"]        = ("gitnexus_context",        ToolCategory.Analysis,  new[] { "search", "read", "context", "gitnexus" },  false, false, 30),
+                ["impact"]         = ("gitnexus_impact",         ToolCategory.Analysis,  new[] { "search", "analysis", "gitnexus" },         false, false, 30),
+                ["query"]          = ("gitnexus_query",          ToolCategory.Search,    new[] { "search", "gitnexus" },                     false, false, 30),
+                ["detect_changes"] = ("gitnexus_detect_changes", ToolCategory.Analysis,  new[] { "search", "analysis", "gitnexus" },         false, false, 30),
+                ["rename"]         = ("gitnexus_rename",         ToolCategory.FileWrite, new[] { "modify", "refactor", "gitnexus" },         true,  true,  60),
+                ["cypher"]         = ("gitnexus_cypher",         ToolCategory.Analysis,  new[] { "search", "analysis", "gitnexus" },         false, false, 30),
             };
 
             var tools = new List<McpBridgeTool>();
-            foreach (var spec in toolSpecs)
+
+            // Iterate over ALL MCP tools (not just known specs)
+            foreach (var kvp in mcpLookup)
             {
-                // Use native definition if available, otherwise skip (caller already has hardcoded fallback)
-                if (!mcpLookup.TryGetValue(spec.McpName, out var mcpDef))
+                var mcpName = kvp.Key;
+                var mcpDef = kvp.Value;
+
+                string aicaName;
+                ToolCategory category;
+                string[] tags;
+                bool isModifying;
+                bool requiresConfirmation;
+                int timeout;
+
+                if (knownSpecs.TryGetValue(mcpName, out var spec))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: No native definition for '{spec.McpName}', skipping");
-                    continue;
+                    // Known tool — use AICA-specific metadata
+                    aicaName = spec.AicaName;
+                    category = spec.Category;
+                    tags = spec.Tags;
+                    isModifying = spec.IsModifying;
+                    requiresConfirmation = spec.RequiresConfirmation;
+                    timeout = spec.Timeout;
+                }
+                else
+                {
+                    // Unknown tool — auto-register with sensible defaults
+                    aicaName = $"gitnexus_{mcpName}";
+                    category = ToolCategory.Analysis;
+                    tags = new[] { "gitnexus", mcpName };
+                    isModifying = false;
+                    requiresConfirmation = false;
+                    timeout = 30;
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] McpBridgeTool: Auto-registering unknown MCP tool '{mcpName}' as '{aicaName}'");
                 }
 
-                var nativeDesc = mcpDef.Description ?? spec.AicaName;
+                var nativeDesc = mcpDef.Description ?? aicaName;
 
                 // v2.1 O10 [C2]: For gitnexus_cypher, always use the hand-crafted trimmed description
-                // instead of MCP native (which is ~2762 chars with full examples).
-                // The trimmed version (~600 chars) keeps WHEN TO USE + schema but drops examples.
-                if (spec.AicaName == "gitnexus_cypher")
+                if (aicaName == "gitnexus_cypher")
                 {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: {spec.AicaName} using trimmed hardcoded desc (skipping native {nativeDesc.Length} chars)");
-                    continue; // Skip — keep the hardcoded trimmed version from CreateCypherTool
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] McpBridgeTool: {aicaName} using trimmed hardcoded desc (skipping native {nativeDesc.Length} chars)");
+                    continue; // Keep the hardcoded trimmed version from CreateCypherTool
                 }
 
-                // Truncate overly long descriptions to prevent function calling token overflow
+                // Truncate overly long descriptions
                 if (nativeDesc.Length > 4000)
                 {
                     nativeDesc = nativeDesc.Substring(0, 4000) + "...";
@@ -240,26 +269,28 @@ namespace AICA.Core.Tools
 
                 var def = new ToolDefinition
                 {
-                    Name = spec.AicaName,
+                    Name = aicaName,
                     Description = nativeDesc,
                     Parameters = ConvertMcpSchema(mcpDef.InputSchema),
-                    RawParametersJson = mcpDef.InputSchema  // Preserve full MCP schema for API serialization
+                    RawParametersJson = mcpDef.InputSchema
                 };
 
                 var meta = new ToolMetadata
                 {
-                    Name = spec.AicaName,
+                    Name = aicaName,
                     Description = nativeDesc,
-                    Category = spec.Category,
-                    Tags = spec.Tags,
-                    TimeoutSeconds = spec.Timeout,
+                    Category = category,
+                    Tags = tags,
+                    TimeoutSeconds = timeout,
                     RequiresNetwork = false,
-                    IsModifying = spec.IsModifying,
-                    RequiresConfirmation = spec.RequiresConfirmation
+                    IsModifying = isModifying,
+                    RequiresConfirmation = requiresConfirmation
                 };
 
-                System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: {spec.AicaName} native desc ({nativeDesc.Length} chars): {(nativeDesc.Length > 120 ? nativeDesc.Substring(0, 120) + "..." : nativeDesc)}");
-                tools.Add(new McpBridgeTool(spec.AicaName, spec.McpName, nativeDesc, def, meta, pm));
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] McpBridgeTool: {aicaName} native desc ({nativeDesc.Length} chars): " +
+                    $"{(nativeDesc.Length > 120 ? nativeDesc.Substring(0, 120) + "..." : nativeDesc)}");
+                tools.Add(new McpBridgeTool(aicaName, mcpName, nativeDesc, def, meta, pm));
             }
 
             System.Diagnostics.Debug.WriteLine($"[AICA] McpBridgeTool: Built {tools.Count} tools from native MCP definitions");
