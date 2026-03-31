@@ -315,23 +315,27 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 
 ### 第二梯队 — v2.2 评估（中等价值中等成本）
 
-| 改进项 | 理由 |
-|--------|------|
-| **上下文管理重建（3 步骤）** | **Compaction 增强 → 清理 update_plan → Plan Agent 分离。→ 详见第十二章** |
-| 会话持久化（SQLite） | 历史会话检索、恢复 |
-| 权限系统增强 | glob + action 分类 + 三级控制 |
-| LLM 结构化错误分类 | 上层 AgentExecutor 可做差异化处理 |
-| list_projects 降级为 prompt 注入 | 改动量 ~200+ 行，推迟到 v2.2（O8） |
-| multiedit / apply_patch | 单文件多处编辑 / 多文件原子编辑 |
+| 改进项 | 理由 | v2.2 状态 |
+|--------|------|-----------|
+| **上下文管理重建（步骤1-3）** | Compaction 增强 → 清理 update_plan → Plan Agent 分离 | **✅ 已完成（第十二章）** |
+| **基础设施补充（步骤5-7）** | 统一配置层 → 可观测性 → 接口抽取 + index.json | **✅ 已完成（第十三章）** |
+| **LSP 语义验证 POC** | 编辑后自动调用 VS2022 诊断 API 检测语法错误，LLM 立即修复。**从第三梯队提升** | v2.3 优先实施 |
+| **multiedit** | 单文件多处编辑，保留 diff 预览 + 用户确认流程 | v2.3 评估 |
+| **list_projects 降级为 prompt 注入** | 启动时注入 Solution 结构到 System Prompt，减少一轮工具调用。该信息是 VS DTE API 独有能力，GitNexus 无法替代 | v2.3 评估 |
+| 会话持久化（SQLite） | 当前规模不需要，IConversationStorage 接口已预留 | 暂缓 |
+| 权限系统增强 | glob + action 分类 + 三级控制，现有 diff 确认机制已覆盖大部分需求 | v2.3 评估 |
+| LLM 结构化错误分类 | 上层 AgentExecutor 可做差异化处理 | v2.3 评估 |
+| 步骤4: Token 追踪 | SharpToken NuGet，私有部署 LLM 不重要 | **暂缓（用户确认）** |
 
 ### 第三梯队 — 长期路线图（高价值高成本）
 
 | 改进项 | 理由 |
 |--------|------|
-| LSP 语义验证 | 编辑后自动检测语法错误（借助 VS2022 内置 LSP） |
+| apply_patch（多文件原子操作） | 跨文件重构，保留用户确认流程 |
 | Tree-sitter 代码解析 | 替代正则 SymbolParser |
 | 多模型适配层 | 解绑 MiniMax，支持模型切换 |
 | Diff 可视化增强 | 提升代码审查体验 |
+| 消息 Part 化 | ChatMessage.Content → List\<ContentPart\>，精细化 compaction（延期 v3.0） |
 
 ---
 
