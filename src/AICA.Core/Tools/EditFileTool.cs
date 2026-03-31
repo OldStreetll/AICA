@@ -12,6 +12,8 @@ namespace AICA.Core.Tools
     /// </summary>
     public class EditFileTool : IAgentTool
     {
+        private string _lastMatchLevel;
+
         public string Name => "edit";
         public string Description =>
             "Replace specific text in an existing file. old_string must match exactly and be unique. " +
@@ -136,7 +138,8 @@ namespace AICA.Core.Tools
                         return ToolResult.Fail(diagnosis.Message);
                     }
 
-                    // Log which level matched (for future analysis of match distribution)
+                    // Record match level for telemetry (fuzzy match distribution)
+                    _lastMatchLevel = cascadeResult.Value.Level.ToString();
                     if (cascadeResult.Value.Level != MatchLevel.Exact)
                     {
                         System.Diagnostics.Debug.WriteLine(
@@ -233,7 +236,10 @@ namespace AICA.Core.Tools
                 else
                 {
                     var occurrences = replaceAll ? CountOccurrences(content, oldString) : 1;
-                    return ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
+                    var editResult = ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
+                    if (!string.IsNullOrEmpty(_lastMatchLevel))
+                        editResult.Metadata = new Dictionary<string, string> { ["fuzzy_match_level"] = _lastMatchLevel };
+                    return editResult;
                 }
             }
             catch (ToolParameterException ex)

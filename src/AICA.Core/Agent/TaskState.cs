@@ -34,13 +34,23 @@ namespace AICA.Core.Agent
 
         // User cancellation tracking
         public int UserCancellationCount { get; set; }
-        public const int MaxUserCancellations = 3;
+        public static int MaxUserCancellations => Config.AicaConfig.Current.Agent.MaxUserCancellations;
 
-        // Task planning
-        public bool HasActivePlan { get; set; }
+        // Context management — multi-condense support
+        public int CondenseCount { get; set; }
+        public int LastCondenseAtMessageCount { get; set; }
 
-        // Context management
-        public bool HasAutoCondensed { get; set; }
+        public bool CanCondenseAgain(int currentMessageCount, int reCondenseGap)
+        {
+            if (CondenseCount == 0) return true;
+            return (currentMessageCount - LastCondenseAtMessageCount) >= reCondenseGap;
+        }
+
+        public void RecordCondense(int currentMessageCount)
+        {
+            CondenseCount++;
+            LastCondenseAtMessageCount = currentMessageCount;
+        }
 
         // Phase tracking (for telemetry/progress)
         public string CurrentPhase { get; set; }

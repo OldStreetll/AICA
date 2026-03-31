@@ -317,7 +317,7 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 
 | 改进项 | 理由 |
 |--------|------|
-| Plan Agent 分离 | 减少 doom loop，提升复杂任务成功率。架构已具备（AgentExecutor 可多实例） |
+| **上下文管理重建（3 步骤）** | **Compaction 增强 → 清理 update_plan → Plan Agent 分离。→ 详见第十二章** |
 | 会话持久化（SQLite） | 历史会话检索、恢复 |
 | 权限系统增强 | glob + action 分类 + 三级控制 |
 | LLM 结构化错误分类 | 上层 AgentExecutor 可做差异化处理 |
@@ -332,3 +332,553 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 | Tree-sitter 代码解析 | 替代正则 SymbolParser |
 | 多模型适配层 | 解绑 MiniMax，支持模型切换 |
 | Diff 可视化增强 | 提升代码审查体验 |
+
+---
+
+## 十二、上下文管理系统性重建方案（v2.2）
+
+> 日期: 2026-03-31
+> 方案制定: Agent Team（planner + architect reviewer 双向评审，两轮达成一致）
+> 状态: **APPROVED**（全部步骤通过评审）
+
+**执行顺序：**
+
+```
+步骤1 Compaction 增强 ──→ 步骤2 清理 update_plan ──→ 步骤3 Plan Agent 分离 ──→ 步骤4 Token 追踪(可选)
+        [低风险]                 [低风险]                  [中低风险]                 [低风险]
+        ~65 行新增              ~364 行删除               ~345-400 行新增             ~100 行新增
+```
+
+### 12.0 背景与动机
+
+对比 OpenCode，AICA 上下文管理存在以下关键差距：
+
+| 差距 | 用户痛感 | 根因 |
+|------|---------|------|
+| Compaction 单次限制 | 长会话质量断崖、context overflow | `HasAutoCondensed` 布尔值阻止第二次触发 |
+| 无 Plan Agent | 复杂任务 doom loop 率高 | 单 AgentExecutor，规划与执行不分离 |
+| `update_plan` 工具无用 | LLM 不主动调用，工具列表噪声 | 设计定位尴尬（进度记录器 vs 规划手段） |
+| Token 估算精度 ±20% | 偶尔提前/延迟触发 condense | 字符级粗估，无 tokenizer |
+
+### 12.1 步骤1: Compaction 增强（多次触发 + Checkpoint）
+
+**优先级**: 最高 | **风险**: 低 | **新增 ~65 行，改动 4 文件**
+
+#### 目标
+
+- 解除单次 compaction 限制，支持长会话中多次压缩
+- 引入 checkpoint 机制记录每次压缩点
+- 保持 emergency condense 作为兜底
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `TaskState.cs` | `HasAutoCondensed: bool` → `CondenseCount: int` + `LastCondenseAtMessageCount: int`，新增 `CanCondenseAgain(currentCount)` 方法 | +15, -2 |
+| `AgentExecutor.cs` | 替换 `!_taskState.HasAutoCondensed` 为 `_taskState.CanCondenseAgain(history.Count)`；emergency condense 后重置 `LastCondenseAtMessageCount`；`HandleCondense()` (line 646) 同步改为 `RecordCondense()`；增加 condense 间隔保护。**注意：HasAutoCondensed 共 3 处设置（line 133/173/646），全部替换** | ~25 行改动 |
+| `ConversationCompactor.cs` | `BuildCondensedHistory` 支持累积式摘要（合并而非嵌套旧 summary），摘要上限 3000 tokens | +20 |
+| `TokenBudgetManager.cs` | 新增 `ComputeReCondenseGap(maxTokenBudget)` — 两次 condense 之间最少积累的新消息数 | +10 |
+
+#### 设计细节
+
+**多次 Condense 触发逻辑（替换 AgentExecutor.cs:121-137）：**
+
+```
+条件: _taskState.CanCondenseAgain(history.Count)
+  AND history.Count >= ComputeCondenseMessageThreshold(_maxTokenBudget)
+  AND compressibleCount >= ComputeCondenseCompressibleThreshold(_maxTokenBudget)
+```
+
+`CanCondenseAgain(currentCount)` 逻辑：
+- `CondenseCount == 0` → 允许（首次）
+- `currentCount - LastCondenseAtMessageCount >= ReCondenseGap` → 允许（间隔足够）
+- 否则 → 不允许（避免频繁压缩）
+
+**累积式摘要（ConversationCompactor.BuildCondensedHistory）：**
+- 如果 history 中已有 `[Conversation condensed]` 系统消息，提取内容作为 `## Previous Summary`
+- Prompt 指示 LLM "合并而非嵌套"旧 summary
+- Previous Summary 超过 3000 tokens (~12000 chars) 时截断
+- 新 summary 追加为 `## Current Summary`
+
+**Emergency Condense 处理：**
+- Emergency condense 后重置 `LastCondenseAtMessageCount = history.Count`
+- 不受 ReCondenseGap 间隔限制（emergency 始终允许触发）
+
+**MiniMax-M2.5 考量：**
+- 177K context window → `ComputeCondenseMessageThreshold` 约 70 条消息才首次触发
+- ReCondenseGap 建议设为 threshold 的 40%（约 28 条）
+
+**Checkpoint 记录：**
+- `TaskState.CondenseHistory: List<CondenseCheckpoint>` 记录 `{MessageCount, Timestamp, SummaryLength}`
+- 用于 telemetry 和调试，不影响运行时逻辑
+
+#### 验证策略
+
+- 单元测试：`CanCondenseAgain` 边界条件（首次/间隔不足/间隔足够/emergency 后重置）
+- 集成测试：模拟 100+ 条消息会话，验证触发 2-3 次 condense
+- 回归测试：emergency condense 仍在 `context_length_exceeded` 时触发
+
+#### 回滚策略
+
+`CondenseCount` 改回 `HasAutoCondensed`（`Count > 0` 等价 `true`），一个 commit 可回退。
+
+#### 成功标准
+
+- [ ] 100+ 条消息会话中成功触发 2+ 次 condense，质量不断崖
+- [ ] 累积式摘要不超过 3000 tokens
+- [ ] Emergency condense 不受间隔限制
+
+---
+
+### 12.2 步骤2: 删除 update_plan + PlanManager 清理
+
+**优先级**: 中（清理死代码） | **风险**: 低 | **删除 ~364 行，改动 12 文件**
+
+#### 目标
+
+- 删除无用的 `update_plan` 工具链
+- 清理 `PlanManager` 死代码（已确认无外部调用者）
+- 保留 `TaskPlan` / `PlanStep` / `PlanStepStatus` 类型（定义在 `IAgentContext.cs`，步骤3 复用）
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `UpdatePlanTool.cs` | **删除整个文件** | -184 |
+| `PlanManager.cs` | **删除整个文件** | -66 |
+| `ITaskContext.cs` | 删除 `CurrentPlan` 属性和 `UpdatePlan` 方法（`TaskPlan`/`PlanStep`/`PlanStepStatus` 类型定义在 `IAgentContext.cs`，不受影响） | -8 |
+| `TaskState.cs` | 删除 `HasActivePlan` 属性 | -1 |
+| `AgentExecutor.cs` | 删除 plan update 跟踪代码（line 260 跳过、line 319-323 step） | -8 |
+| `ToolCallProcessor.cs` | 删除 update_plan 的 action description | -1 |
+| `ChatToolWindowControl.xaml.cs` | 删除 `RegisterTool(new UpdatePlanTool())` | -1 |
+| `VSAgentContext.cs` | 删除 `UpdatePlan` 方法实现 | -10 |
+| `InteractionToolsTests.cs` | 删除 UpdatePlanTool 测试 | -70 |
+| `MockAgentContext.cs` | 删除 `UpdatePlan` mock | -5 |
+| `PlanAwareRecoveryTests.cs` | **删除整个文件** | -6+ |
+| `ToolCallOptimizationTests.cs` | 清理工具名列表中的 `update_plan`（连同已废弃的 `condense`、`find_by_name`、`list_code_definition_names`） | ~-4 |
+
+#### 验证策略
+
+- 编译通过（所有引用已清理）
+- 现有测试通过（删除相关测试，其余不受影响）
+- 工具列表确认：`ToolDispatcher.GetToolNames()` 不含 `update_plan`
+
+#### 回滚策略
+
+`git revert` 单个 commit，所有删除的文件在 git history 中可恢复。
+
+#### 成功标准
+
+- [ ] 编译通过，全部测试通过
+- [ ] 工具列表从 16 → 15，减少工具选择噪声
+- [ ] `TaskPlan`/`PlanStep`/`PlanStepStatus` 类型保留可用（位于 `IAgentContext.cs`）
+
+---
+
+### 12.3 步骤3: Plan Agent 分离（AgentExecutor 内部集成）
+
+**优先级**: 高 | **风险**: 中低 | **新增 ~345-400 行，改动 5 文件（UI 层零改动）**
+
+#### 目标
+
+- 将复杂任务的规划能力分离为独立的 `PlanAgent`
+- PlanAgent 使用精简只读工具集，输出结构化 JSON plan
+- 在 `AgentExecutor` 内部集成（无独立 Orchestrator 层）
+- 失败时静默降级到无 plan 执行
+
+#### 架构设计
+
+```
+用户请求 → AgentExecutor.ExecuteAsync
+              ├─ complexity != Complex → 直接进入主循环（现有路径，零开销）
+              └─ complexity == Complex → PlanAgent.GeneratePlanAsync（内部调用）
+                                          ├─ Success → plan 注入到 history → 进入主循环
+                                          └─ Failure → 静默 fallback → 进入主循环（无 plan）
+```
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `PlanAgent.cs`（新建） | 独立 Plan Agent：精简工具集、JSON schema 输出、10 次迭代上限、超时控制、Markdown 渲染 | +250-300 |
+| `PlanPromptBuilder.cs`（新建） | PlanAgent 专用极简 prompt + JSON schema 定义 | +60 |
+| `AgentExecutor.cs` | 主循环前插入 PlanAgent 调用（~15 行内联） | +15 |
+| `TaskComplexityAnalyzer.cs` | 新增 `RequiresPlanning` 属性（Complex + 多文件/重构意图 + 用户显式要求） | +15 |
+| `ILLMClient.cs` | 扩展 `StreamChatAsync` 支持 `response_format` 参数（可选） | +5-10 |
+
+#### PlanAgent 核心设计
+
+**工具集（只读，LLM 请求层面过滤）：**
+
+```csharp
+PlanningToolNames = { "read_file", "grep_search", "list_dir", "glob" }
+
+var planTools = allToolDefinitions
+    .Where(t => PlanningToolNames.Contains(t.Name))
+    .ToList();
+```
+
+不修改 ToolDispatcher 注册状态，仅在 LLM 请求中传入精简 toolDefinitions。
+
+**输出格式（JSON Schema 约束）：**
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "goal": { "type": "string" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "action": { "type": "string", "enum": ["read", "search", "edit", "create", "test"] }
+        },
+        "required": ["description"]
+      }
+    },
+    "key_context": { "type": "string" }
+  },
+  "required": ["goal", "steps"]
+}
+```
+
+**失败降级：**
+
+```csharp
+public class PlanResult
+{
+    public bool Success { get; set; }
+    public string PlanText { get; set; }      // Markdown（注入到 executor）
+    public List<PlanStep> Steps { get; set; }  // 结构化（从 JSON 解析）
+    public string FailureReason { get; set; }  // Telemetry only
+}
+```
+
+所有失败（超时、LLM 错误、JSON 解析失败、steps 为空）→ `Success = false` → AgentExecutor 静默跳过 plan 注入，正常执行。
+
+**Token Budget 隔离：**
+
+| 组件 | 预算 |
+|------|------|
+| PlanAgent system prompt | ~800 tokens |
+| 工具调用结果（截断） | ≤10K tokens |
+| LLM plan 输出 | ≤2K tokens |
+| **PlanAgent 总计** | **~13K tokens（独立，不从主 executor 扣除）** |
+| 传递到 executor 的 PlanText | 500-1500 tokens |
+
+PlanAgent 的 conversation history 在 `GeneratePlanAsync` 返回后丢弃，只有精简 PlanText 注入主 executor。
+
+**MiniMax-M2.5 适配（三层防御）：**
+
+1. `response_format=json_schema` 强制 JSON 输出
+2. Prompt 极度精简：`"You are a task planner. Use tools to explore, then output JSON plan."`
+3. Fallback：若 MiniMax 不支持 `response_format`，用 regex 提取第一个 `{...}` JSON 块
+
+**Plan 注入方式（AgentExecutor.ExecuteAsync 内部）：**
+
+```csharp
+if (complexity == TaskComplexity.Complex)
+{
+    var planAgent = new PlanAgent(_llmClient, _toolDispatcher);
+    var planResult = await planAgent.GeneratePlanAsync(
+        userRequest, context, toolDefinitions, ct);
+
+    if (planResult.Success)
+    {
+        history.Add(ChatMessage.System(
+            "[Task Plan — generated by planning phase]\n" + planResult.PlanText));
+        yield return AgentStep.TextChunk($"\n📋 **Plan:**\n{planResult.PlanText}\n\n---\n");
+    }
+    // Failure: fall through to normal execution
+}
+```
+
+#### 验证策略
+
+- 单元测试：AgentExecutor 路由逻辑（简单 → 直接，复杂 → plan first）
+- 单元测试：PlanAgent JSON 解析（valid/invalid/empty steps）
+- 集成测试：PlanAgent 对多文件重构请求生成合理 plan
+- E2E 测试：完整流程 "重构所有 DAO 类" → plan → 执行
+
+#### 回滚策略
+
+删除 `PlanAgent.cs`、`PlanPromptBuilder.cs`，移除 AgentExecutor 中 ~15 行内联代码。UI 层无需回滚。
+
+#### 风险与缓解
+
+| 风险 | 缓解措施 |
+|------|----------|
+| PlanAgent 超时/失败 | 静默 fallback 到无 plan 执行，用户无感知 |
+| Plan 质量差 | JSON schema 约束 + steps 非空验证 |
+| Token 消耗过多 | 独立 budget，只传精简 PlanText |
+| MiniMax 不支持 response_format | Fallback: prompt 约束 + regex JSON 提取 |
+| 复杂度误判 | RequiresPlanning 门槛高于 Complex |
+
+#### 成功标准
+
+- [ ] Complex 任务自动生成结构化 plan（JSON 可解析）
+- [ ] PlanAgent 失败时静默降级，用户无感知
+- [ ] PlanAgent token 消耗不超过 15K，传递到 executor 不超过 2K
+- [ ] 简单/Medium 任务零开销（不触发 PlanAgent）
+- [ ] UI 层零改动
+
+---
+
+### 12.4 步骤4: Token 追踪增强（可选）
+
+**优先级**: 低 | **风险**: 低 | **新增 ~100 行，改动 4 文件**
+
+#### 目标
+
+提升 token 估算精度（从字符级 ±20% 到 tokenizer 级 ±5%）。
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `TokenEstimator.cs`（新建） | 基于 SharpToken（tiktoken C# 移植）的 token 计数器 | +80 |
+| `ContextManager.cs` | `EstimateTokens` 切换到 TokenEstimator | ~5 |
+| `AgentExecutor.cs` | 使用精确 token 计数替代 `content.Length / 4` | ~10 |
+| `TokenBudgetManager.cs` | threshold 计算使用精确 token | ~5 |
+
+#### 注意事项
+
+- SharpToken NuGet 包约 2MB（含词表文件）
+- MiniMax-M2.5 使用非标准 tokenizer，SharpToken 只能提供更好的近似值
+- 建议等步骤1-3 稳定后再实施
+
+---
+
+### 12.5 延期: 消息 Part 化（推迟到 v3.0）
+
+**优先级**: 低 | **风险**: 高 | **新增 ~160 行，影响 10+ 文件**
+
+将 `ChatMessage.Content: string` 扩展为 `List<ContentPart>` 结构（Text/ToolUse/ToolResult），支持精细化 compaction。改动面广（ChatMessage 是核心模型），不在本轮实施。
+
+---
+
+### 12.6 总改动量与执行计划
+
+| 步骤 | 内容 | 新增行 | 删除行 | 文件数 | 风险 | 前置依赖 |
+|------|------|--------|--------|--------|------|----------|
+| **步骤1** | Compaction 增强 | ~65 | ~5 | 4 | 低 | 无 |
+| **步骤2** | 清理 update_plan | ~0 | ~364 | 12 | 低 | 步骤1 完成（TaskState 字段变更） |
+| **步骤5** | 统一配置层 | ~170 | ~40 | 2+7 | 低 | 步骤2 完成（AgentExecutor 清理后基础更干净）**→ 详见第十三章** |
+| **步骤6** | 可观测性增强 | ~70 | ~25 | 0+3 | 低 | 步骤5（telemetry 开关）**→ 详见第十三章** |
+| **步骤3** | Plan Agent 分离 | ~345-400 | ~0 | 5 | 中低 | 步骤2 完成（死代码已清理） |
+| **步骤7** | 接口抽取 + index.json | ~80 | ~15 | 2+2 | 低 | 无硬依赖，可穿插 **→ 详见第十三章** |
+| **步骤4** | Token 追踪（可选） | ~100 | ~5 | 4 | 低 | 步骤1-3 稳定后 |
+| 延期 | 消息 Part 化 | ~160 | ~20 | 10+ | 高 | v3.0 |
+
+**完整执行序：**
+
+```
+步骤1(Compaction) → 步骤2(清理) → 步骤5(配置层) → 步骤6(可观测性) → 步骤3(Plan Agent) → 步骤7(接口抽取) → 步骤4(Token)
+   [1天]             [0.5天]         [1天]             [0.5天]            [2天]                [0.5天]           [0.5天]
+```
+
+**执行序理由**：步骤1 直接解决长会话质量断崖（最高优先级）→ 步骤2 低风险清理 → 步骤5 在清理后的干净代码上抽取配置 → 步骤6 基于配置层采集 telemetry → 步骤3 Plan Agent 分离 → 步骤7 存储接口抽取（独立可穿插）→ 步骤4 锦上添花。
+
+### 12.7 全局成功标准
+
+- [ ] 步骤1: 100+ 条消息会话中成功触发 2+ 次 condense，质量不断崖
+- [ ] 步骤2: 工具列表中无 update_plan，编译通过，全部测试通过
+- [ ] 步骤5: 修改 config.json 后对应组件使用新值；无 config.json 时行为不变
+- [ ] 步骤6: telemetry JSONL 中包含 condenseEvents / tokenUsage / fuzzyMatchDistribution
+- [ ] 步骤3: 多文件重构任务的 doom loop 率从 ~30% 降至 <10%
+- [ ] 步骤7: 50 会话 ListConversationsAsync <10ms；index.json 损坏时自动重建
+- [ ] 每个步骤通过现有测试套件回归
+- [ ] MiniMax-M2.5 下的行为与方案设计一致
+- [ ] VSIX 打包大小增量 = 0（零新 NuGet 依赖）
+
+---
+
+## 十三、基础设施补充方案（v2.2）
+
+> 日期: 2026-03-31
+> 方案制定: Agent Team（planner + architect reviewer 双向评审，两轮达成一致）
+> 状态: **APPROVED**（全部步骤通过评审）
+> 与第十二章关系: 步骤5-7 在步骤1-2 之后执行，与步骤3-4 无冲突
+
+### 13.0 背景与动机
+
+第十二章方案在上下文管理维度内是系统性的，但全局分析发现三个底层基础设施缺失：
+
+| 基础设施 | 影响 | 现状 |
+|----------|------|------|
+| 统一配置层 | condense 阈值、排除目录、工具超时等大量硬编码，用户无法覆盖 | 文档未提及（遗漏） |
+| 可观测性/Telemetry | 步骤1 需要"观察 condense 效果"，模糊匹配需要"观察命中分布" | 仅有基础 SessionRecord（遗漏） |
+| 会话存储扩展性 | 当前 JSON 存储无接口抽象，list 操作 O(n) 全量反序列化 | 仅一行"SQLite"描述 |
+
+---
+
+### 13.1 步骤5: 统一配置层（AicaConfig）
+
+**优先级**: 高 | **风险**: 低 | **新增 ~170 行，改动 7 文件** | **前置**: 步骤2 完成
+
+#### 目标
+
+- 将散落在各文件的硬编码常量收拢到可序列化配置类
+- 支持 `~/.AICA/config.json` 用户覆盖，缺省值等于当前硬编码值（零行为变更）
+- 纯静态加载（`AicaConfig.Current`），启动时读一次，不引入 DI，不做热加载
+
+#### 当前硬编码清单（源码审计）
+
+| 文件 | 硬编码 | 当前值 |
+|------|--------|--------|
+| `ContextManager.cs:18` | 默认 maxTokenBudget | 177224 |
+| `TokenBudgetManager.cs:105-110` | MinCondenseMessageThreshold / MinCondenseCompressibleThreshold | 18 / 12 |
+| `AgentExecutor.cs:33-35` | DoomLoopThreshold / MaxRetries / RetryDelaysMs | 3 / 2 / [1000,3000] |
+| `AgentExecutor.cs:47` | 默认 maxIterations / maxTokenBudget | 50 / 32000 |
+| `TaskState.cs:37` | MaxUserCancellations | 3 |
+| `GrepSearchTool.cs:28-31` | RipgrepThreshold / RipgrepTimeoutSeconds | 200 / 30 |
+| `GrepSearchTool.cs:399-409` | 排除目录列表 | .git,.vs,bin,obj,node_modules... |
+| `GrepSearchTool.cs:433-444` | 排除文件扩展名列表 | .exe,.dll,.pdb... |
+| `RunCommandTool.cs:127` | 默认 timeout_seconds | 30 |
+| `RunCommandTool.cs:214` | stdout/stderr 缓冲区上限 | 16000/8000 |
+| `ConversationStorage.cs:272` | 保留会话数量 keepCount | 100 |
+| `GitNexusProcessManager.cs:26` | StartTimeoutMs | 15000 |
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `Config/AicaConfig.cs`（新建） | 顶层配置类，嵌套 AgentConfig / CondenseConfig / ToolConfig / StorageConfig / TelemetryConfig。静态 `AicaConfig.Current` + `Load(path?)` | +130 |
+| `Config/AicaConfigLoader.cs`（新建） | 加载 `~/.AICA/config.json` → 反序列化 → 与默认值合并。缺文件/畸形 JSON 回退全默认 | +40 |
+| `AgentExecutor.cs` | DoomLoopThreshold / MaxRetries 从配置读取 | ~10 |
+| `TaskState.cs` | MaxUserCancellations 从配置读取 | ~3 |
+| `TokenBudgetManager.cs` | condense 阈值从配置读取 | ~8 |
+| `GrepSearchTool.cs` | RipgrepThreshold / 排除目录从配置读取 | ~12 |
+| `RunCommandTool.cs` | 默认 timeout 从配置读取 | ~5 |
+| `GitNexusProcessManager.cs` | StartTimeoutMs 从配置读取 | ~3 |
+
+#### 设计细节
+
+**config.json 格式：**
+
+```json
+{
+  "agent": { "maxIterations": 50, "maxTokenBudget": 32000, "doomLoopThreshold": 3, "maxRetries": 2, "maxUserCancellations": 3 },
+  "condense": { "minMessageThreshold": 18, "minCompressibleThreshold": 12 },
+  "tools": { "grepRipgrepThreshold": 200, "grepTimeoutSeconds": 30, "commandDefaultTimeoutSeconds": 30, "gitNexusStartTimeoutMs": 15000, "excludeDirectories": [...], "excludeExtensions": [...] },
+  "storage": { "conversationRetentionCount": 100 },
+  "telemetry": { "enabled": true }
+}
+```
+
+用户只需写想覆盖的字段，未写字段保持默认。
+
+#### 验证与回滚
+
+- 无 config.json → 行为完全不变（零回归）
+- 畸形 JSON → 回退全默认 + Debug.WriteLine 警告
+- 回滚：删除 2 个新文件 + 还原 7 文件 const 改动
+
+---
+
+### 13.2 步骤6: 可观测性增强（SessionRecordBuilder 扩展）
+
+**优先级**: 中 | **风险**: 低 | **新增 ~70 行，改动 3 文件** | **前置**: 步骤5（telemetry 开关）
+
+#### 目标
+
+- 在现有 SessionRecordBuilder 上直接扩展 condense 事件、token 使用量、模糊匹配命中分布
+- **不修改 IAgentContext 接口**（避免与步骤2/3 冲突）
+- 支持 telemetry 开关（`AicaConfig.Current.Telemetry.Enabled`）
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `AgentTelemetry.cs` | SessionRecord 新增字段（condenseEvents / totalPromptTokens / totalCompletionTokens / fuzzyMatchDistribution）+ CondenseEvent 值对象 + SessionRecordBuilder 新增 RecordCondenseEvent() / RecordTokenUsage() / RecordFuzzyMatchLevel() | +70 |
+| `AgentExecutor.cs` | condense 后调用 RecordCondenseEvent()；WriteTelemetry 加 enabled 检查 | ~10 |
+| `EditFileTool.cs` | FindWithCascade 命中时通过 ToolResult.Metadata 传递匹配级别，AgentExecutor 转发给 telemetryBuilder | ~15 |
+
+#### 数据传递路径（不修改 IAgentContext）
+
+```
+EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "indent_flexible"
+    → AgentExecutor 工具调用后检查 result.Metadata
+    → telemetryBuilder.RecordFuzzyMatchLevel("indent_flexible")
+```
+
+#### JSONL 输出示例
+
+```json
+{
+  "sessionId": "abc123", "iterations": 15, "toolCalls": 23,
+  "condenseEvents": [{"messagesBefore": 42, "messagesAfter": 6, "summaryTokenEstimate": 1200, "triggerReason": "proactive"}],
+  "totalPromptTokens": 45000, "totalCompletionTokens": 8000,
+  "fuzzyMatchDistribution": {"exact": 5, "line_trimmed": 2, "indent_flexible": 1},
+  "outcome": "completed", "durationMs": 120000
+}
+```
+
+#### 验证与回滚
+
+- 完整会话后 JSONL 新增字段有值
+- `telemetry.enabled: false` 时不写入
+- 旧版 JSONL 格式向后兼容（新字段缺失时为默认值）
+- 回滚：删除新增字段，还原 3 文件改动
+
+---
+
+### 13.3 步骤7: 会话存储接口抽取 + index.json 缓存
+
+**优先级**: 低 | **风险**: 低 | **新增 ~80 行，改动 2 文件** | **前置**: 无（可穿插）
+
+#### 目标
+
+- 抽取 `IConversationStorage` 接口，为未来存储引擎切换预留扩展点
+- 新增 index.json 缓存，list 操作从 O(n) 全量反序列化降到 O(1) 读索引
+- 零新 NuGet 依赖
+
+#### 为什么不用 SQLite
+
+- `netstandard2.0` + `.NET Framework 4.8` 宿主下，`Microsoft.Data.Sqlite` 需原生 `e_sqlite3.dll` (~1.5MB)，VSIX 打包器不自动处理
+- 单人开发者单进程场景，JSON + SSD 下 list 50 会话 <100ms，SQLite 事务/并发优势无意义
+- 未来如需 SQLite：建议单表 + JSON blob（`conversations` 表 + `data JSON` 列），而非多表 ORM
+
+#### 改动文件
+
+| 文件 | 改动 | 估算行数 |
+|------|------|----------|
+| `IConversationStorage.cs`（新建） | 接口定义：SaveConversationAsync / LoadConversationAsync / ListConversationsAsync / ListConversationsForProjectAsync / DeleteConversationAsync / ExportAsMarkdownAsync / CleanupOldConversationsAsync | +30 |
+| `ConversationIndexCache.cs`（新建） | 管理 `~/.AICA/conversations/index.json`：Load / Update / Remove / Rebuild。write-to-temp-then-rename 原子写入 | +50 |
+| `ConversationStorage.cs` | 实现 IConversationStorage；Save/Delete 后同步更新 index.json；首次无 index.json 时自动 Rebuild | ~15 |
+
+#### index.json 格式
+
+```json
+[
+  {"id": "abc123", "title": "Fix build error", "projectPath": "D:\\Project\\MyApp", "updatedAt": "...", "messageCount": 15},
+  ...
+]
+```
+
+#### 验证与回滚
+
+- 无 index.json → 自动 Rebuild，后续 <10ms
+- 损坏 index.json → 自动 Rebuild
+- 回滚：删除 2 新文件 + 还原 ConversationStorage + 删除 index.json（自动重建保证安全）
+
+---
+
+### 13.4 总改动量
+
+| 步骤 | 内容 | 新增行 | 改动行 | 新文件 | 风险 | 前置依赖 |
+|------|------|--------|--------|--------|------|----------|
+| **步骤5** | 统一配置层 | ~170 | ~40 | 2 | 低 | 步骤2 完成 |
+| **步骤6** | 可观测性增强 | ~70 | ~25 | 0 | 低 | 步骤5 |
+| **步骤7** | 接口抽取 + index.json | ~80 | ~15 | 2 | 低 | 无 |
+| **合计** | | **~320** | **~80** | **4** | | |
+
+### 13.5 全局成功标准
+
+- [ ] 步骤5: config.json 覆盖生效；无 config.json 时零回归
+- [ ] 步骤6: telemetry JSONL 包含 condenseEvents / tokenUsage / fuzzyMatchDistribution
+- [ ] 步骤7: 50 会话 ListConversationsAsync <10ms；index.json 损坏自动重建
+- [ ] VSIX 打包大小增量 = 0（零新 NuGet 依赖）

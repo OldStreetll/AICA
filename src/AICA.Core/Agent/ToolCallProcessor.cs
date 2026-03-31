@@ -423,7 +423,7 @@ namespace AICA.Core.Agent
             if (name.Contains("condense")) return "📝 正在压缩上下文...";
             if (name.Contains("attempt_completion")) return "✅ 正在完成任务...";
             if (name.Contains("ask_followup")) return "❓ 正在向用户提问...";
-            if (name.Contains("update_plan")) return "📋 正在更新计划...";
+
             if (name.Contains("log_analysis")) return "📊 正在分析日志...";
             return $"🔧 正在执行 {toolCall.Name}...";
         }

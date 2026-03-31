@@ -102,13 +102,13 @@ namespace AICA.Core.Agent
         /// Raised from 10 to 18 after TC-13 showed premature condense caused context loss.
         /// Kept as floor for ComputeCondenseMessageThreshold.
         /// </summary>
-        public const int MinCondenseMessageThreshold = 18;
+        public static int MinCondenseMessageThreshold => Config.AicaConfig.Current.Condense.MinMessageThreshold;
 
         /// <summary>
         /// Minimum non-system messages before proactive condense triggers.
         /// Kept as floor for ComputeCondenseCompressibleThreshold.
         /// </summary>
-        public const int MinCondenseCompressibleThreshold = 12;
+        public static int MinCondenseCompressibleThreshold => Config.AicaConfig.Current.Condense.MinCompressibleThreshold;
 
         /// <summary>
         /// Compute message-count threshold for proactive condense based on token budget.
@@ -130,6 +130,16 @@ namespace AICA.Core.Agent
         {
             int msgThreshold = ComputeCondenseMessageThreshold(maxTokenBudget);
             return Math.Max(MinCondenseCompressibleThreshold, (int)(msgThreshold * 0.67));
+        }
+
+        /// <summary>
+        /// Minimum new messages required between consecutive condense operations.
+        /// Set to 40% of message threshold to avoid excessive condensation.
+        /// </summary>
+        public static int ComputeReCondenseGap(int maxTokenBudget)
+        {
+            int msgThreshold = ComputeCondenseMessageThreshold(maxTokenBudget);
+            return Math.Max(8, (int)(msgThreshold * 0.40));
         }
 
         /// <summary>

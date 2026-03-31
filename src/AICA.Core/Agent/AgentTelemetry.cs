@@ -8,6 +8,27 @@ using System.Threading.Tasks;
 namespace AICA.Core.Agent
 {
     /// <summary>
+    /// Records a single condensation event during agent execution.
+    /// </summary>
+    public class CondenseEvent
+    {
+        public DateTime Timestamp { get; }
+        public int MessagesBefore { get; }
+        public int MessagesAfter { get; }
+        public int SummaryTokenEstimate { get; }
+        public string TriggerReason { get; }
+
+        public CondenseEvent(int messagesBefore, int messagesAfter, int summaryTokenEstimate, string triggerReason)
+        {
+            Timestamp = DateTime.UtcNow;
+            MessagesBefore = messagesBefore;
+            MessagesAfter = messagesAfter;
+            SummaryTokenEstimate = summaryTokenEstimate;
+            TriggerReason = triggerReason;
+        }
+    }
+
+    /// <summary>
     /// H4: Immutable session-level telemetry record.
     /// One record per agent execution, written to JSONL file.
     /// </summary>
@@ -26,6 +47,10 @@ namespace AICA.Core.Agent
         public int EditSuccesses { get; }
         public int EditFailures { get; }
         public IReadOnlyList<string> EditFailureReasons { get; }
+        public IReadOnlyList<CondenseEvent> CondenseEvents { get; }
+        public int TotalPromptTokens { get; }
+        public int TotalCompletionTokens { get; }
+        public IReadOnlyDictionary<string, int> FuzzyMatchDistribution { get; }
         public string Outcome { get; }
         public int DurationMs { get; }
 
@@ -43,6 +68,10 @@ namespace AICA.Core.Agent
             int editSuccesses,
             int editFailures,
             IReadOnlyList<string> editFailureReasons,
+            IReadOnlyList<CondenseEvent> condenseEvents,
+            int totalPromptTokens,
+            int totalCompletionTokens,
+            IReadOnlyDictionary<string, int> fuzzyMatchDistribution,
             string outcome,
             int durationMs)
         {
@@ -59,6 +88,10 @@ namespace AICA.Core.Agent
             EditSuccesses = editSuccesses;
             EditFailures = editFailures;
             EditFailureReasons = editFailureReasons ?? Array.Empty<string>();
+            CondenseEvents = condenseEvents ?? Array.Empty<CondenseEvent>();
+            TotalPromptTokens = totalPromptTokens;
+            TotalCompletionTokens = totalCompletionTokens;
+            FuzzyMatchDistribution = fuzzyMatchDistribution ?? new Dictionary<string, int>();
             Outcome = outcome;
             DurationMs = durationMs;
         }
@@ -72,6 +105,10 @@ namespace AICA.Core.Agent
         private readonly Dictionary<string, int> _toolCallCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, int> _toolFailCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> _editFailureReasons = new List<string>();
+        private readonly List<CondenseEvent> _condenseEvents = new List<CondenseEvent>();
+        private readonly Dictionary<string, int> _fuzzyMatchDistribution = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private int _totalPromptTokens;
+        private int _totalCompletionTokens;
 
         public string SessionId { get; set; } = Guid.NewGuid().ToString("N");
         public DateTime StartTime { get; set; } = DateTime.UtcNow;
@@ -81,6 +118,25 @@ namespace AICA.Core.Agent
         public int EditAttempts { get; set; }
         public int EditSuccesses { get; set; }
         public int EditFailures { get; set; }
+
+        public void RecordCondenseEvent(int messagesBefore, int messagesAfter, int summaryTokenEstimate, string triggerReason)
+        {
+            _condenseEvents.Add(new CondenseEvent(messagesBefore, messagesAfter, summaryTokenEstimate, triggerReason));
+        }
+
+        public void RecordTokenUsage(int promptTokens, int completionTokens)
+        {
+            _totalPromptTokens += promptTokens;
+            _totalCompletionTokens += completionTokens;
+        }
+
+        public void RecordFuzzyMatchLevel(string level)
+        {
+            if (string.IsNullOrEmpty(level)) return;
+            if (!_fuzzyMatchDistribution.ContainsKey(level))
+                _fuzzyMatchDistribution[level] = 0;
+            _fuzzyMatchDistribution[level]++;
+        }
 
         public void RecordToolCall(string toolName, bool success)
         {
@@ -127,6 +183,10 @@ namespace AICA.Core.Agent
                 editSuccesses: EditSuccesses,
                 editFailures: EditFailures,
                 editFailureReasons: _editFailureReasons.ToArray(),
+                condenseEvents: _condenseEvents.ToArray(),
+                totalPromptTokens: _totalPromptTokens,
+                totalCompletionTokens: _totalCompletionTokens,
+                fuzzyMatchDistribution: new Dictionary<string, int>(_fuzzyMatchDistribution),
                 outcome: outcome,
                 durationMs: (int)(DateTime.UtcNow - StartTime).TotalMilliseconds);
         }

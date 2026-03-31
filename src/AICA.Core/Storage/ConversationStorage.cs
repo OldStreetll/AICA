@@ -14,9 +14,10 @@ namespace AICA.Core.Storage
     /// Manages persistent storage and retrieval of conversation histories.
     /// Stores conversations as JSON files in ~/.AICA/conversations/
     /// </summary>
-    public class ConversationStorage
+    public class ConversationStorage : IConversationStorage
     {
         private readonly string _storageDir;
+        private readonly ConversationIndexCache _indexCache;
         private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         {
             WriteIndented = true,
@@ -31,6 +32,8 @@ namespace AICA.Core.Storage
 
             if (!Directory.Exists(_storageDir))
                 Directory.CreateDirectory(_storageDir);
+
+            _indexCache = new ConversationIndexCache(_storageDir);
         }
 
         /// <summary>
@@ -51,6 +54,21 @@ namespace AICA.Core.Storage
             var filePath = GetFilePath(record.Id);
             var json = JsonSerializer.Serialize(record, _jsonOptions);
             File.WriteAllText(filePath, json);
+
+            // Update index cache
+            _indexCache.Update(new ConversationSummary
+            {
+                Id = record.Id,
+                Title = record.Title,
+                CreatedAt = record.CreatedAt,
+                UpdatedAt = record.UpdatedAt,
+                MessageCount = record.Messages?.Count ?? 0,
+                WorkingDirectory = record.WorkingDirectory,
+                ProjectPath = record.ProjectPath,
+                ProjectName = record.ProjectName,
+                SolutionPath = record.SolutionPath
+            });
+
             await Task.CompletedTask;
         }
 
@@ -94,54 +112,12 @@ namespace AICA.Core.Storage
         /// </summary>
         public Task<List<ConversationSummary>> ListConversationsAsync(int limit = 50)
         {
-            var summaries = new List<ConversationSummary>();
-
-            System.Diagnostics.Debug.WriteLine($"[AICA] ListConversationsAsync: _storageDir={_storageDir}");
-            System.Diagnostics.Debug.WriteLine($"[AICA] ListConversationsAsync: Directory.Exists={Directory.Exists(_storageDir)}");
-
-            if (!Directory.Exists(_storageDir))
-            {
-                System.Diagnostics.Debug.WriteLine($"[AICA] ListConversationsAsync: Storage directory does not exist, returning empty list");
-                return Task.FromResult(summaries);
-            }
-
-            var files = Directory.GetFiles(_storageDir, "*.json")
-                .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+            var entries = _indexCache.Load();
+            var result = entries
+                .OrderByDescending(s => s.UpdatedAt)
                 .Take(limit)
                 .ToList();
-
-            System.Diagnostics.Debug.WriteLine($"[AICA] ListConversationsAsync: Found {files.Count} JSON files");
-
-            foreach (var file in files)
-            {
-                try
-                {
-                    var json = File.ReadAllText(file);
-                    var record = JsonSerializer.Deserialize<ConversationRecord>(json, _jsonOptions);
-                    if (record != null)
-                    {
-                        summaries.Add(new ConversationSummary
-                        {
-                            Id = record.Id,
-                            Title = record.Title,
-                            CreatedAt = record.CreatedAt,
-                            UpdatedAt = record.UpdatedAt,
-                            MessageCount = record.Messages?.Count ?? 0,
-                            WorkingDirectory = record.WorkingDirectory,
-                            ProjectPath = record.ProjectPath,
-                            ProjectName = record.ProjectName,
-                            SolutionPath = record.SolutionPath
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] ListConversationsAsync: Failed to load {file}: {ex.Message}");
-                }
-            }
-
-            System.Diagnostics.Debug.WriteLine($"[AICA] ListConversationsAsync: Loaded {summaries.Count} summaries");
-            return Task.FromResult(summaries);
+            return Task.FromResult(result);
         }
 
         /// <summary>
@@ -209,6 +185,7 @@ namespace AICA.Core.Storage
             if (File.Exists(filePath))
             {
                 File.Delete(filePath);
+                _indexCache.Remove(id);
                 return Task.FromResult(true);
             }
             return Task.FromResult(false);

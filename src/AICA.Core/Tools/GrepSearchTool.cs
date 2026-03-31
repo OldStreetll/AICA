@@ -25,10 +25,10 @@ namespace AICA.Core.Tools
             "Do NOT use for reading entire files — use 'read_file' instead.";
 
         /// <summary>File count threshold for choosing rg vs C# search engine.</summary>
-        private const int RipgrepThreshold = 200;
+        private static int RipgrepThreshold => Config.AicaConfig.Current.Tools.GrepRipgrepThreshold;
 
         /// <summary>Timeout for ripgrep process (seconds).</summary>
-        private const int RipgrepTimeoutSeconds = 30;
+        private static int RipgrepTimeoutSeconds => Config.AicaConfig.Current.Tools.GrepTimeoutSeconds;
 
         /// <summary>Cached ripgrep path (null = not searched, empty = not found).</summary>
         private static string _ripgrepPath;
@@ -400,11 +400,7 @@ namespace AICA.Core.Tools
             var dirName = Path.GetFileName(dirPath);
             if (string.IsNullOrEmpty(dirName)) return false;
 
-            var excludedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ".git", ".vs", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults",
-                "Debug", "Release", "RelWithDebInfo", "MinSizeRel", "x64", "x86"
-            };
+            var excludedNames = new HashSet<string>(Config.AicaConfig.Current.Tools.ExcludeDirectories, StringComparer.OrdinalIgnoreCase);
 
             return excludedNames.Contains(dirName);
         }
@@ -430,16 +426,7 @@ namespace AICA.Core.Tools
 
             // Skip binary/large files by extension
             var ext = Path.GetExtension(path)?.ToLowerInvariant();
-            var binaryExtensions = new HashSet<string>
-            {
-                ".exe", ".dll", ".pdb", ".obj", ".o", ".lib", ".so", ".a",
-                ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
-                ".zip", ".tar", ".gz", ".rar", ".7z", ".bz2",
-                ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-                ".vsix", ".nupkg", ".snk",
-                ".tlog", ".log", ".cache", ".ilk", ".idb", ".ipch", ".sdf", ".suo",
-                ".pch", ".ncb", ".opensdf", ".res", ".lastbuildstate"
-            };
+            var binaryExtensions = new HashSet<string>(Config.AicaConfig.Current.Tools.ExcludeExtensions, StringComparer.OrdinalIgnoreCase);
 
             return binaryExtensions.Contains(ext);
         }

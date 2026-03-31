@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -102,6 +103,11 @@ namespace AICA.Core.Agent
         /// Type of failure. Used by dedup logic to distinguish retryable vs permanent failures.
         /// </summary>
         public ToolResultFailureKind FailureKind { get; set; }
+
+        /// <summary>
+        /// Optional metadata for telemetry (e.g., fuzzy match level from EditFileTool).
+        /// </summary>
+        public Dictionary<string, string> Metadata { get; set; }
 
         public static ToolResult Ok(string content) => new ToolResult { Success = true, Content = content };
         public static ToolResult Fail(string error) => new ToolResult { Success = false, Error = error, FailureKind = ToolResultFailureKind.Transient };

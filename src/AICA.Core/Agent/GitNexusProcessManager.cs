@@ -23,7 +23,7 @@ namespace AICA.Core.Agent
         private readonly object _lock = new object();
         private volatile GitNexusState _state = GitNexusState.NotStarted;
 
-        private const int StartTimeoutMs = 15000;
+        private static int StartTimeoutMs => Config.AicaConfig.Current.Tools.GitNexusStartTimeoutMs;
         // Index timeout removed — analyze runs in a visible console window with no time limit
         private const string STARTUP_SIGNAL = "MCP server starting";
 

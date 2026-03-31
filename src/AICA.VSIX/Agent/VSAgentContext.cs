@@ -20,7 +20,6 @@ namespace AICA.Agent
     public class VSAgentContext : IAgentContext
     {
         private readonly DTE2 _dte;
-        private TaskPlan _currentPlan;
         private readonly Func<string, string, CancellationToken, Task<bool>> _confirmationHandler;
         private SafetyGuard _safetyGuard;
         private AutoApproveManager _autoApproveManager;
@@ -28,8 +27,6 @@ namespace AICA.Agent
         private PathResolver _pathResolver;
 
         public string WorkingDirectory { get; private set; }
-
-        public TaskPlan CurrentPlan => _currentPlan;
 
         // H6: Track files edited during this session
         private readonly HashSet<string> _editedFilesInSession = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -57,8 +54,6 @@ namespace AICA.Agent
         {
             _dte = dte;
             _confirmationHandler = confirmationHandler;
-            _currentPlan = new TaskPlan();
-
             // Determine working directory
             if (!string.IsNullOrEmpty(workingDirectory))
             {
@@ -493,11 +488,6 @@ namespace AICA.Agent
         {
             var fullPath = ResolveFilePath(path) ?? GetFullPath(path);
             return Task.FromResult(File.Exists(fullPath));
-        }
-
-        public void UpdatePlan(TaskPlan plan)
-        {
-            _currentPlan = plan ?? new TaskPlan();
         }
 
         public async Task<bool> RequestConfirmationAsync(string operation, string details, CancellationToken ct = default)

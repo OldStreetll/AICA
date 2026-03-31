@@ -54,6 +54,20 @@ namespace AICA.Core.Agent
                     compactMessages.Add(msg);
                 }
 
+                // If previous summary exists from earlier condense, include merge instruction
+                var prevCondensed = history.FirstOrDefault(m =>
+                    m.Role == ChatRole.System && m.Content != null
+                    && m.Content.StartsWith("[Conversation condensed]"));
+                if (prevCondensed != null)
+                {
+                    var prevSummary = prevCondensed.Content;
+                    if (prevSummary.Length > 12000)
+                        prevSummary = prevSummary.Substring(0, 12000) + "\n... (earlier context truncated)";
+                    compactMessages.Add(ChatMessage.User(
+                        "IMPORTANT: A previous summary exists from an earlier condensation. " +
+                        "Merge its key points into your new summary — do NOT nest it verbatim.\n\n" + prevSummary));
+                }
+
                 // Add the compaction prompt as the final user message
                 compactMessages.Add(ChatMessage.User(CompactionPrompt));
 

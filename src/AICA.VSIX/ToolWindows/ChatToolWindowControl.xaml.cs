@@ -308,7 +308,7 @@ namespace AICA.ToolWindows
             _toolDispatcher.RegisterTool(new ListDirTool());
             _toolDispatcher.RegisterTool(new GrepSearchTool());
             _toolDispatcher.RegisterTool(new RunCommandTool());
-            _toolDispatcher.RegisterTool(new UpdatePlanTool());
+
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
             _toolDispatcher.RegisterTool(new ListProjectsTool());
             _toolDispatcher.RegisterTool(new WriteFileTool());  // v2.1 T2: separated from edit full_replace

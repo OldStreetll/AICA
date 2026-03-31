@@ -14,7 +14,6 @@ namespace AICA.Core.Tests.Agent.Mocks
     public class MockAgentContext : IAgentContext
     {
         private readonly ConcurrentDictionary<string, string> _files = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        private TaskPlan _currentPlan;
 
         public MockAgentContext(string workingDirectory = "/workspace")
         {
@@ -93,13 +92,6 @@ namespace AICA.Core.Tests.Agent.Mocks
         }
 
         // --- ITaskContext ---
-
-        public TaskPlan CurrentPlan => _currentPlan;
-
-        public void UpdatePlan(TaskPlan plan)
-        {
-            _currentPlan = plan;
-        }
 
         public Task<bool> RequestConfirmationAsync(string operation, string details, CancellationToken ct = default)
         {

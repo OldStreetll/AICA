@@ -346,11 +346,10 @@ namespace AICA.Core.Tests.Agent
         {
             var toolNames = new[]
             {
-                "attempt_completion", "ask_followup_question",
-                "read_file", "list_dir", "list_code_definition_names",
-                "grep_search", "find_by_name", "list_projects",
+                "ask_followup_question",
+                "read_file", "write_file", "list_dir", "glob",
+                "grep_search", "list_projects",
                 "edit", "run_command",
-                "condense", "update_plan",
                 "gitnexus_context", "gitnexus_query", "gitnexus_impact"
             };
 

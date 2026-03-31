@@ -124,7 +124,7 @@ namespace AICA.Core.Tools
                         cwd = System.IO.Path.Combine(context.WorkingDirectory, cwdParam);
                 }
 
-                var timeoutSeconds = ToolParameterValidator.GetOptionalParameter<int>(call.Arguments, "timeout_seconds", 30);
+                var timeoutSeconds = ToolParameterValidator.GetOptionalParameter<int>(call.Arguments, "timeout_seconds", Config.AicaConfig.Current.Tools.CommandDefaultTimeoutSeconds);
                 ToolParameterValidator.ValidateRange(timeoutSeconds, 1, 300, "timeout_seconds");
 
                 // Safety check via injected checker

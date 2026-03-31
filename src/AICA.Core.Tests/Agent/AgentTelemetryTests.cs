@@ -33,6 +33,10 @@ namespace AICA.Core.Tests.Agent
                 editSuccesses: 1,
                 editFailures: 1,
                 editFailureReasons: failReasons,
+                condenseEvents: null,
+                totalPromptTokens: 0,
+                totalCompletionTokens: 0,
+                fuzzyMatchDistribution: null,
                 outcome: "completed",
                 durationMs: 12345);
 
@@ -57,7 +61,7 @@ namespace AICA.Core.Tests.Agent
         {
             var record = new SessionRecord(
                 "id", DateTime.UtcNow, "Simple", "read",
-                100, 1, 1, null, null, 0, 0, 0, null, "completed", 100);
+                100, 1, 1, null, null, 0, 0, 0, null, null, 0, 0, null, "completed", 100);
 
             Assert.NotNull(record.ToolCallCounts);
             Assert.Empty(record.ToolCallCounts);
@@ -76,7 +80,7 @@ namespace AICA.Core.Tests.Agent
                 new Dictionary<string, int> { { "grep_search", 5 } },
                 new Dictionary<string, int>(),
                 0, 0, 0, Array.Empty<string>(),
-                "completed", 5000);
+                null, 0, 0, null, "completed", 5000);
 
             var json = JsonSerializer.Serialize(record);
             Assert.Contains("abc", json);
@@ -135,7 +139,7 @@ namespace AICA.Core.Tests.Agent
                     "test1", new DateTime(2026, 3, 23, 0, 0, 0, DateTimeKind.Utc),
                     "Simple", "read", 50, 1, 1,
                     new Dictionary<string, int>(), new Dictionary<string, int>(),
-                    0, 0, 0, Array.Empty<string>(), "completed", 100);
+                    0, 0, 0, Array.Empty<string>(), null, 0, 0, null, "completed", 100);
 
                 await writer.WriteAsync(record);
 
@@ -167,7 +171,7 @@ namespace AICA.Core.Tests.Agent
                     var record = new SessionRecord(
                         $"session_{i}", ts, "Simple", "read", 50, 1, 1,
                         new Dictionary<string, int>(), new Dictionary<string, int>(),
-                        0, 0, 0, Array.Empty<string>(), "completed", 100);
+                        0, 0, 0, Array.Empty<string>(), null, 0, 0, null, "completed", 100);
                     await writer.WriteAsync(record);
                 }
 
