@@ -167,15 +167,21 @@ namespace AICA.Core.Agent
                     ToolResult result;
                     try
                     {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] PlanAgent executing tool: {toolCall.Name} args={System.Text.Json.JsonSerializer.Serialize(toolCall.Arguments)}");
                         using (var toolCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                         {
                             toolCts.CancelAfter(TimeSpan.FromSeconds(15));
                             result = await _toolDispatcher.ExecuteAsync(toolCall, context, null, toolCts.Token)
                                 .ConfigureAwait(false);
                         }
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] PlanAgent tool result: {toolCall.Name} Success={result.Success} ContentLen={result.Content?.Length ?? 0} Error={result.Error}");
                     }
                     catch (Exception ex)
                     {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] PlanAgent tool exception: {toolCall.Name} {ex.GetType().Name}: {ex.Message}");
                         result = ToolResult.Fail($"Tool error: {ex.Message}");
                     }
 
