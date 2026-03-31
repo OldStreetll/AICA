@@ -554,6 +554,12 @@ namespace AICA.Core.Agent
             return result;
         }
 
+        /// <summary>
+        /// Allow duplicate read_file calls on files that were edited in this session
+        /// (content changed, so re-reading with same path is legitimate).
+        /// v2.1: TruncatedFiles branch removed — O12 fix includes offset/limit in signature,
+        /// so different chunks already produce different signatures and bypass dedup naturally.
+        /// </summary>
         private bool ShouldAllowDuplicate(ToolCall toolCall)
         {
             if (toolCall.Name != "read_file") return false;
@@ -561,20 +567,7 @@ namespace AICA.Core.Agent
             var readPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
             if (readPath == null) return false;
 
-            var normalized = readPath.TrimEnd('/', '\\');
-            if (_taskState.EditedFiles.Contains(normalized)) return true;
-
-            // NOTE [C4]: After O12 fix (offset/limit included in signature), this branch is effectively
-            // dead code for chunked reads — different offsets produce different signatures and won't trigger
-            // dedup. Kept for safety; clean up in v2.2.
-            if (_taskState.TruncatedFiles.Contains(normalized))
-            {
-                var hasOffset = toolCall.Arguments != null &&
-                    (toolCall.Arguments.ContainsKey("offset") || toolCall.Arguments.ContainsKey("limit"));
-                return hasOffset;
-            }
-
-            return false;
+            return _taskState.EditedFiles.Contains(readPath.TrimEnd('/', '\\'));
         }
 
         private void TrackSuccessfulTool(ToolCall toolCall, ToolResult result)
@@ -586,12 +579,7 @@ namespace AICA.Core.Agent
                     _taskState.EditedFiles.Add(editPath.TrimEnd('/', '\\'));
             }
 
-            if (toolCall.Name == "read_file" && result.Content != null && result.Content.StartsWith("[AUTO_TRUNCATED]"))
-            {
-                var readPath = ToolCallProcessor.ExtractPathFromToolCall(toolCall);
-                if (!string.IsNullOrEmpty(readPath))
-                    _taskState.TruncatedFiles.Add(readPath.TrimEnd('/', '\\'));
-            }
+            // v2.1: TruncatedFiles tracking removed (O12 fix makes it unnecessary)
         }
 
         private void HandleFailedTool(ToolCall toolCall, ToolResult result,
