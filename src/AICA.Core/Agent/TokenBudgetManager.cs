@@ -118,10 +118,6 @@ namespace AICA.Core.Agent
         /// </summary>
         public static int ComputeCondenseMessageThreshold(int maxTokenBudget)
         {
-            // If override is set, use it directly (for testing or small-context scenarios)
-            var overrideValue = Config.AicaConfig.Current.Condense.OverrideMessageThreshold;
-            if (overrideValue > 0) return overrideValue;
-
             int estimatedCapacity = maxTokenBudget / 1500;
             int threshold = (int)(estimatedCapacity * 0.60);
             return Math.Max(MinCondenseMessageThreshold, threshold);

@@ -181,8 +181,6 @@ namespace AICA.Core.Agent
                 toolCalls = streamResult.ToolCalls;
                 finishReason = streamResult.FinishReason;
                 wasCancelled = streamResult.WasCancelled;
-                if (streamResult.PromptTokens > 0 || streamResult.CompletionTokens > 0)
-                    telemetryBuilder.RecordTokenUsage(streamResult.PromptTokens, streamResult.CompletionTokens);
 
                 if (streamResult.Error != null)
                 {
@@ -509,8 +507,6 @@ namespace AICA.Core.Agent
             public bool WasCancelled;
             public bool ContextOverflow;
             public string Error;
-            public int PromptTokens;
-            public int CompletionTokens;
         }
 
         private static readonly Random _jitterRandom = new Random();
@@ -543,11 +539,6 @@ namespace AICA.Core.Agent
                         else if (chunk.Type == LLMChunkType.Done)
                         {
                             finishReason = chunk.FinishReason ?? "stop";
-                            if (chunk.Usage != null)
-                            {
-                                result.PromptTokens = chunk.Usage.PromptTokens;
-                                result.CompletionTokens = chunk.Usage.CompletionTokens;
-                            }
                         }
                     }
 

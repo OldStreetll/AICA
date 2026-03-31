@@ -37,13 +37,6 @@ namespace AICA.Core.Config
     {
         public int MinMessageThreshold { get; set; } = 18;
         public int MinCompressibleThreshold { get; set; } = 12;
-
-        /// <summary>
-        /// If set to a positive value, directly overrides the computed condense threshold
-        /// (ignoring token budget calculation). Useful for testing or small-context scenarios.
-        /// Default 0 = use budget-based calculation with MinMessageThreshold as floor.
-        /// </summary>
-        public int OverrideMessageThreshold { get; set; } = 0;
     }
 
     public class ToolConfig
