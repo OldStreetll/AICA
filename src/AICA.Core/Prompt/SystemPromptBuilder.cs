@@ -19,7 +19,8 @@ namespace AICA.Core.Prompt
     /// </summary>
     public class SystemPromptBuilder
     {
-        private readonly StringBuilder _builder = new StringBuilder();
+        private readonly StringBuilder _staticBuilder = new StringBuilder();
+        private readonly StringBuilder _dynamicBuilder = new StringBuilder();
         private readonly List<ToolDefinition> _tools = new List<ToolDefinition>();
 
         public SystemPromptBuilder()
@@ -29,10 +30,10 @@ namespace AICA.Core.Prompt
 
         private void AddBasePrompt()
         {
-            _builder.AppendLine("You are AICA (AI Coding Assistant), an intelligent programming assistant running inside Visual Studio 2022.");
-            _builder.AppendLine("You help developers with code generation, editing, refactoring, testing, debugging, and code understanding.");
-            _builder.AppendLine("You operate in an offline/private environment. Do not assume internet access.");
-            _builder.AppendLine();
+            _staticBuilder.AppendLine("You are AICA (AI Coding Assistant), an intelligent programming assistant running inside Visual Studio 2022.");
+            _staticBuilder.AppendLine("You help developers with code generation, editing, refactoring, testing, debugging, and code understanding.");
+            _staticBuilder.AppendLine("You operate in an offline/private environment. Do not assume internet access.");
+            _staticBuilder.AppendLine();
         }
 
         public SystemPromptBuilder AddTools(IEnumerable<ToolDefinition> tools)
@@ -47,15 +48,15 @@ namespace AICA.Core.Prompt
         /// </summary>
         public SystemPromptBuilder AddRules()
         {
-            _builder.AppendLine("## Rules");
-            _builder.AppendLine("- Call tools immediately via the function calling API. Do NOT describe what you will do — just call the tool.");
-            _builder.AppendLine("- When multiple independent pieces of information are needed, call multiple tools in parallel in a single response.");
-            _builder.AppendLine("- Read files before editing. The old_string must exactly match file content.");
-            _builder.AppendLine("- Do NOT add code comments unless explicitly asked.");
-            _builder.AppendLine("- Windows environment — use built-in tools, not shell commands (grep/find/cat/head/tail).");
-            _builder.AppendLine("- Be direct. Minimize output. Respond in the user's language.");
-            _builder.AppendLine("- Focus on the current request. If it's a new topic, switch immediately.");
-            _builder.AppendLine();
+            _staticBuilder.AppendLine("## Rules");
+            _staticBuilder.AppendLine("- Call tools immediately via the function calling API. Do NOT describe what you will do — just call the tool.");
+            _staticBuilder.AppendLine("- When multiple independent pieces of information are needed, call multiple tools in parallel in a single response.");
+            _staticBuilder.AppendLine("- Read files before editing. The old_string must exactly match file content.");
+            _staticBuilder.AppendLine("- Do NOT add code comments unless explicitly asked.");
+            _staticBuilder.AppendLine("- Windows environment — use built-in tools, not shell commands (grep/find/cat/head/tail).");
+            _staticBuilder.AppendLine("- Be direct. Minimize output. Respond in the user's language.");
+            _staticBuilder.AppendLine("- Focus on the current request. If it's a new topic, switch immediately.");
+            _staticBuilder.AppendLine();
 
             return this;
         }
@@ -77,9 +78,9 @@ namespace AICA.Core.Prompt
             if (intent != "bug_fix")
                 return this;
 
-            _builder.AppendLine("## Bug Localization");
-            _builder.AppendLine("Search for error keywords → Read matching code → Analyze root cause → Suggest fix.");
-            _builder.AppendLine();
+            _dynamicBuilder.AppendLine("## Bug Localization");
+            _dynamicBuilder.AppendLine("Search for error keywords → Read matching code → Analyze root cause → Suggest fix.");
+            _dynamicBuilder.AppendLine();
 
             return this;
         }
@@ -89,9 +90,9 @@ namespace AICA.Core.Prompt
             if (!IsQtRelated(intent))
                 return this;
 
-            _builder.AppendLine("## Qt Code Generation");
-            _builder.AppendLine("Follow .aica-rules/cpp-qt-specific.md. Generate .h + .cpp pairs with Q_OBJECT, new-style connect, tr() macros.");
-            _builder.AppendLine();
+            _dynamicBuilder.AppendLine("## Qt Code Generation");
+            _dynamicBuilder.AppendLine("Follow .aica-rules/cpp-qt-specific.md. Generate .h + .cpp pairs with Q_OBJECT, new-style connect, tr() macros.");
+            _dynamicBuilder.AppendLine();
 
             return this;
         }
@@ -114,9 +115,9 @@ namespace AICA.Core.Prompt
             if (string.IsNullOrWhiteSpace(memoryContent))
                 return this;
 
-            _builder.AppendLine("## 项目记忆（跨会话）");
-            _builder.AppendLine(memoryContent);
-            _builder.AppendLine();
+            _dynamicBuilder.AppendLine("## 项目记忆（跨会话）");
+            _dynamicBuilder.AppendLine(memoryContent);
+            _dynamicBuilder.AppendLine();
 
             return this;
         }
@@ -126,28 +127,28 @@ namespace AICA.Core.Prompt
             if (progress == null || string.IsNullOrEmpty(progress.OriginalUserRequest))
                 return this;
 
-            _builder.AppendLine("## 断点续做 — 上次会话的进度");
-            _builder.AppendLine($"原始请求：{progress.OriginalUserRequest}");
+            _dynamicBuilder.AppendLine("## 断点续做 — 上次会话的进度");
+            _dynamicBuilder.AppendLine($"原始请求：{progress.OriginalUserRequest}");
             if (progress.EditedFiles?.Count > 0)
-                _builder.AppendLine($"已编辑文件：{string.Join(", ", progress.EditedFiles)}");
+                _dynamicBuilder.AppendLine($"已编辑文件：{string.Join(", ", progress.EditedFiles)}");
             if (progress.EditDetails?.Count > 0)
             {
-                _builder.AppendLine("编辑详情：");
+                _dynamicBuilder.AppendLine("编辑详情：");
                 foreach (var detail in progress.EditDetails)
-                    _builder.AppendLine($"  - {detail}");
+                    _dynamicBuilder.AppendLine($"  - {detail}");
             }
             if (!string.IsNullOrEmpty(progress.PlanState))
-                _builder.AppendLine($"计划状态：{progress.PlanState}");
+                _dynamicBuilder.AppendLine($"计划状态：{progress.PlanState}");
             if (!string.IsNullOrEmpty(progress.CurrentPhase))
-                _builder.AppendLine($"当前阶段：{progress.CurrentPhase}");
+                _dynamicBuilder.AppendLine($"当前阶段：{progress.CurrentPhase}");
             if (progress.KeyDiscoveries?.Count > 0)
             {
-                _builder.AppendLine("关键发现：");
+                _dynamicBuilder.AppendLine("关键发现：");
                 foreach (var disc in progress.KeyDiscoveries)
-                    _builder.AppendLine($"  - {disc}");
+                    _dynamicBuilder.AppendLine($"  - {disc}");
             }
-            _builder.AppendLine("请基于以上进度继续完成任务。已编辑的文件不需要重新编辑。");
-            _builder.AppendLine();
+            _dynamicBuilder.AppendLine("请基于以上进度继续完成任务。已编辑的文件不需要重新编辑。");
+            _dynamicBuilder.AppendLine();
 
             return this;
         }
@@ -170,8 +171,8 @@ namespace AICA.Core.Prompt
             if (string.IsNullOrWhiteSpace(resourceContent))
                 return this;
 
-            _builder.AppendLine(resourceContent);
-            _builder.AppendLine();
+            _staticBuilder.AppendLine(resourceContent);
+            _staticBuilder.AppendLine();
 
             return this;
         }
@@ -181,21 +182,21 @@ namespace AICA.Core.Prompt
             IEnumerable<string> sourceRoots = null,
             IEnumerable<string> recentFiles = null)
         {
-            _builder.AppendLine("## Workspace");
-            _builder.AppendLine($"Working Directory: {workingDirectory}");
+            _staticBuilder.AppendLine("## Workspace");
+            _staticBuilder.AppendLine($"Working Directory: {workingDirectory}");
 
             if (sourceRoots != null)
             {
                 var rootList = sourceRoots.ToList();
                 if (rootList.Count > 0)
                 {
-                    _builder.AppendLine();
-                    _builder.AppendLine("### Source Roots");
-                    _builder.AppendLine("The following directories contain source files referenced by the solution's project files.");
+                    _staticBuilder.AppendLine();
+                    _staticBuilder.AppendLine("### Source Roots");
+                    _staticBuilder.AppendLine("The following directories contain source files referenced by the solution's project files.");
                     foreach (var root in rootList)
-                        _builder.AppendLine($"- {root}");
-                    _builder.AppendLine();
-                    _builder.AppendLine("File paths are automatically resolved across working directory and source roots.");
+                        _staticBuilder.AppendLine($"- {root}");
+                    _staticBuilder.AppendLine();
+                    _staticBuilder.AppendLine("File paths are automatically resolved across working directory and source roots.");
                 }
             }
 
@@ -204,15 +205,15 @@ namespace AICA.Core.Prompt
                 var fileList = recentFiles.ToList();
                 if (fileList.Count > 0)
                 {
-                    _builder.AppendLine();
-                    _builder.AppendLine("Recently accessed files:");
+                    _staticBuilder.AppendLine();
+                    _staticBuilder.AppendLine("Recently accessed files:");
                     foreach (var file in fileList.Take(20))
-                        _builder.AppendLine($"- {file}");
+                        _staticBuilder.AppendLine($"- {file}");
                     if (fileList.Count > 20)
-                        _builder.AppendLine($"  ... and {fileList.Count - 20} more");
+                        _staticBuilder.AppendLine($"  ... and {fileList.Count - 20} more");
                 }
             }
-            _builder.AppendLine();
+            _staticBuilder.AppendLine();
             return this;
         }
 
@@ -225,45 +226,45 @@ namespace AICA.Core.Prompt
             if (projects == null || projects.Count == 0)
                 return this;
 
-            _builder.AppendLine("## Solution Structure");
-            _builder.AppendLine($"The solution contains {projects.Count} project(s):");
-            _builder.AppendLine();
+            _staticBuilder.AppendLine("## Solution Structure");
+            _staticBuilder.AppendLine($"The solution contains {projects.Count} project(s):");
+            _staticBuilder.AppendLine();
 
             foreach (var kvp in projects)
             {
                 var p = kvp.Value;
-                _builder.AppendLine($"### {p.Name ?? kvp.Key}");
+                _staticBuilder.AppendLine($"### {p.Name ?? kvp.Key}");
                 if (!string.IsNullOrEmpty(p.ProjectType))
-                    _builder.AppendLine($"- Type: {p.ProjectType}");
+                    _staticBuilder.AppendLine($"- Type: {p.ProjectType}");
                 if (!string.IsNullOrEmpty(p.ProjectDirectory))
-                    _builder.AppendLine($"- Directory: {p.ProjectDirectory}");
+                    _staticBuilder.AppendLine($"- Directory: {p.ProjectDirectory}");
 
                 if (p.Filters != null && p.Filters.Count > 0)
                 {
-                    _builder.AppendLine("- Filters:");
+                    _staticBuilder.AppendLine("- Filters:");
                     foreach (var filter in p.Filters)
                     {
-                        _builder.AppendLine($"  - {filter.Key}: {filter.Value.Count} file(s)");
+                        _staticBuilder.AppendLine($"  - {filter.Key}: {filter.Value.Count} file(s)");
                     }
                 }
 
                 if (p.Dependencies != null && p.Dependencies.Count > 0)
                 {
-                    _builder.AppendLine($"- Dependencies: {string.Join(", ", p.Dependencies.Take(10))}");
+                    _staticBuilder.AppendLine($"- Dependencies: {string.Join(", ", p.Dependencies.Take(10))}");
                     if (p.Dependencies.Count > 10)
-                        _builder.Append($" ... and {p.Dependencies.Count - 10} more");
+                        _staticBuilder.Append($" ... and {p.Dependencies.Count - 10} more");
                 }
 
                 var fileCount = p.SourceFiles?.Count ?? 0;
                 if (fileCount > 0)
-                    _builder.AppendLine($"- Source files: {fileCount}");
+                    _staticBuilder.AppendLine($"- Source files: {fileCount}");
 
-                _builder.AppendLine();
+                _staticBuilder.AppendLine();
             }
 
-            _builder.AppendLine("Use this structure to understand the codebase. " +
+            _staticBuilder.AppendLine("Use this structure to understand the codebase. " +
                                 "You can still call list_projects with show_files=true to see individual file lists.");
-            _builder.AppendLine();
+            _staticBuilder.AppendLine();
             return this;
         }
 
@@ -271,9 +272,9 @@ namespace AICA.Core.Prompt
         {
             if (!string.IsNullOrWhiteSpace(instructions))
             {
-                _builder.AppendLine("## Custom Instructions");
-                _builder.AppendLine(instructions);
-                _builder.AppendLine();
+                _dynamicBuilder.AppendLine("## Custom Instructions");
+                _dynamicBuilder.AppendLine(instructions);
+                _dynamicBuilder.AppendLine();
             }
             return this;
         }
@@ -300,14 +301,14 @@ namespace AICA.Core.Prompt
 
                 if (activatedRules.Count == 0) return this;
 
-                _builder.AppendLine("## Project Rules");
-                _builder.AppendLine();
+                _dynamicBuilder.AppendLine("## Project Rules");
+                _dynamicBuilder.AppendLine();
                 foreach (var rule in activatedRules)
                 {
                     if (!string.IsNullOrWhiteSpace(rule.Content))
                     {
-                        _builder.AppendLine(rule.Content);
-                        _builder.AppendLine();
+                        _dynamicBuilder.AppendLine(rule.Content);
+                        _dynamicBuilder.AppendLine();
                     }
                 }
             }
@@ -330,16 +331,21 @@ namespace AICA.Core.Prompt
                     ? knowledgeContext.Substring(0, maxChars) + "\n... (truncated)"
                     : knowledgeContext;
 
-                _builder.AppendLine();
-                _builder.AppendLine(text);
+                _dynamicBuilder.AppendLine();
+                _dynamicBuilder.AppendLine(text);
             }
             return this;
         }
 
         public string Build()
         {
-            var result = _builder.ToString();
-            var estimatedTokens = result.Length / 4;
+            var staticPart = _staticBuilder.ToString();
+            var dynamicPart = _dynamicBuilder.ToString();
+            var result = string.IsNullOrEmpty(dynamicPart)
+                ? staticPart
+                : staticPart + "\n" + dynamicPart;
+
+            var estimatedTokens = ContextManager.EstimateTokens(result);
             if (estimatedTokens > 16000)
             {
                 System.Diagnostics.Debug.WriteLine(

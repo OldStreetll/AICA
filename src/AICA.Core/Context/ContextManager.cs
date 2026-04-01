@@ -285,12 +285,61 @@ namespace AICA.Core.Context
             _items.Clear();
         }
 
+        // ── Token estimation with EMA calibration ──
+
+        private static double _calibrationFactor = 1.0;
+        private static int _calibrationSamples = 0;
+        private const int MaxCalibrationSamples = 20;
+        private const double MinCalibrationRatio = 0.3;
+        private const double MaxCalibrationRatio = 3.0;
+
         /// <summary>
-        /// Improved token estimation that accounts for CJK characters and code symbols.
-        /// CJK characters typically use ~1.5 tokens each, code symbols ~0.5 tokens each,
-        /// while Latin text averages ~4 chars/token.
+        /// Calibrate the token estimation factor using actual usage data from the API.
+        /// Uses exponential moving average (EMA) with ratio clamping for stability.
+        /// </summary>
+        /// <param name="estimated">Estimated token count from EstimateTokensRaw</param>
+        /// <param name="actual">Actual token count from API usage response</param>
+        public static void CalibrateFromUsage(int estimated, int actual)
+        {
+            if (estimated <= 0 || actual <= 0) return;
+
+            double ratio = (double)actual / estimated;
+            ratio = Math.Max(MinCalibrationRatio, Math.Min(MaxCalibrationRatio, ratio));
+
+            if (_calibrationSamples == 0)
+                _calibrationFactor = ratio;
+            else
+                _calibrationFactor = _calibrationFactor * 0.8 + ratio * 0.2;
+
+            _calibrationSamples = Math.Min(_calibrationSamples + 1, MaxCalibrationSamples);
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] Token calibration: estimated={estimated}, actual={actual}, ratio={ratio:F3}, factor={_calibrationFactor:F3}, samples={_calibrationSamples}");
+        }
+
+        /// <summary>
+        /// Reset calibration state (for testing).
+        /// </summary>
+        internal static void ResetCalibration()
+        {
+            _calibrationFactor = 1.0;
+            _calibrationSamples = 0;
+        }
+
+        /// <summary>
+        /// Improved token estimation with optional EMA calibration.
+        /// Applies calibration factor when usage data has been provided via CalibrateFromUsage.
         /// </summary>
         public static int EstimateTokens(string text)
+        {
+            int raw = EstimateTokensRaw(text);
+            return (int)Math.Ceiling(raw * _calibrationFactor);
+        }
+
+        /// <summary>
+        /// Raw token estimation based on character-level heuristics.
+        /// CJK ~1.5 tokens/char, code symbols ~0.5, Latin ~0.25 (4 chars/token).
+        /// </summary>
+        internal static int EstimateTokensRaw(string text)
         {
             if (string.IsNullOrEmpty(text)) return 0;
 
@@ -308,9 +357,6 @@ namespace AICA.Core.Context
                     otherCount++;
             }
 
-            // CJK: ~1.5 tokens per char
-            // Code symbols ({, }, [, ], etc.): ~0.5 tokens per char
-            // Latin/other: ~0.25 tokens per char (4 chars/token)
             int tokens = (int)Math.Ceiling(cjkCount * 1.5 + codeSymbolCount * 0.5 + otherCount * 0.25);
             return Math.Max(1, tokens);
         }

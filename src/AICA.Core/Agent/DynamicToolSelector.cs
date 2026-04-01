@@ -5,21 +5,51 @@ using System.Linq;
 namespace AICA.Core.Agent
 {
     /// <summary>
-    /// Selects tools based on user intent.
-    /// Trust-based design: LLM sees all tool descriptions and decides which to use.
-    /// Only conversation intent (greetings) uses a minimal tool set.
+    /// Semantic tool groups for intent-based filtering.
+    /// Each tool belongs to one group; intents select a combination of groups.
+    /// </summary>
+    [Flags]
+    public enum ToolGroup
+    {
+        Core     = 1,
+        Edit     = 2,
+        Search   = 4,
+        Advanced = 8,
+        All      = Core | Edit | Search | Advanced
+    }
+
+    /// <summary>
+    /// Selects tools based on user intent and task complexity.
+    /// Reduces tool definition token overhead by sending only relevant tool subsets.
+    /// Graceful fallback: unknown tools default to Advanced; unknown intents get All.
     /// </summary>
     public static class DynamicToolSelector
     {
-        // Minimal tool set for pure conversation (greetings don't need 14 tools)
-        private static readonly HashSet<string> ConversationTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "ask_followup_question"
-        };
+        private static readonly Dictionary<string, ToolGroup> ToolGroupMap =
+            new Dictionary<string, ToolGroup>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["read_file"] = ToolGroup.Core,
+                ["ask_followup_question"] = ToolGroup.Core,
+                ["validate_file"] = ToolGroup.Core,
+                ["edit"] = ToolGroup.Edit,
+                ["write_file"] = ToolGroup.Edit,
+                ["grep_search"] = ToolGroup.Search,
+                ["glob"] = ToolGroup.Search,
+                ["list_dir"] = ToolGroup.Search,
+                ["list_code_definition_names"] = ToolGroup.Search,
+                ["list_projects"] = ToolGroup.Search,
+                ["run_command"] = ToolGroup.Advanced,
+            };
 
         private static readonly string[] ConversationKeywords = new[]
         {
             "你好", "hello", "hi", "hey", "谢谢", "thanks", "再见", "bye"
+        };
+
+        private static readonly string[] ReadKeywords = new[]
+        {
+            "read", "show", "display", "print", "cat", "view", "look", "see", "check",
+            "读", "看", "查看", "显示", "打印", "浏览"
         };
 
         private static readonly string[] ModifyKeywords = new[]
@@ -51,8 +81,10 @@ namespace AICA.Core.Agent
         };
 
         /// <summary>
-        /// Select tools for the LLM. Only filters for conversation intent.
-        /// All other intents get the full tool set — trust the LLM to choose.
+        /// Select tools for the LLM based on intent and complexity.
+        /// Conversation → ask_followup_question only.
+        /// Other intents → tool subset based on ToolGroup mapping.
+        /// Unknown/general intent → all tools (safe fallback).
         /// </summary>
         public static IReadOnlyList<ToolDefinition> SelectTools(
             string userRequest,
@@ -65,13 +97,58 @@ namespace AICA.Core.Agent
 
             var intent = ClassifyIntent(userRequest);
             if (intent == "conversation")
-                return allTools.Where(t => ConversationTools.Contains(t.Name)).ToList();
+                return allTools.Where(t => t.Name == "ask_followup_question").ToList();
 
-            return allTools;
+            var groups = GetGroupsForIntent(intent, complexity);
+            if (groups == ToolGroup.All)
+                return allTools;
+
+            return allTools.Where(t => IsToolInGroups(t.Name, groups)).ToList();
+        }
+
+        /// <summary>
+        /// Map intent + complexity to required tool groups.
+        /// </summary>
+        internal static ToolGroup GetGroupsForIntent(string intent, TaskComplexity complexity)
+        {
+            bool isComplex = complexity == TaskComplexity.Complex;
+            switch (intent)
+            {
+                case "read":
+                case "analyze":
+                    return isComplex
+                        ? ToolGroup.Core | ToolGroup.Search | ToolGroup.Advanced
+                        : ToolGroup.Core | ToolGroup.Search;
+                case "modify":
+                case "bug_fix":
+                    return isComplex
+                        ? ToolGroup.All
+                        : ToolGroup.Core | ToolGroup.Edit | ToolGroup.Search;
+                case "command":
+                    return isComplex
+                        ? ToolGroup.Core | ToolGroup.Search | ToolGroup.Advanced
+                        : ToolGroup.Core | ToolGroup.Advanced;
+                case "general":
+                default:
+                    return ToolGroup.All;
+            }
+        }
+
+        /// <summary>
+        /// Check if a tool belongs to any of the specified groups.
+        /// Unmapped tools (e.g., MCP/gitnexus_*) default to Advanced.
+        /// </summary>
+        internal static bool IsToolInGroups(string toolName, ToolGroup groups)
+        {
+            if (ToolGroupMap.TryGetValue(toolName, out var group))
+                return (groups & group) != 0;
+            // Unmapped tools (MCP dynamic registration) → Advanced
+            return (groups & ToolGroup.Advanced) != 0;
         }
 
         /// <summary>
         /// Classify user request intent.
+        /// Priority: conversation > bug_fix > modify > command > analyze > read > general.
         /// </summary>
         internal static string ClassifyIntent(string userRequest)
         {
@@ -95,7 +172,10 @@ namespace AICA.Core.Agent
             if (AnalyzeKeywords.Any(k => lower.Contains(k)))
                 return "analyze";
 
-            return "read";
+            if (ReadKeywords.Any(k => lower.Contains(k)))
+                return "read";
+
+            return "general";
         }
     }
 }

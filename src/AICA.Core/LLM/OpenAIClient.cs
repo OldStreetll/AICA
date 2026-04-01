@@ -171,6 +171,7 @@ namespace AICA.Core.LLM
             var toolCallsBuilder = new Dictionary<int, ToolCallBuilder>();
             string currentContent = null;
             bool emittedDone = false; // P1-017: guard against double emission
+            UsageInfo lastUsage = null; // stream_options usage from final chunk
 
             while (!reader.EndOfStream && !ct.IsCancellationRequested)
             {
@@ -204,7 +205,7 @@ namespace AICA.Core.LLM
                             yield return LLMChunk.Tool(toolCall);
                         }
                     }
-                    yield return LLMChunk.Done();
+                    yield return LLMChunk.Done(lastUsage);
                     emittedDone = true;
                     yield break;
                 }
@@ -218,6 +219,16 @@ namespace AICA.Core.LLM
                 {
                     _logger?.LogWarning(ex, "Failed to parse chunk: {Data}", data);
                     continue;
+                }
+
+                // Capture stream usage (from stream_options.include_usage=true)
+                if (chunk?.Usage != null)
+                {
+                    lastUsage = new UsageInfo
+                    {
+                        PromptTokens = chunk.Usage.PromptTokens,
+                        CompletionTokens = chunk.Usage.CompletionTokens
+                    };
                 }
 
                 if (chunk?.Choices == null || chunk.Choices.Count == 0)
@@ -370,7 +381,10 @@ namespace AICA.Core.LLM
                 Temperature = _options.Temperature > 0 ? _options.Temperature : (double?)null,
                 TopP = _options.TopP > 0 && _options.TopP < 1.0 ? _options.TopP : (double?)null,
                 // top_k omitted — not part of OpenAI standard API, OpenCode never sends it
-                Stream = _options.Stream
+                Stream = _options.Stream,
+                StreamOptions = (_options.Stream && _options.StreamUsageEnabled)
+                    ? new StreamOptionsRequest { IncludeUsage = true }
+                    : null
             };
 
             foreach (var msg in messages)
@@ -563,6 +577,14 @@ namespace AICA.Core.LLM
             // top_k is NOT part of OpenAI standard API — omit for OpenAI-compatible models (like MiniMax)
             // OpenCode explicitly marks topK as unsupported and never sends it
             public bool Stream { get; set; }
+            [JsonPropertyName("stream_options")]
+            public StreamOptionsRequest StreamOptions { get; set; }
+        }
+
+        private class StreamOptionsRequest
+        {
+            [JsonPropertyName("include_usage")]
+            public bool IncludeUsage { get; set; }
         }
 
         private class RequestMessage
@@ -646,6 +668,7 @@ namespace AICA.Core.LLM
         private class StreamChunk
         {
             public List<StreamChoice> Choices { get; set; }
+            public ResponseUsage Usage { get; set; }
         }
 
         private class StreamChoice

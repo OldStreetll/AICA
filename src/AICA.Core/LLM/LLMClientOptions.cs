@@ -61,5 +61,12 @@ namespace AICA.Core.LLM
         /// When true, bypass system/global proxy and connect directly
         /// </summary>
         public bool BypassProxy { get; set; } = false;
+
+        /// <summary>
+        /// When true, send stream_options.include_usage=true to get token usage in the final stream chunk.
+        /// Not all providers support this (OpenAI does, MiniMax may not). Safe to enable — unsupported
+        /// providers will ignore the field.
+        /// </summary>
+        public bool StreamUsageEnabled { get; set; } = true;
     }
 }

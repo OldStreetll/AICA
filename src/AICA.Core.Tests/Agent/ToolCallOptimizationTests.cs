@@ -10,34 +10,122 @@ using Xunit;
 namespace AICA.Core.Tests.Agent
 {
     /// <summary>
-    /// Regression tests for ToolCall Optimization Plan (Phase A + B).
-    /// Validates the migration from control-type to trust-type tool selection.
+    /// Regression tests for ToolCall Optimization (Phase A+B → v2.5 intent-based filtering).
+    /// Validates intent-based tool group selection and trust-type tool descriptions.
     /// </summary>
     public class ToolCallOptimizationTests
     {
-        #region Phase A — Direction 1: DynamicToolSelector trust-based selection
+        #region v2.5 — Intent-based tool filtering
 
-        [Theory]
-        [InlineData("读取这个文件", "read")]
-        [InlineData("帮我修改这段代码", "modify")]
-        [InlineData("分析一下架构", "analyze")]
-        [InlineData("这段代码报错了", "bug_fix")]
-        [InlineData("运行 dotnet build", "command")]
-        public void SelectTools_NonConversation_ReturnsAllTools(string request, string expectedIntent)
+        [Fact]
+        public void SelectTools_ModifySimple_ReturnsCoreEditSearch()
         {
-            // Arrange: create a full tool set
             var allTools = CreateFullToolSet();
-            var complexity = TaskComplexityAnalyzer.AnalyzeComplexity(request);
+            var selected = DynamicToolSelector.SelectTools("帮我修改这段代码", TaskComplexity.Simple, allTools);
+            var names = selected.Select(t => t.Name).ToHashSet();
 
-            // Verify intent classification is as expected
-            Assert.Equal(expectedIntent, DynamicToolSelector.ClassifyIntent(request));
+            // Core + Edit + Search present
+            Assert.Contains("read_file", names);
+            Assert.Contains("edit", names);
+            Assert.Contains("write_file", names);
+            Assert.Contains("grep_search", names);
+            // Advanced absent for Simple modify
+            Assert.DoesNotContain("run_command", names);
+            Assert.DoesNotContain("gitnexus_context", names);
+        }
 
-            // Act
-            var selected = DynamicToolSelector.SelectTools(request, complexity, allTools);
-
-            // Assert: all tools should be returned (no filtering)
+        [Fact]
+        public void SelectTools_ModifyComplex_ReturnsAll()
+        {
+            var allTools = CreateFullToolSet();
+            var selected = DynamicToolSelector.SelectTools(
+                "帮我重构整个模块的架构，需要分析依赖关系并逐步修改",
+                TaskComplexity.Complex,
+                allTools);
             Assert.Equal(allTools.Count, selected.Count);
         }
+
+        [Fact]
+        public void SelectTools_ReadSimple_ReturnsCoreAndSearch()
+        {
+            var allTools = CreateFullToolSet();
+            var selected = DynamicToolSelector.SelectTools("读取这个文件", TaskComplexity.Simple, allTools);
+            var names = selected.Select(t => t.Name).ToHashSet();
+
+            Assert.Contains("read_file", names);
+            Assert.Contains("grep_search", names);
+            Assert.DoesNotContain("edit", names);
+            Assert.DoesNotContain("run_command", names);
+        }
+
+        [Fact]
+        public void SelectTools_AnalyzeSimple_ReturnsCoreAndSearch()
+        {
+            var allTools = CreateFullToolSet();
+            var selected = DynamicToolSelector.SelectTools(
+                "分析一下这个模块的架构",
+                TaskComplexity.Simple,
+                allTools);
+            var names = selected.Select(t => t.Name).ToHashSet();
+
+            Assert.Contains("read_file", names);
+            Assert.Contains("grep_search", names);
+            Assert.DoesNotContain("edit", names);
+            Assert.DoesNotContain("run_command", names);
+        }
+
+        [Fact]
+        public void SelectTools_AnalyzeComplex_IncludesAdvanced()
+        {
+            var allTools = CreateFullToolSet();
+            var selected = DynamicToolSelector.SelectTools(
+                "分析一下这个模块的架构",
+                TaskComplexity.Complex,
+                allTools);
+            var names = selected.Select(t => t.Name).ToHashSet();
+
+            Assert.Contains("run_command", names);
+            Assert.Contains("gitnexus_context", names);
+        }
+
+        [Fact]
+        public void SelectTools_CommandSimple_ReturnsCoreAndAdvanced()
+        {
+            var allTools = CreateFullToolSet();
+            var selected = DynamicToolSelector.SelectTools("运行 dotnet build", TaskComplexity.Simple, allTools);
+            var names = selected.Select(t => t.Name).ToHashSet();
+
+            Assert.Contains("read_file", names);
+            Assert.Contains("run_command", names);
+            Assert.DoesNotContain("edit", names);
+            Assert.DoesNotContain("grep_search", names);
+        }
+
+        [Fact]
+        public void SelectTools_BugFixSimple_ReturnsCoreEditSearch()
+        {
+            var allTools = CreateFullToolSet();
+            var selected = DynamicToolSelector.SelectTools("这段代码报错了", TaskComplexity.Simple, allTools);
+            var names = selected.Select(t => t.Name).ToHashSet();
+
+            Assert.Contains("read_file", names);
+            Assert.Contains("edit", names);
+            Assert.Contains("grep_search", names);
+            Assert.DoesNotContain("run_command", names);
+        }
+
+        [Fact]
+        public void SelectTools_GeneralIntent_ReturnsAll()
+        {
+            var allTools = CreateFullToolSet();
+            // "这个函数是做什么的" has no keyword matches → general → All
+            var selected = DynamicToolSelector.SelectTools("这个函数是做什么的", TaskComplexity.Simple, allTools);
+            Assert.Equal(allTools.Count, selected.Count);
+        }
+
+        #endregion
+
+        #region Conversation intent
 
         [Theory]
         [InlineData("你好")]
@@ -45,66 +133,15 @@ namespace AICA.Core.Tests.Agent
         [InlineData("hi")]
         public void SelectTools_Conversation_ReturnsCoreToolsOnly(string request)
         {
-            // Arrange
             var allTools = CreateFullToolSet();
             var complexity = TaskComplexityAnalyzer.AnalyzeComplexity(request);
-
-            // Verify it's classified as conversation
             Assert.Equal("conversation", DynamicToolSelector.ClassifyIntent(request));
 
-            // Act
             var selected = DynamicToolSelector.SelectTools(request, complexity, allTools);
-
-            // Assert: only CoreTools (attempt_completion, ask_followup_question)
             Assert.True(selected.Count <= 2, $"Conversation should have ≤2 tools, got {selected.Count}");
             Assert.All(selected, t =>
-                Assert.True(t.Name == "attempt_completion" || t.Name == "ask_followup_question",
+                Assert.True(t.Name == "ask_followup_question",
                     $"Unexpected tool in conversation: {t.Name}"));
-        }
-
-        [Fact]
-        public void SelectTools_Complex_ReturnsAllTools()
-        {
-            // Complex tasks should always get all tools (unchanged behavior)
-            var allTools = CreateFullToolSet();
-
-            var selected = DynamicToolSelector.SelectTools(
-                "帮我重构整个模块的架构，需要分析依赖关系并逐步修改",
-                TaskComplexity.Complex,
-                allTools);
-
-            Assert.Equal(allTools.Count, selected.Count);
-        }
-
-        [Fact]
-        public void SelectTools_ReadIntent_NoLongerFiltersWriteTools()
-        {
-            // Before: read intent would filter out edit, run_command
-            // After: all tools visible — LLM decides
-            var allTools = CreateFullToolSet();
-
-            var selected = DynamicToolSelector.SelectTools(
-                "这个函数是做什么的",
-                TaskComplexity.Simple,
-                allTools);
-
-            Assert.Contains(selected, t => t.Name == "edit");
-            Assert.Contains(selected, t => t.Name == "run_command");
-        }
-
-        [Fact]
-        public void SelectTools_AnalyzeIntent_IncludesAllTools()
-        {
-            // Before: analyze intent excluded write tools
-            // After: all tools visible
-            var allTools = CreateFullToolSet();
-
-            var selected = DynamicToolSelector.SelectTools(
-                "分析一下这个模块的架构",
-                TaskComplexity.Medium,
-                allTools);
-
-            Assert.Equal(allTools.Count, selected.Count);
         }
 
         #endregion
@@ -114,7 +151,6 @@ namespace AICA.Core.Tests.Agent
         [Fact]
         public void AddGitNexusGuidance_NoLongerContainsPriorityStrategy()
         {
-            // The "首选/次选/避免" priority ordering should be removed
             var builder = new SystemPromptBuilder();
             builder.AddGitNexusGuidance("TestRepo");
             var prompt = builder.Build();
@@ -126,24 +162,15 @@ namespace AICA.Core.Tests.Agent
         }
 
         [Fact]
-        public void AddGitNexusGuidance_StillContainsFewShotExamples()
+        public void AddGitNexusGuidance_IsNoOp()
         {
-            // P1/P2/P3 few-shot examples should be preserved
+            // v2.3+: GitNexus guidance is injected via MCP resources, not AddGitNexusGuidance
             var builder = new SystemPromptBuilder();
             builder.AddGitNexusGuidance("TestRepo");
             var prompt = builder.Build();
 
-            // P1: repo parameter
-            Assert.Contains("repo", prompt);
-            Assert.Contains("TestRepo", prompt);
-
-            // P2: simple symbol names
-            Assert.Contains("gitnexus_context", prompt);
-            Assert.Contains("gitnexus_impact", prompt);
-
-            // P3: Cypher schema (CodeRelation, r.type)
-            Assert.Contains("CodeRelation", prompt);
-            Assert.Contains("r.type", prompt);
+            // Should only contain base prompt (no GitNexus specifics added by this method)
+            Assert.DoesNotContain("gitnexus_context", prompt);
         }
 
         [Fact]
@@ -163,16 +190,13 @@ namespace AICA.Core.Tests.Agent
         [Fact]
         public void AddToolDescriptions_DoesNotListIndividualToolNames()
         {
-            // After Phase B: AddToolDescriptions should NOT enumerate tool names/params
             var tools = CreateFullToolSet();
             var builder = new SystemPromptBuilder();
             builder.AddTools(tools);
+#pragma warning disable CS0618
             builder.AddToolDescriptions();
+#pragma warning restore CS0618
             var prompt = builder.Build();
-
-            // Should contain generic tool usage principles
-            Assert.Contains("function calling", prompt);
-            Assert.Contains("tool_calls", prompt);
 
             // Should NOT contain per-tool sections (### tool_name format)
             Assert.DoesNotContain("### read_file", prompt);
@@ -182,15 +206,18 @@ namespace AICA.Core.Tests.Agent
         }
 
         [Fact]
-        public void AddToolDescriptions_ContainsGenericPrinciples()
+        public void AddToolDescriptions_IsNoOp()
         {
+            // AddToolDescriptions is obsolete and no-op — tool descriptions come from function calling API
             var builder = new SystemPromptBuilder();
+#pragma warning disable CS0618
             builder.AddToolDescriptions();
+#pragma warning restore CS0618
             var prompt = builder.Build();
 
-            Assert.Contains("Tool Usage", prompt);
-            Assert.Contains("IMMEDIATELY", prompt);
-            Assert.Contains("function calling", prompt);
+            // Should only contain base prompt
+            Assert.Contains("AICA", prompt);
+            Assert.DoesNotContain("Tool Usage", prompt); // No-op doesn't add Tool Usage
         }
 
         #endregion
@@ -201,10 +228,7 @@ namespace AICA.Core.Tests.Agent
         public async Task WaitForMcpUpgrade_NoUpgradePending_ReturnsImmediately()
         {
             var dispatcher = new ToolDispatcher();
-
-            // Should return instantly — no BeginMcpUpgrade called
             await dispatcher.WaitForMcpUpgradeAsync(5000);
-            // No exception = pass
         }
 
         [Fact]
@@ -213,9 +237,7 @@ namespace AICA.Core.Tests.Agent
             var dispatcher = new ToolDispatcher();
             dispatcher.BeginMcpUpgrade();
             dispatcher.SignalMcpUpgradeComplete();
-
             await dispatcher.WaitForMcpUpgradeAsync(5000);
-            // No timeout = pass
         }
 
         [Fact]
@@ -224,7 +246,6 @@ namespace AICA.Core.Tests.Agent
             var dispatcher = new ToolDispatcher();
             dispatcher.BeginMcpUpgrade();
 
-            // Signal after a short delay
             _ = Task.Run(async () =>
             {
                 await Task.Delay(100);
@@ -235,7 +256,6 @@ namespace AICA.Core.Tests.Agent
             await dispatcher.WaitForMcpUpgradeAsync(5000);
             sw.Stop();
 
-            // Should complete well before the 5s timeout
             Assert.True(sw.ElapsedMilliseconds < 2000,
                 $"Should complete quickly after signal, took {sw.ElapsedMilliseconds}ms");
         }
@@ -245,13 +265,11 @@ namespace AICA.Core.Tests.Agent
         {
             var dispatcher = new ToolDispatcher();
             dispatcher.BeginMcpUpgrade();
-            // Never call SignalMcpUpgradeComplete
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            await dispatcher.WaitForMcpUpgradeAsync(200); // short timeout
+            await dispatcher.WaitForMcpUpgradeAsync(200);
             sw.Stop();
 
-            // Should complete at or near the timeout
             Assert.True(sw.ElapsedMilliseconds >= 150,
                 $"Should wait near timeout, only waited {sw.ElapsedMilliseconds}ms");
             Assert.True(sw.ElapsedMilliseconds < 1000,
@@ -260,34 +278,29 @@ namespace AICA.Core.Tests.Agent
 
         #endregion
 
-        #region Integration: AgentExecutor passes all tools to LLM
+        #region Integration: AgentExecutor tool passing
 
         [Fact]
-        public async Task AgentExecutor_ReadRequest_PassesAllToolsToLLM()
+        public async Task AgentExecutor_ReadRequest_PassesFilteredToolsToLLM()
         {
-            // Before: read intent would filter tools
-            // After: all registered tools should be visible to LLM
             var harness = new AgentEvalHarness(new[]
             {
                 MockLlmResponse.Completion("Done.")
             });
 
-            // Register several tools of different categories
             harness.WithTool("read_file", "Read a file");
             harness.WithTool("edit", "Edit a file");
             harness.WithTool("grep_search", "Search for pattern");
             harness.WithTool("run_command", "Run shell command");
 
-            // Act: "read" intent request
-            await harness.RunAsync("这个函数是做什么的");
+            await harness.RunAsync("查看这个函数");
 
-            // Assert: LLM should see ALL tools (including attempt_completion from harness)
             var tools = harness.LlmClient.ReceivedTools[0];
-            Assert.Contains(tools, t => t.Name == "read_file");
-            Assert.Contains(tools, t => t.Name == "edit");
-            Assert.Contains(tools, t => t.Name == "grep_search");
-            Assert.Contains(tools, t => t.Name == "run_command");
-            Assert.Contains(tools, t => t.Name == "attempt_completion");
+            var names = tools.Select(t => t.Name).ToHashSet();
+
+            // Read+Simple → Core + Search (no Edit, no Advanced)
+            Assert.Contains("read_file", names);
+            Assert.Contains("grep_search", names);
         }
 
         [Fact]
@@ -298,17 +311,13 @@ namespace AICA.Core.Tests.Agent
                 MockLlmResponse.Completion("你好！有什么可以帮你的？")
             });
 
-            // Register many tools
             harness.WithTool("read_file", "Read a file");
             harness.WithTool("edit", "Edit a file");
             harness.WithTool("grep_search", "Search for pattern");
 
-            // Act: conversation intent
             await harness.RunAsync("你好");
 
-            // Assert: only CoreTools should be visible
             var tools = harness.LlmClient.ReceivedTools[0];
-            Assert.Contains(tools, t => t.Name == "attempt_completion");
             Assert.DoesNotContain(tools, t => t.Name == "read_file");
             Assert.DoesNotContain(tools, t => t.Name == "edit");
             Assert.DoesNotContain(tools, t => t.Name == "grep_search");
@@ -317,7 +326,6 @@ namespace AICA.Core.Tests.Agent
         [Fact]
         public async Task AgentExecutor_SystemPrompt_DoesNotContainToolNames()
         {
-            // Verify the system prompt sent to LLM doesn't enumerate tool names
             var harness = new AgentEvalHarness(new[]
             {
                 MockLlmResponse.Completion("Done.")
@@ -325,7 +333,7 @@ namespace AICA.Core.Tests.Agent
             harness.WithTool("read_file", "Read a file");
             harness.WithTool("grep_search", "Search for pattern");
 
-            await harness.RunAsync("读取文件");
+            await harness.RunAsync("查看文件");
 
             var messages = harness.LlmClient.ReceivedMessages[0];
             var systemPrompt = messages.First(m => m.Role == ChatRole.System).Content;
@@ -334,8 +342,8 @@ namespace AICA.Core.Tests.Agent
             Assert.DoesNotContain("### read_file", systemPrompt);
             Assert.DoesNotContain("### grep_search", systemPrompt);
 
-            // Should contain generic tool usage section
-            Assert.Contains("Tool Usage", systemPrompt);
+            // Should contain rules section
+            Assert.Contains("Rules", systemPrompt);
         }
 
         #endregion

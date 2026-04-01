@@ -192,6 +192,13 @@ namespace AICA.Core.Agent
                 finishReason = streamResult.FinishReason;
                 wasCancelled = streamResult.WasCancelled;
 
+                // Calibrate token estimation from API usage data
+                if (streamResult.Usage != null && streamResult.Usage.PromptTokens > 0)
+                {
+                    var estimatedPrompt = history.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                    Context.ContextManager.CalibrateFromUsage(estimatedPrompt, streamResult.Usage.PromptTokens);
+                }
+
                 if (streamResult.Error != null)
                 {
                     yield return AgentStep.WithError($"LLM 通信错误: {streamResult.Error}");
@@ -519,6 +526,7 @@ namespace AICA.Core.Agent
             public bool WasCancelled;
             public bool ContextOverflow;
             public string Error;
+            public LLM.UsageInfo Usage;
         }
 
         private static readonly Random _jitterRandom = new Random();
@@ -551,6 +559,8 @@ namespace AICA.Core.Agent
                         else if (chunk.Type == LLMChunkType.Done)
                         {
                             finishReason = chunk.FinishReason ?? "stop";
+                            if (chunk.Usage != null)
+                                result.Usage = chunk.Usage;
                         }
                     }
 
@@ -871,7 +881,7 @@ namespace AICA.Core.Agent
             {
                 if (history[i].Role == ChatRole.Tool && history[i].Content != null && history[i].Content.Length > 200)
                 {
-                    int estimatedTokens = history[i].Content.Length / 4;
+                    int estimatedTokens = Context.ContextManager.EstimateTokens(history[i].Content);
                     totalOldTokens += estimatedTokens;
 
                     // Only prune beyond the protection zone
@@ -888,7 +898,11 @@ namespace AICA.Core.Agent
             {
                 foreach (var idx in toPrune)
                 {
-                    history[idx] = ChatMessage.ToolResult(history[idx].ToolCallId, "[output pruned for context space]");
+                    int originalTokens = Context.ContextManager.EstimateTokens(history[idx].Content);
+                    var timestamp = DateTime.Now.ToString("HH:mm");
+                    history[idx] = ChatMessage.ToolResult(
+                        history[idx].ToolCallId,
+                        $"[compacted at {timestamp}, original ~{originalTokens} tokens — re-read the file if you need this content]");
                 }
                 System.Diagnostics.Debug.WriteLine(
                     $"[AICA] Post-loop pruning: {toPrune.Count} tool outputs pruned (~{prunableTokens} tokens freed, {totalOldTokens} total old tokens)");
