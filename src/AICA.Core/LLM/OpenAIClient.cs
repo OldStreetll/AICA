@@ -392,7 +392,7 @@ namespace AICA.Core.LLM
                 var reqMsg = new RequestMessage
                 {
                     Role = msg.Role.ToString().ToLowerInvariant(),
-                    Content = msg.Content
+                    Content = BuildContentElement(msg)
                 };
 
                 if (msg.Role == ChatRole.Tool)
@@ -447,6 +447,54 @@ namespace AICA.Core.LLM
             }
 
             return request;
+        }
+
+        /// <summary>
+        /// Build the JSON content element for a message.
+        /// Plain text → JsonElement(string). Multimodal with ImagePart → JsonElement(content array).
+        /// </summary>
+        private static JsonElement BuildContentElement(ChatMessage msg)
+        {
+            if (!msg.HasMultimodalParts)
+            {
+                // Plain text: serialize as string (or null)
+                return JsonSerializer.SerializeToElement(msg.Content);
+            }
+
+            // Multimodal: build OpenAI vision content array
+            var contentArray = new List<Dictionary<string, object>>();
+            foreach (var part in msg.Parts)
+            {
+                switch (part)
+                {
+                    case TextPart text:
+                        contentArray.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "text",
+                            ["text"] = text.Text
+                        });
+                        break;
+                    case ImagePart image:
+                        contentArray.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "image_url",
+                            ["image_url"] = new Dictionary<string, object>
+                            {
+                                ["url"] = image.ToDataUrl()
+                            }
+                        });
+                        break;
+                    case CodePart code:
+                        contentArray.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "text",
+                            ["text"] = code.ToStructuredText()
+                        });
+                        break;
+                }
+            }
+
+            return JsonSerializer.SerializeToElement(contentArray);
         }
 
         private string GetChatEndpoint()
@@ -590,7 +638,7 @@ namespace AICA.Core.LLM
         private class RequestMessage
         {
             public string Role { get; set; }
-            public string Content { get; set; }
+            public JsonElement Content { get; set; }
             [JsonPropertyName("tool_call_id")]
             public string ToolCallId { get; set; }
             [JsonPropertyName("tool_calls")]

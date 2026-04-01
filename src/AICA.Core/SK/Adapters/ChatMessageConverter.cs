@@ -61,6 +61,28 @@ namespace AICA.Core.SK.Adapters
                 return new ChatMessageContent(role, items);
             }
 
+            // Multimodal messages with parts (ImagePart, CodePart, etc.)
+            if (message.HasMultimodalParts && message.Parts != null)
+            {
+                var items = new ChatMessageContentItemCollection();
+                foreach (var part in message.Parts)
+                {
+                    switch (part)
+                    {
+                        case TextPart text:
+                            items.Add(new TextContent(text.Text));
+                            break;
+                        case ImagePart image:
+                            items.Add(new ImageContent(new Uri(image.ToDataUrl())));
+                            break;
+                        case CodePart code:
+                            items.Add(new TextContent(code.ToStructuredText()));
+                            break;
+                    }
+                }
+                return new ChatMessageContent(role, items);
+            }
+
             // Plain text messages
             return new ChatMessageContent(role, message.Content ?? string.Empty);
         }

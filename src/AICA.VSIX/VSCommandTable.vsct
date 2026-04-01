@@ -62,6 +62,16 @@
         </Strings>
       </Button>
 
+      <!-- Send Code to AICA with Context -->
+      <Button guid="AICACommandSet" id="SendCodeToAicaCommand" priority="0x0004" type="Button">
+        <Icon guid="ImageCatalogGuid" id="Send" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>发送到 AICA</ButtonText>
+          <LocCanonicalName>.AICA.SendCodeToAica</LocCanonicalName>
+        </Strings>
+      </Button>
+
       <!-- View Menu: Open Chat Window -->
       <Button guid="AICACommandSet" id="OpenChatWindowMenuCommand" priority="0x0100" type="Button">
         <Parent guid="guidSHLMainMenu" id="IDG_VS_WNDO_OTRWNDWS1" />
@@ -100,6 +110,9 @@
     <CommandPlacement guid="AICACommandSet" id="GenerateTestCommand" priority="0x0003">
       <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
     </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="SendCodeToAicaCommand" priority="0x0004">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
   </CommandPlacements>
 
   <KeyBindings>
@@ -118,6 +131,7 @@
       <IDSymbol name="RefactorCommand" value="0x0102" />
       <IDSymbol name="GenerateTestCommand" value="0x0103" />
       <IDSymbol name="OpenChatWindowMenuCommand" value="0x0104" />
+      <IDSymbol name="SendCodeToAicaCommand" value="0x0105" />
     </GuidSymbol>
   </Symbols>
 

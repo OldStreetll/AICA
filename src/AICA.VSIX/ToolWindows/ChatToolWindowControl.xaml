@@ -78,6 +78,7 @@
                              MaxHeight="120" MinHeight="60"
                              VerticalScrollBarVisibility="Auto"
                              PreviewKeyDown="InputTextBox_PreviewKeyDown"
+                             TextChanged="InputTextBox_TextChanged"
                              Padding="8"
                              Background="{DynamicResource {x:Static vsshell:VsBrushes.ComboBoxBackgroundKey}}"
                              Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"

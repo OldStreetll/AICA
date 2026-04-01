@@ -110,7 +110,7 @@ namespace AICA.Core.Context
             if (messages == null || messages.Count == 0)
                 return new TruncateResult { Messages = messages, TotalTokens = 0, RemovedMessageCount = 0 };
 
-            int totalTokens = messages.Sum(m => EstimateTokens(m.Content));
+            int totalTokens = messages.Sum(m => EstimateMessageTokens(m));
 
             // If within budget, return as-is
             if (totalTokens <= maxTokens)
@@ -137,7 +137,7 @@ namespace AICA.Core.Context
             for (int i = 0; i < messages.Count; i++)
             {
                 if (mustKeep.Contains(i)) continue;
-                removable.Add((i, EstimateTokens(messages[i].Content), ScoreMessage(messages[i])));
+                removable.Add((i, EstimateMessageTokens(messages[i]), ScoreMessage(messages[i])));
             }
 
             // Sort by score ascending — lowest value removed first
@@ -172,11 +172,11 @@ namespace AICA.Core.Context
             }
 
             // If still over budget, truncate individual long messages
-            int resultTokens = result.Sum(m => EstimateTokens(m.Content));
+            int resultTokens = result.Sum(m => EstimateMessageTokens(m));
             if (resultTokens > maxTokens)
             {
                 result = TruncateLongMessages(result, maxTokens);
-                resultTokens = result.Sum(m => EstimateTokens(m.Content));
+                resultTokens = result.Sum(m => EstimateMessageTokens(m));
             }
 
             return new TruncateResult { Messages = result, TotalTokens = resultTokens, RemovedMessageCount = removedIndices.Count };
@@ -283,6 +283,36 @@ namespace AICA.Core.Context
         public void Clear()
         {
             _items.Clear();
+        }
+
+        /// <summary>
+        /// Estimate tokens for a ChatMessage, accounting for multimodal parts.
+        /// ImagePart = fixed 765 tokens (OpenAI vision estimate). Text/Code use character-based estimation.
+        /// </summary>
+        public static int EstimateMessageTokens(ChatMessage msg)
+        {
+            if (msg == null) return 0;
+
+            if (msg.Parts == null || msg.Parts.Count == 0)
+                return EstimateTokens(msg.Content);
+
+            int total = 0;
+            foreach (var part in msg.Parts)
+            {
+                switch (part)
+                {
+                    case ImagePart _:
+                        total += 765; // Fixed estimate for vision token cost
+                        break;
+                    case TextPart text:
+                        total += EstimateTokens(text.Text);
+                        break;
+                    case CodePart code:
+                        total += EstimateTokens(code.ToStructuredText());
+                        break;
+                }
+            }
+            return Math.Max(1, total);
         }
 
         // ── Token estimation with EMA calibration ──

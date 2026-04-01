@@ -326,19 +326,129 @@ namespace AICA.Core.Storage
         {
             if (record == null) return null;
 
+            LLM.ChatMessage msg;
             switch (record.Role?.ToLowerInvariant())
             {
                 case "user":
-                    return LLM.ChatMessage.User(record.Content ?? string.Empty);
+                    msg = LLM.ChatMessage.User(record.Content ?? string.Empty);
+                    break;
                 case "assistant":
-                    return LLM.ChatMessage.Assistant(record.Content ?? string.Empty);
+                    msg = LLM.ChatMessage.Assistant(record.Content ?? string.Empty);
+                    break;
                 case "tool":
-                    return LLM.ChatMessage.ToolResult(null, record.Content ?? string.Empty);
+                    msg = LLM.ChatMessage.ToolResult(null, record.Content ?? string.Empty);
+                    break;
                 case "system":
-                    return LLM.ChatMessage.System(record.Content ?? string.Empty);
+                    msg = LLM.ChatMessage.System(record.Content ?? string.Empty);
+                    break;
                 default:
                     return null;
             }
+
+            // Restore parts from PartsJson if present
+            if (!string.IsNullOrEmpty(record.PartsJson))
+            {
+                try
+                {
+                    var parts = DeserializeParts(record.PartsJson);
+                    if (parts != null && parts.Count > 0)
+                    {
+                        msg.Parts = parts;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Failed to deserialize PartsJson: {ex.Message}");
+                }
+            }
+
+            return msg;
+        }
+
+        /// <summary>
+        /// Deserialize parts from JSON storage format.
+        /// Format: array of objects with "type" discriminator.
+        /// </summary>
+        private static List<LLM.IContentPart> DeserializeParts(string json)
+        {
+            var parts = new List<LLM.IContentPart>();
+            using (var doc = JsonDocument.Parse(json))
+            {
+                foreach (var element in doc.RootElement.EnumerateArray())
+                {
+                    var type = element.GetProperty("type").GetString();
+                    switch (type)
+                    {
+                        case "text":
+                            parts.Add(new LLM.TextPart(element.GetProperty("text").GetString()));
+                            break;
+                        case "image":
+                            parts.Add(new LLM.ImagePart(
+                                element.GetProperty("base64Data").GetString(),
+                                element.GetProperty("mediaType").GetString()));
+                            break;
+                        case "code":
+                            parts.Add(new LLM.CodePart(
+                                element.GetProperty("code").GetString(),
+                                element.GetProperty("filePath").GetString(),
+                                element.GetProperty("startLine").GetInt32(),
+                                element.TryGetProperty("startColumn", out var sc) ? sc.GetInt32() : 1,
+                                element.TryGetProperty("endLine", out var el) ? el.GetInt32() : element.GetProperty("startLine").GetInt32(),
+                                element.TryGetProperty("endColumn", out var ec) ? ec.GetInt32() : 1,
+                                element.GetProperty("language").GetString(),
+                                element.TryGetProperty("projectName", out var pn) ? pn.GetString() : null));
+                            break;
+                    }
+                }
+            }
+            return parts;
+        }
+
+        /// <summary>
+        /// Serialize parts to JSON storage format for ConversationMessageRecord.PartsJson.
+        /// </summary>
+        public static string SerializeParts(List<LLM.IContentPart> parts)
+        {
+            if (parts == null || parts.Count == 0) return null;
+
+            var list = new List<Dictionary<string, object>>();
+            foreach (var part in parts)
+            {
+                switch (part)
+                {
+                    case LLM.TextPart text:
+                        list.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "text",
+                            ["text"] = text.Text
+                        });
+                        break;
+                    case LLM.ImagePart image:
+                        list.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "image",
+                            ["base64Data"] = image.Base64Data,
+                            ["mediaType"] = image.MediaType
+                        });
+                        break;
+                    case LLM.CodePart code:
+                        list.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "code",
+                            ["code"] = code.Code,
+                            ["filePath"] = code.FilePath,
+                            ["startLine"] = code.StartLine,
+                            ["startColumn"] = code.StartColumn,
+                            ["endLine"] = code.EndLine,
+                            ["endColumn"] = code.EndColumn,
+                            ["language"] = code.Language,
+                            ["projectName"] = code.ProjectName
+                        });
+                        break;
+                }
+            }
+
+            return JsonSerializer.Serialize(list, _jsonOptions);
         }
     }
 
@@ -391,6 +501,12 @@ namespace AICA.Core.Storage
         // 新增：支持保存工具调用日志和完成数据
         public string ToolLogsHtml { get; set; }
         public string CompletionData { get; set; }
+
+        /// <summary>
+        /// Serialized content parts (JSON). Null for plain-text messages (backward compatible).
+        /// When present, contains the structured IContentPart list for multimodal messages.
+        /// </summary>
+        public string PartsJson { get; set; }
 
         public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
     }

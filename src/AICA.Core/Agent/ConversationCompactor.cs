@@ -4,7 +4,6 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using AICA.Core.Context;
 using AICA.Core.LLM;
 
 namespace AICA.Core.Agent
@@ -48,10 +47,11 @@ namespace AICA.Core.Agent
                 };
 
                 // Add conversation messages (skip system prompt, keep user/assistant/tool)
+                // Downgrade ImageParts to text placeholders before sending to compaction LLM
                 foreach (var msg in history)
                 {
                     if (msg.Role == ChatRole.System) continue;
-                    compactMessages.Add(msg);
+                    compactMessages.Add(DowngradeImageParts(msg));
                 }
 
                 // If previous summary exists from earlier condense, include merge instruction
@@ -160,6 +160,36 @@ namespace AICA.Core.Agent
             }
 
             return condensed;
+        }
+
+        /// <summary>
+        /// Downgrade ImageParts to text placeholders for compaction.
+        /// Returns the original message if no ImageParts are present.
+        /// </summary>
+        private static ChatMessage DowngradeImageParts(ChatMessage msg)
+        {
+            if (!msg.HasMultimodalParts || msg.Parts == null)
+                return msg;
+
+            int imageCount = 0;
+            var downgradedParts = new List<IContentPart>();
+            foreach (var part in msg.Parts)
+            {
+                if (part is ImagePart)
+                {
+                    imageCount++;
+                }
+                else
+                {
+                    downgradedParts.Add(part);
+                }
+            }
+
+            if (imageCount == 0)
+                return msg;
+
+            downgradedParts.Add(new TextPart($"[{imageCount} image(s) omitted for summary]"));
+            return ChatMessage.UserWithParts(downgradedParts);
         }
     }
 }

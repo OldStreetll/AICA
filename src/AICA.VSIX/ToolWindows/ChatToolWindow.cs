@@ -88,6 +88,15 @@ namespace AICA.ToolWindows
         }
 
         /// <summary>
+        /// v2.6: Attach a CodePart from a right-click command and focus the input.
+        /// </summary>
+        public void AttachCodePart(AICA.Core.LLM.CodePart codePart)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            _control?.AttachCodePart(codePart);
+        }
+
+        /// <summary>
         /// Cancel any running agent execution and wait for it to stop.
         /// </summary>
         public async Task CancelRunningAgentAsync(int timeoutMs = 5000)

@@ -17,6 +17,8 @@ namespace AICA.ToolWindows
         public string CompletionData { get; set; }
         public List<IterationBlock> IterationBlocks { get; set; }
         public List<ToolCallBlock> ToolCallBlocks { get; set; }
+        /// <summary>v2.6: Serialized content parts JSON for multimodal messages (null for plain text).</summary>
+        public string PartsJson { get; set; }
     }
 
     /// <summary>

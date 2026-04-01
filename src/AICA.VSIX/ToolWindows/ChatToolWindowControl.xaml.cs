@@ -3,6 +3,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -11,6 +12,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media.Imaging;
 using AICA.Options;
 using AICA.Core.LLM;
 using AICA.Core.Agent;
@@ -46,6 +48,8 @@ namespace AICA.ToolWindows
         private bool _isSidebarOpen = false; // Track sidebar state
         private List<ConversationViewModel> _allConversations = new List<ConversationViewModel>(); // Cache all conversations
         private string _lastProjectPath = null; // Track last project path to detect project switching
+        private ImagePart _pendingImagePart; // v2.6: pending image from paste/drop
+        private CodePart _pendingCodePart; // v2.6: pending code from right-click command
 
         public ChatToolWindowControl()
         {
@@ -248,9 +252,12 @@ namespace AICA.ToolWindows
             UpdateBrowserContent($"<div class=\"message assistant\"><div class=\"role\">AI</div><div class=\"content\">{html}</div></div>");
         }
 
-        public void AppendMessage(string role, string content)
+        public void AppendMessage(string role, string content, string badge = null)
         {
-            _conversation.Add(new ConversationMessage { Role = role, Content = content });
+            var msg = new ConversationMessage { Role = role, Content = content };
+            if (!string.IsNullOrEmpty(badge))
+                msg.Content = badge + " " + msg.Content;
+            _conversation.Add(msg);
             RenderConversation();
         }
 
@@ -283,6 +290,8 @@ namespace AICA.ToolWindows
             _globalIterationCounter = 0;
             _globalToolCallCounter = 0;
             _planCreatedThisExecution = false;
+            _pendingImagePart = null;
+            _pendingCodePart = null;
             // Bug 7 fix v3: First update content, then actively hide the panel.
             // UpdateFloatingPlanPanel will call HideFloatingPlanPanel since _planHistory is empty.
             UpdateBrowserContent(string.Empty);
@@ -824,6 +833,176 @@ namespace AICA.ToolWindows
                 e.Handled = true;
                 await SendMessageAsync();
             }
+
+            // v2.6: Intercept Ctrl+V to check for image paste
+            if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                if (TryPasteImage())
+                {
+                    e.Handled = true;
+                }
+            }
+        }
+
+        /// <summary>
+        /// v2.6: Try to paste an image from clipboard. Returns true if image was handled.
+        /// </summary>
+        private bool TryPasteImage()
+        {
+            if (!Clipboard.ContainsImage())
+                return false;
+
+            try
+            {
+                var bitmapSource = Clipboard.GetImage();
+                if (bitmapSource == null)
+                    return false;
+
+                // Scale down if exceeds max dimension
+                var scaled = ScaleImageIfNeeded(bitmapSource, ImagePart.MaxDimension);
+
+                // Encode to PNG first
+                var pngEncoder = new PngBitmapEncoder();
+                pngEncoder.Frames.Add(BitmapFrame.Create(scaled));
+                byte[] imageBytes;
+                using (var ms = new MemoryStream())
+                {
+                    pngEncoder.Save(ms);
+                    imageBytes = ms.ToArray();
+                }
+
+                string mediaType = "image/png";
+
+                // If PNG exceeds 2MB, fallback to JPEG 85
+                if (imageBytes.Length > ImagePart.MaxBase64Bytes * 3 / 4)
+                {
+                    var jpegEncoder = new JpegBitmapEncoder { QualityLevel = 85 };
+                    jpegEncoder.Frames.Add(BitmapFrame.Create(scaled));
+                    using (var ms = new MemoryStream())
+                    {
+                        jpegEncoder.Save(ms);
+                        imageBytes = ms.ToArray();
+                    }
+                    mediaType = "image/jpeg";
+                }
+
+                var base64 = Convert.ToBase64String(imageBytes);
+
+                // Validate size
+                if ((base64.Length * 3 / 4) > ImagePart.MaxBase64Bytes)
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] Image too large even after JPEG compression, skipping");
+                    return false;
+                }
+
+                _pendingImagePart = new ImagePart(base64, mediaType);
+
+                // Show indicator in input box
+                var currentText = InputTextBox.Text;
+                if (!currentText.StartsWith(ImageAttachTag))
+                {
+                    InputTextBox.Text = ImageAttachTag + currentText;
+                    InputTextBox.CaretIndex = InputTextBox.Text.Length;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[AICA] Image pasted: {mediaType}, {base64.Length} base64 chars");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Image paste failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// v2.6: Scale BitmapSource if either dimension exceeds maxDimension, preserving aspect ratio.
+        /// </summary>
+        private static BitmapSource ScaleImageIfNeeded(BitmapSource source, int maxDimension)
+        {
+            if (source.PixelWidth <= maxDimension && source.PixelHeight <= maxDimension)
+                return source;
+
+            double scale = Math.Min(
+                (double)maxDimension / source.PixelWidth,
+                (double)maxDimension / source.PixelHeight);
+
+            var transformed = new TransformedBitmap(source,
+                new System.Windows.Media.ScaleTransform(scale, scale));
+
+            // Force render to get actual pixels
+            var rendered = new RenderTargetBitmap(
+                (int)(source.PixelWidth * scale),
+                (int)(source.PixelHeight * scale),
+                96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            var visual = new System.Windows.Media.DrawingVisual();
+            using (var ctx = visual.RenderOpen())
+            {
+                ctx.DrawImage(transformed, new Rect(0, 0,
+                    source.PixelWidth * scale, source.PixelHeight * scale));
+            }
+            rendered.Render(visual);
+            rendered.Freeze();
+            return rendered;
+        }
+
+        /// <summary>
+        /// v2.6: Attach a CodePart from a right-click command (called by SendCodeToAicaCommand).
+        /// </summary>
+        private const string CodeAttachTag = "[📎 code] ";
+        private const string ImageAttachTag = "[📎 image] ";
+
+        public void AttachCodePart(CodePart codePart)
+        {
+            _pendingCodePart = codePart;
+
+            ThreadHelper.ThrowIfNotOnUIThread();
+            InputTextBox.Text = CodeAttachTag;
+            InputTextBox.CaretIndex = InputTextBox.Text.Length;
+            InputTextBox.Focus();
+        }
+
+        private void InputTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            var text = InputTextBox.Text;
+
+            // If user broke the code tag (partial deletion), clear attachment and clean remnants
+            if (_pendingCodePart != null && !text.Contains(CodeAttachTag.TrimEnd()))
+            {
+                _pendingCodePart = null;
+                // Clean any partial tag remnants
+                CleanPartialTag(text, CodeAttachTag.TrimEnd());
+            }
+            // If user broke the image tag, clear attachment and clean remnants
+            if (_pendingImagePart != null && !text.Contains(ImageAttachTag.TrimEnd()))
+            {
+                _pendingImagePart = null;
+                CleanPartialTag(text, ImageAttachTag.TrimEnd());
+            }
+        }
+
+        /// <summary>
+        /// Remove partial tag remnants (e.g., "[📎 cod" or "📎 code]") from input box.
+        /// </summary>
+        private void CleanPartialTag(string text, string fullTag)
+        {
+            // Check for any substring of the tag that might remain (3+ chars)
+            for (int len = fullTag.Length - 1; len >= 3; len--)
+            {
+                var partial = fullTag.Substring(0, len);
+                if (text.Contains(partial))
+                {
+                    var cleaned = text.Replace(partial, "").Trim();
+                    if (cleaned != text)
+                    {
+                        var caretPos = Math.Min(InputTextBox.CaretIndex, cleaned.Length);
+                        InputTextBox.Text = cleaned;
+                        InputTextBox.CaretIndex = caretPos;
+                        return;
+                    }
+                }
+            }
         }
 
         private async System.Threading.Tasks.Task SendMessageAsync()
@@ -840,13 +1019,43 @@ namespace AICA.ToolWindows
             SendButton.IsEnabled = true; // Keep enabled so user can click Pause
             _currentCts = new CancellationTokenSource();
 
+            // v2.6: Capture pending parts before clearing input
+            var imagePart = _pendingImagePart;
+            var codePart = _pendingCodePart;
+            _pendingImagePart = null;
+            _pendingCodePart = null;
+
             // Check if this is the first message (for title update)
             bool isFirstMessage = _conversation.Count == 0;
 
             try
             {
                 InputTextBox.Text = string.Empty;
-                AppendMessage("user", userMessage);
+
+                // v2.6: Build display text (strip attach tags anywhere in text)
+                var displayText = userMessage
+                    .Replace(ImageAttachTag, "").Replace(ImageAttachTag.TrimEnd(), "")
+                    .Replace(CodeAttachTag, "").Replace(CodeAttachTag.TrimEnd(), "")
+                    .Trim();
+
+                if (string.IsNullOrEmpty(displayText) && imagePart != null)
+                    displayText = "[Image]";
+                if (string.IsNullOrEmpty(displayText) && codePart != null)
+                    displayText = "[Code attached]";
+
+                AppendMessage("user", displayText, imagePart != null ? "📷" : (codePart != null ? "📎" : null));
+
+                // v2.6: Store PartsJson on the UI conversation message for persistence
+                if (imagePart != null || codePart != null)
+                {
+                    var partsForStorage = new List<IContentPart>();
+                    if (!string.IsNullOrEmpty(displayText))
+                        partsForStorage.Add(new TextPart(displayText));
+                    if (imagePart != null) partsForStorage.Add(imagePart);
+                    if (codePart != null) partsForStorage.Add(codePart);
+                    _conversation[_conversation.Count - 1].PartsJson =
+                        ConversationStorage.SerializeParts(partsForStorage);
+                }
 
                 var options = await GeneralOptions.GetLiveInstanceAsync();
 
@@ -862,14 +1071,17 @@ namespace AICA.ToolWindows
                     InitializeAgentComponents(options);
                 }
 
+                // v2.6: Build ChatMessage with parts if image/code is attached
+                var userChatMessage = BuildUserChatMessage(displayText, imagePart, codePart);
+
                 // Use Agent mode only if tool calling is enabled
                 if (_agentMode && _agentExecutor != null && options.EnableToolCalling)
                 {
-                    await ExecuteAgentModeAsync(userMessage);
+                    await ExecuteAgentModeAsync(displayText, userChatMessage);
                 }
                 else
                 {
-                    await ExecuteChatModeAsync(userMessage);
+                    await ExecuteChatModeAsync(displayText, userChatMessage);
                 }
 
                 // Auto-save conversation after each exchange
@@ -1179,7 +1391,26 @@ namespace AICA.ToolWindows
         /// </summary>
         // ConversationViewModel extracted to ChatModels.cs
 
-        private async System.Threading.Tasks.Task ExecuteAgentModeAsync(string userMessage)
+        /// <summary>
+        /// v2.6: Build a ChatMessage from user text + optional image/code parts.
+        /// </summary>
+        private static ChatMessage BuildUserChatMessage(string text, ImagePart imagePart, CodePart codePart)
+        {
+            if (imagePart == null && codePart == null)
+                return ChatMessage.User(text);
+
+            var parts = new List<IContentPart>();
+            if (!string.IsNullOrEmpty(text))
+                parts.Add(new TextPart(text));
+            if (imagePart != null)
+                parts.Add(imagePart);
+            if (codePart != null)
+                parts.Add(codePart);
+
+            return ChatMessage.UserWithParts(parts);
+        }
+
+        private async System.Threading.Tasks.Task ExecuteAgentModeAsync(string userMessage, ChatMessage userChatMessage = null)
         {
             var responseBuilder = new StringBuilder();
             var preToolContent = new StringBuilder(); // P0-007: preserve streaming text before tool calls
@@ -1198,8 +1429,8 @@ namespace AICA.ToolWindows
             _lastPlan = null;
             _planCreatedThisExecution = false;
 
-            // Add user message to history BEFORE executing agent
-            _llmHistory.Add(ChatMessage.User(userMessage));
+            // Add user message to history BEFORE executing agent (v2.6: use parts-aware message)
+            _llmHistory.Add(userChatMessage ?? ChatMessage.User(userMessage));
 
             // Show immediate feedback while waiting for LLM's first token (TTFT)
             RenderConversation("💭 *思考中...*");
@@ -1550,7 +1781,7 @@ namespace AICA.ToolWindows
             });
         }
 
-        private async System.Threading.Tasks.Task ExecuteChatModeAsync(string userMessage)
+        private async System.Threading.Tasks.Task ExecuteChatModeAsync(string userMessage, ChatMessage userChatMessage = null)
         {
             // Add system prompt if this is the first message
             if (_llmHistory.Count == 0)
@@ -1561,7 +1792,8 @@ namespace AICA.ToolWindows
                     "Be concise but thorough. Use markdown for code formatting."));
             }
 
-            _llmHistory.Add(ChatMessage.User(userMessage));
+            // v2.6: Use parts-aware message if provided
+            _llmHistory.Add(userChatMessage ?? ChatMessage.User(userMessage));
 
             var responseBuilder = new StringBuilder();
             var dispatcher = this.Dispatcher;
@@ -2162,7 +2394,8 @@ namespace AICA.ToolWindows
                         Role = msg.Role,
                         Content = msg.Content,
                         ToolLogsHtml = msg.ToolLogsHtml,
-                        CompletionData = msg.CompletionData
+                        CompletionData = msg.CompletionData,
+                        PartsJson = msg.PartsJson
                     });
                 }
 

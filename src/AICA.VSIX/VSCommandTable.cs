@@ -17,5 +17,6 @@ namespace AICA
         public const int RefactorCommand = 0x0102;
         public const int GenerateTestCommand = 0x0103;
         public const int OpenChatWindowMenuCommand = 0x0104;
+        public const int SendCodeToAicaCommand = 0x0105;
     }
 }
