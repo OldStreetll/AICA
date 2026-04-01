@@ -7,9 +7,12 @@ namespace AICA.Core.Knowledge
     /// <summary>
     /// Extracts symbol definitions from source file content using regex-based parsing.
     /// Supports C/C++ (.h, .hpp, .cpp) and C# (.cs) files.
+    /// Fallback parser when VS2022 CodeModel is unavailable.
     /// </summary>
-    public static class SymbolParser
+    public class RegexSymbolParser : ISymbolParser
     {
+        /// <summary>Singleton instance for backward compatibility with static callers.</summary>
+        public static readonly RegexSymbolParser Instance = new RegexSymbolParser();
         // C/C++ patterns
         private static readonly Regex CppClassStructRegex = new Regex(
             @"^\s*(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+(?:\w+\s+)*(\w+)\s*(?::\s*(?:public|protected|private)\s+(\w[\w:]*))?\s*\{?",
@@ -19,8 +22,9 @@ namespace AICA.Core.Knowledge
             @"^\s*enum\s+(?:class\s+)?(\w+)",
             RegexOptions.Compiled);
 
+        // Supports C++17 nested namespaces: namespace a::b::c
         private static readonly Regex CppNamespaceRegex = new Regex(
-            @"^\s*namespace\s+([\w:]+)",
+            @"^\s*namespace\s+([\w:]+(?:::[\w]+)*)",
             RegexOptions.Compiled);
 
         private static readonly Regex CppTypedefRegex = new Regex(
@@ -50,6 +54,14 @@ namespace AICA.Core.Knowledge
 
         /// <summary>
         /// Parse a file's content and extract symbols based on file extension.
+        /// Instance method implementing ISymbolParser.
+        /// </summary>
+        IReadOnlyList<SymbolRecord> ISymbolParser.Parse(string filePath, string content)
+            => Parse(filePath, content);
+
+        /// <summary>
+        /// Parse a file's content and extract symbols based on file extension.
+        /// Static method for backward compatibility.
         /// </summary>
         public static IReadOnlyList<SymbolRecord> Parse(string filePath, string content)
         {
@@ -193,7 +205,8 @@ namespace AICA.Core.Knowledge
                         filePath: filePath,
                         ns: ns,
                         summary: summary,
-                        keywords: keywords));
+                        keywords: keywords,
+                        startLine: i + 1));
                     continue;
                 }
 
@@ -212,7 +225,8 @@ namespace AICA.Core.Knowledge
                         filePath: filePath,
                         ns: ns,
                         summary: $"enum {name}",
-                        keywords: keywords));
+                        keywords: keywords,
+                        startLine: i + 1));
                     continue;
                 }
 
@@ -231,7 +245,8 @@ namespace AICA.Core.Knowledge
                         filePath: filePath,
                         ns: ns,
                         summary: line.Trim().TrimEnd(';'),
-                        keywords: keywords));
+                        keywords: keywords,
+                        startLine: i + 1));
                     continue;
                 }
 
@@ -253,7 +268,8 @@ namespace AICA.Core.Knowledge
                         filePath: filePath,
                         ns: "",
                         summary: line.Trim(),
-                        keywords: keywords));
+                        keywords: keywords,
+                        startLine: i + 1));
                     continue;
                 }
 
@@ -278,7 +294,8 @@ namespace AICA.Core.Knowledge
                             filePath: filePath,
                             ns: ns,
                             summary: line.Trim().TrimEnd('{').Trim(),
-                            keywords: keywords));
+                            keywords: keywords,
+                            startLine: i + 1));
                     }
                 }
             }
@@ -339,7 +356,8 @@ namespace AICA.Core.Knowledge
                         filePath: filePath,
                         ns: currentNamespace,
                         summary: summary,
-                        keywords: keywords));
+                        keywords: keywords,
+                        startLine: i + 1));
                 }
             }
 
@@ -389,7 +407,7 @@ namespace AICA.Core.Knowledge
         /// Generate TF-IDF keywords from symbol metadata.
         /// Splits camelCase and PascalCase names, includes namespace segments.
         /// </summary>
-        internal static IReadOnlyList<string> GenerateKeywords(
+        public static IReadOnlyList<string> GenerateKeywords(
             string name, string ns, string baseType, string kindLabel)
         {
             var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -428,7 +446,7 @@ namespace AICA.Core.Knowledge
         /// Split a PascalCase or camelCase identifier into words.
         /// E.g., "MyLoggerFactory" → ["My", "Logger", "Factory"]
         /// </summary>
-        internal static IReadOnlyList<string> SplitIdentifier(string identifier)
+        public static IReadOnlyList<string> SplitIdentifier(string identifier)
         {
             if (string.IsNullOrEmpty(identifier)) return Array.Empty<string>();
 

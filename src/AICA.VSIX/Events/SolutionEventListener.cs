@@ -81,24 +81,8 @@ namespace AICA.VSIX.Events
                         $"[AICA] FAILED: {result.Error}");
                 }
 
-                // 后台构建项目知识索引
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var indexer = new ProjectIndexer();
-                        var index = await indexer.IndexDirectoryAsync(solutionPath);
-                        ProjectKnowledgeStore.Instance.SetIndex(index);
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Project indexed: {index.FileCount} files, " +
-                            $"{index.Symbols.Count} symbols in {index.IndexDuration.TotalSeconds:F1}s");
-                    }
-                    catch (Exception indexEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] Indexing failed: {indexEx.Message}");
-                    }
-                });
+                // v2.8: Try CodeModel first (accurate), fallback to regex
+                _ = IndexProjectAsync(solutionPath);
 
                 // 并行触发 GitNexus 索引（fire-and-forget，不阻塞其他初始化）
                 _ = Task.Run(async () =>
@@ -157,6 +141,31 @@ namespace AICA.VSIX.Events
 
             System.Diagnostics.Debug.WriteLine("[AICA] Solution path is NULL");
             return null;
+        }
+
+        /// <summary>
+        /// v2.8: Regex indexing on background thread.
+        /// CodeModel is reserved for on-demand single-file parsing only (not bulk indexing)
+        /// because DTE API requires UI thread and blocks VS on large projects.
+        /// </summary>
+        private async Task IndexProjectAsync(string solutionPath)
+        {
+            await Task.Run(async () =>
+            {
+                try
+                {
+                    var indexer = new ProjectIndexer();
+                    var index = await indexer.IndexDirectoryAsync(solutionPath);
+                    ProjectKnowledgeStore.Instance.SetIndex(index);
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Project indexed: {index.FileCount} files, " +
+                        $"{index.Symbols.Count} symbols in {index.IndexDuration.TotalSeconds:F1}s");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Indexing failed: {ex.Message}");
+                }
+            });
         }
 
         #region IVsSolutionEvents 实现

@@ -112,7 +112,7 @@ namespace AICA.Core.Knowledge
                 tokens.Add(word.ToLowerInvariant());
 
                 // Also split camelCase/PascalCase
-                foreach (var part in SymbolParser.SplitIdentifier(word))
+                foreach (var part in RegexSymbolParser.SplitIdentifier(word))
                 {
                     if (part.Length > 1) // skip single chars
                         tokens.Add(part.ToLowerInvariant());
@@ -217,7 +217,20 @@ namespace AICA.Core.Knowledge
                 ? symbol.Name
                 : $"{symbol.Namespace}::{symbol.Name}";
 
-            return $"- {kindLabel} {qualifiedName} ({symbol.FilePath})\n  {symbol.Summary}";
+            // v2.8: Include line range and signature when available
+            var location = symbol.FilePath;
+            if (symbol.StartLine > 0)
+            {
+                location += symbol.EndLine > symbol.StartLine
+                    ? $":{symbol.StartLine}-{symbol.EndLine}"
+                    : $":{symbol.StartLine}";
+            }
+
+            var line1 = $"- {kindLabel} {qualifiedName} ({location})";
+            if (!string.IsNullOrEmpty(symbol.Signature))
+                line1 += $" `{symbol.Signature}`";
+
+            return $"{line1}\n  {symbol.Summary}";
         }
     }
 }

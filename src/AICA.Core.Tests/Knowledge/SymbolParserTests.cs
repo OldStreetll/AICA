@@ -21,7 +21,7 @@ public:
 };
 
 }";
-            var symbols = SymbolParser.ParseCpp("Foundation/include/Poco/Logger.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("Foundation/include/Poco/Logger.h", content);
 
             Assert.Contains(symbols, s => s.Name == "Logger" && s.Kind == SymbolKind.Class);
             var logger = symbols.First(s => s.Name == "Logger");
@@ -40,7 +40,7 @@ struct Point
     int y;
 };
 }";
-            var symbols = SymbolParser.ParseCpp("test.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("test.h", content);
 
             Assert.Contains(symbols, s => s.Name == "Point" && s.Kind == SymbolKind.Struct);
         }
@@ -56,7 +56,7 @@ enum class LogLevel
     Warning,
     Error
 };";
-            var symbols = SymbolParser.ParseCpp("test.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("test.h", content);
 
             Assert.Contains(symbols, s => s.Name == "LogLevel" && s.Kind == SymbolKind.Enum);
         }
@@ -66,7 +66,7 @@ enum class LogLevel
         {
             var content = "typedef unsigned long DWORD;";
 
-            var symbols = SymbolParser.ParseCpp("test.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("test.h", content);
 
             Assert.Contains(symbols, s => s.Name == "DWORD" && s.Kind == SymbolKind.Typedef);
         }
@@ -76,7 +76,7 @@ enum class LogLevel
         {
             var content = "#define POCO_API __declspec(dllexport)";
 
-            var symbols = SymbolParser.ParseCpp("test.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("test.h", content);
 
             Assert.Contains(symbols, s => s.Name == "POCO_API" && s.Kind == SymbolKind.Define);
         }
@@ -89,7 +89,7 @@ enum class LogLevel
 #define POCO_LOGGER_H
 class Logger {};
 #endif";
-            var symbols = SymbolParser.ParseCpp("test.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("test.h", content);
 
             Assert.DoesNotContain(symbols, s => s.Name == "POCO_LOGGER_H");
             Assert.Contains(symbols, s => s.Name == "Logger");
@@ -108,7 +108,7 @@ public:
 };
 }
 }";
-            var symbols = SymbolParser.ParseCpp("test.h", content);
+            var symbols = RegexSymbolParser.ParseCpp("test.h", content);
 
             var req = symbols.FirstOrDefault(s => s.Name == "HTTPRequest");
             Assert.NotNull(req);
@@ -128,7 +128,7 @@ namespace AICA.Core.Agent
         public void Execute() { }
     }
 }";
-            var symbols = SymbolParser.ParseCSharp("AgentExecutor.cs", content);
+            var symbols = RegexSymbolParser.ParseCSharp("AgentExecutor.cs", content);
 
             Assert.Contains(symbols, s => s.Name == "AgentExecutor" && s.Kind == SymbolKind.Class);
             var agent = symbols.First(s => s.Name == "AgentExecutor");
@@ -149,7 +149,7 @@ namespace AICA.Core
         Completed
     }
 }";
-            var symbols = SymbolParser.ParseCSharp("TaskState.cs", content);
+            var symbols = RegexSymbolParser.ParseCSharp("TaskState.cs", content);
 
             Assert.Contains(symbols, s => s.Name == "TaskState" && s.Kind == SymbolKind.Enum);
         }
@@ -165,7 +165,7 @@ namespace AICA.Core
         Task<string> CompleteAsync(string prompt);
     }
 }";
-            var symbols = SymbolParser.ParseCSharp("ILLMClient.cs", content);
+            var symbols = RegexSymbolParser.ParseCSharp("ILLMClient.cs", content);
 
             Assert.Contains(symbols, s => s.Name == "ILLMClient" && s.Kind == SymbolKind.Class);
         }
@@ -176,9 +176,9 @@ namespace AICA.Core
             var cppContent = "class Foo {};";
             var csContent = "public class Bar {}";
 
-            var cppSymbols = SymbolParser.Parse("test.h", cppContent);
-            var csSymbols = SymbolParser.Parse("test.cs", csContent);
-            var txtSymbols = SymbolParser.Parse("test.txt", "nothing");
+            var cppSymbols = RegexSymbolParser.Parse("test.h", cppContent);
+            var csSymbols = RegexSymbolParser.Parse("test.cs", csContent);
+            var txtSymbols = RegexSymbolParser.Parse("test.txt", "nothing");
 
             Assert.NotEmpty(cppSymbols);
             Assert.NotEmpty(csSymbols);
@@ -188,15 +188,15 @@ namespace AICA.Core
         [Fact]
         public void Parse_NullInput_ReturnsEmpty()
         {
-            Assert.Empty(SymbolParser.Parse(null, "content"));
-            Assert.Empty(SymbolParser.Parse("file.h", null));
-            Assert.Empty(SymbolParser.Parse("", "content"));
+            Assert.Empty(RegexSymbolParser.Parse(null, "content"));
+            Assert.Empty(RegexSymbolParser.Parse("file.h", null));
+            Assert.Empty(RegexSymbolParser.Parse("", "content"));
         }
 
         [Fact]
         public void SplitIdentifier_CamelCase_SplitsCorrectly()
         {
-            var parts = SymbolParser.SplitIdentifier("MyLoggerFactory");
+            var parts = RegexSymbolParser.SplitIdentifier("MyLoggerFactory");
 
             Assert.Contains("My", parts);
             Assert.Contains("Logger", parts);
@@ -206,7 +206,7 @@ namespace AICA.Core
         [Fact]
         public void SplitIdentifier_SnakeCase_SplitsCorrectly()
         {
-            var parts = SymbolParser.SplitIdentifier("my_logger_factory");
+            var parts = RegexSymbolParser.SplitIdentifier("my_logger_factory");
 
             Assert.Contains("my", parts);
             Assert.Contains("logger", parts);
@@ -216,7 +216,7 @@ namespace AICA.Core
         [Fact]
         public void GenerateKeywords_IncludesNameAndNamespace()
         {
-            var keywords = SymbolParser.GenerateKeywords("Logger", "Poco", "Channel", "Class");
+            var keywords = RegexSymbolParser.GenerateKeywords("Logger", "Poco", "Channel", "Class");
 
             Assert.Contains("logger", keywords);
             Assert.Contains("poco", keywords);

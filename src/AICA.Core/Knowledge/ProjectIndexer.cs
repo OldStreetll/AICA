@@ -19,7 +19,8 @@ namespace AICA.Core.Knowledge
         Function,
         Namespace,
         Typedef,
-        Define
+        Define,
+        Variable // v2.8: member variables extracted by CodeModel
     }
 
     /// <summary>
@@ -35,6 +36,15 @@ namespace AICA.Core.Knowledge
         public string Summary { get; }
         public IReadOnlyList<string> Keywords { get; }
 
+        /// <summary>v2.8: Line number where the symbol definition starts (0 if unknown).</summary>
+        public int StartLine { get; }
+        /// <summary>v2.8: Line number where the symbol definition ends (0 if unknown).</summary>
+        public int EndLine { get; }
+        /// <summary>v2.8: Full signature for functions/methods (null for non-callable symbols).</summary>
+        public string Signature { get; }
+        /// <summary>v2.8: Access modifier (public/private/protected, empty if unknown).</summary>
+        public string AccessModifier { get; }
+
         public SymbolRecord(
             string id,
             string name,
@@ -42,7 +52,11 @@ namespace AICA.Core.Knowledge
             string filePath,
             string ns,
             string summary,
-            IReadOnlyList<string> keywords)
+            IReadOnlyList<string> keywords,
+            int startLine = 0,
+            int endLine = 0,
+            string signature = null,
+            string accessModifier = null)
         {
             Id = id ?? throw new ArgumentNullException(nameof(id));
             Name = name ?? throw new ArgumentNullException(nameof(name));
@@ -51,6 +65,10 @@ namespace AICA.Core.Knowledge
             Namespace = ns ?? "";
             Summary = summary ?? "";
             Keywords = keywords ?? Array.Empty<string>();
+            StartLine = startLine;
+            EndLine = endLine;
+            Signature = signature;
+            AccessModifier = accessModifier ?? "";
         }
     }
 
@@ -79,10 +97,19 @@ namespace AICA.Core.Knowledge
 
     /// <summary>
     /// Scans a project directory and builds a symbol index from source files.
-    /// Parses .h, .hpp, .cpp, .cs files using regex-based symbol extraction.
+    /// Uses an ISymbolParser implementation (defaults to RegexSymbolParser).
     /// </summary>
     public class ProjectIndexer
     {
+        private readonly ISymbolParser _parser;
+        private readonly ISymbolParser _fallbackParser;
+
+        public ProjectIndexer(ISymbolParser parser = null, ISymbolParser fallbackParser = null)
+        {
+            _parser = parser ?? TreeSitterSymbolParser.Instance;
+            _fallbackParser = fallbackParser ?? RegexSymbolParser.Instance;
+        }
+
         private static readonly HashSet<string> SupportedExtensions = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase)
         {
@@ -120,6 +147,8 @@ namespace AICA.Core.Knowledge
             var sw = Stopwatch.StartNew();
             var allSymbols = new List<SymbolRecord>();
             var fileCount = 0;
+            var primaryHits = 0;
+            var fallbackHits = 0;
 
             var files = EnumerateSourceFiles(rootPath);
 
@@ -134,7 +163,19 @@ namespace AICA.Core.Knowledge
                     {
                         var content = File.ReadAllText(filePath);
                         var relativePath = GetRelativePath(rootPath, filePath);
-                        var symbols = SymbolParser.Parse(relativePath, content);
+                        var symbols = _parser.Parse(relativePath, content);
+
+                        if (symbols.Count > 0)
+                        {
+                            Interlocked.Increment(ref primaryHits);
+                        }
+                        else if (_fallbackParser != null)
+                        {
+                            // Fallback to regex if primary parser returns nothing
+                            symbols = _fallbackParser.Parse(relativePath, content);
+                            if (symbols.Count > 0)
+                                Interlocked.Increment(ref fallbackHits);
+                        }
 
                         if (symbols.Count > 0)
                         {
@@ -159,6 +200,10 @@ namespace AICA.Core.Knowledge
 
             sw.Stop();
 
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] IndexDirectory: {fileCount} files, {allSymbols.Count} symbols in {sw.Elapsed.TotalSeconds:F1}s " +
+                $"(primary={_parser.GetType().Name}: {primaryHits} files, fallback={_fallbackParser?.GetType().Name ?? "none"}: {fallbackHits} files)");
+
             return new ProjectIndex(
                 symbols: allSymbols,
                 indexedAt: DateTime.UtcNow,
@@ -179,7 +224,9 @@ namespace AICA.Core.Knowledge
                 return Task.FromResult<IReadOnlyList<SymbolRecord>>(Array.Empty<SymbolRecord>());
 
             var content = File.ReadAllText(filePath);
-            var symbols = SymbolParser.Parse(filePath, content);
+            var symbols = _parser.Parse(filePath, content);
+            if (symbols.Count == 0 && _fallbackParser != null)
+                symbols = _fallbackParser.Parse(filePath, content);
             return Task.FromResult(symbols);
         }
 

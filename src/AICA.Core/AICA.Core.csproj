@@ -27,6 +27,8 @@
     <!-- VS2022 hosts extensions in .NET Framework 4.8 with System.Text.Json 8.x already loaded; -->
     <!-- SK >= 1.55 pulls System.Text.Json 10.x which causes runtime MissingMethodException -->
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.54.0" />
+    <!-- v2.8: Tree-sitter for accurate C/C++ symbol parsing (background thread) -->
+    <PackageReference Include="TreeSitter.DotNet" Version="1.3.0" />
   </ItemGroup>
 
 </Project>

@@ -106,6 +106,29 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
+  <!-- v2.8: TreeSitter.DotNet managed DLL + Windows x64 native DLLs (from tools/treesitter/) -->
+  <ItemGroup>
+    <Content Include="..\..\tools\treesitter\TreeSitter.dll">
+      <Link>TreeSitter.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\tools\treesitter\native\win-x64\tree-sitter.dll">
+      <Link>tree-sitter.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\tools\treesitter\native\win-x64\tree-sitter-c.dll">
+      <Link>tree-sitter-c.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\tools\treesitter\native\win-x64\tree-sitter-cpp.dll">
+      <Link>tree-sitter-cpp.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
   <!-- D-06: Include bundled GitNexus (dist + vendor + package.json) in VSIX [C61: 2MB MAX_FILE_SIZE] -->
   <ItemGroup>
     <Content Include="..\..\tools\gitnexus\dist\**\*">
