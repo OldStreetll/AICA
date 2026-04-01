@@ -160,14 +160,14 @@ namespace AICA.Core.Tests.Agent
             });
             harness.WithTool("read_file", "Read a file");
 
-            // Act
-            await harness.RunAsync("你好");
+            // Act — use non-conversation intent so tools aren't filtered to conversation-only set
+            await harness.RunAsync("读取这个文件的内容");
 
             // Assert: LLM should receive tool definitions
             Assert.True(harness.LlmClient.CallCount >= 1);
             var tools = harness.LlmClient.ReceivedTools[0];
             Assert.True(tools.Count >= 1, "Should pass tool definitions to LLM");
-            Assert.Contains(tools, t => t.Name == "attempt_completion");
+            Assert.Contains(tools, t => t.Name == "read_file");
         }
 
         [Fact]

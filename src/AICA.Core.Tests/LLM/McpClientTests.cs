@@ -112,7 +112,8 @@ namespace AICA.Core.Tests.LLM
             using (var client = new McpClient(clientStdin, clientStdout))
             using (var cts = new CancellationTokenSource(200))
             {
-                await Assert.ThrowsAsync<OperationCanceledException>(
+                // TaskCanceledException inherits from OperationCanceledException
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
                     () => client.CallToolAsync("context", new Dictionary<string, object>(), cts.Token));
             }
         }
@@ -179,7 +180,7 @@ namespace AICA.Core.Tests.LLM
         }
 
         [Fact]
-        public void Dispose_CancelsPendingRequests()
+        public async Task Dispose_CancelsPendingRequests()
         {
             var clientStdin = new MemoryStream();
             var clientStdout = new BlockingStream();
@@ -190,8 +191,8 @@ namespace AICA.Core.Tests.LLM
             // Dispose while request is pending
             client.Dispose();
 
-            // The task should complete (canceled or faulted)
-            Assert.True(callTask.Wait(2000));
+            // The task should complete with cancellation (TaskCanceledException inherits OperationCanceledException)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => callTask);
         }
     }
 

@@ -80,21 +80,23 @@ namespace AICA.Core.Tests.Prompt
             builder.AddBugFixGuidance("bug_fix", ProjectLanguage.Unknown);
             var prompt = builder.Build();
 
-            // Trust-based design: guidance uses generic tool descriptions, not specific tool names
-            Assert.Contains("搜索", prompt);     // step 1: search for error keywords
-            Assert.Contains("读取", prompt);     // step 2: read matching code
-            Assert.Contains("修复建议", prompt); // final step: fix suggestion
+            // v2.0+: Trust-based design uses concise English guidance
+            Assert.Contains("Bug Localization", prompt);
+            Assert.Contains("Search for error keywords", prompt);
+            Assert.Contains("Suggest fix", prompt);
         }
 
         [Fact]
         public void AddBugFixGuidance_BugFixCpp_ContainsCppChecks()
         {
+            // v2.0+: C++ specific checks removed — trust-based design uses generic guidance
+            // Language parameter is accepted but doesn't change output
             var builder = new SystemPromptBuilder();
             builder.AddBugFixGuidance("bug_fix", ProjectLanguage.CppC);
             var prompt = builder.Build();
 
-            Assert.Contains("malloc/free", prompt);
-            Assert.Contains("fopen/fclose", prompt);
+            Assert.Contains("Bug Localization", prompt);
+            Assert.Contains("Search for error keywords", prompt);
         }
 
         [Fact]

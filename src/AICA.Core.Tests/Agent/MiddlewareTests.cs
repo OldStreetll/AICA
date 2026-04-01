@@ -74,11 +74,11 @@ namespace AICA.Core.Tests.Agent
                 Arguments = new Dictionary<string, object>()
             };
 
-            // Act & Assert
-            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            {
-                await pipeline.ExecuteAsync(call, tool, context.Object, uiContext.Object);
-            });
+            // Act — pipeline catches OperationCanceledException and returns ToolResult
+            var result = await pipeline.ExecuteAsync(call, tool, context.Object, uiContext.Object);
+
+            // Assert: should fail due to cancellation/timeout
+            Assert.False(result.Success, "Timed-out tool should return failure result");
         }
 
         [Fact]

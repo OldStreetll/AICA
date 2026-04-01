@@ -112,6 +112,8 @@ namespace AICA.Core.Tests.Agent
             // Arrange
             var tool = new EditFileTool();
             var context = CreateMockContext();
+            context.Setup(c => c.ReadFileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync("old content");
             context.Setup(c => c.ShowDiffAndApplyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DiffApplyResult { Applied = true });
             var uiContext = CreateMockUIContext();
