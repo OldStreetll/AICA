@@ -81,6 +81,8 @@ namespace AICA.Core.Knowledge
                     return ParseCpp(filePath, content);
                 case ".cs":
                     return ParseCSharp(filePath, content);
+                case ".ui":
+                    return ParseQtUi(filePath, content);
                 default:
                     return Array.Empty<SymbolRecord>();
             }
@@ -359,6 +361,46 @@ namespace AICA.Core.Knowledge
                         keywords: keywords,
                         startLine: i + 1));
                 }
+            }
+
+            return symbols;
+        }
+
+        // Qt .ui file patterns
+        private static readonly Regex UiWidgetRegex = new Regex(
+            @"<widget\s+class=""(\w+)""\s+name=""(\w+)""",
+            RegexOptions.Compiled);
+        private static readonly Regex UiConnectionRegex = new Regex(
+            @"<connection>\s*<sender>(\w+)</sender>\s*<signal>(\w+)</signal>\s*<receiver>(\w+)</receiver>\s*<slot>(\w+)</slot>",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// Extract widget definitions from Qt Designer .ui files.
+        /// </summary>
+        public static IReadOnlyList<SymbolRecord> ParseQtUi(string filePath, string content)
+        {
+            var symbols = new List<SymbolRecord>();
+
+            // Extract widgets: <widget class="QPushButton" name="btnStart">
+            foreach (System.Text.RegularExpressions.Match match in UiWidgetRegex.Matches(content))
+            {
+                var widgetClass = match.Groups[1].Value;
+                var widgetName = match.Groups[2].Value;
+
+                // Find approximate line number
+                var lineNum = content.Substring(0, match.Index).Split('\n').Length;
+
+                var keywords = GenerateKeywords(widgetName, widgetClass, "", "Widget");
+
+                symbols.Add(new SymbolRecord(
+                    id: $"{filePath}:{widgetName}",
+                    name: widgetName,
+                    kind: SymbolKind.Class, // Reuse Class kind for widgets
+                    filePath: filePath,
+                    ns: "",
+                    summary: $"[Qt] {widgetClass} \"{widgetName}\"",
+                    keywords: keywords,
+                    startLine: lineNum));
             }
 
             return symbols;

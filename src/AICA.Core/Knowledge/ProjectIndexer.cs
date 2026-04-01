@@ -113,7 +113,8 @@ namespace AICA.Core.Knowledge
         private static readonly HashSet<string> SupportedExtensions = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase)
         {
-            ".h", ".hpp", ".hxx", ".cpp", ".cxx", ".c", ".cppm", ".cs"
+            ".h", ".hpp", ".hxx", ".cpp", ".cxx", ".cc", ".c", ".cppm",
+            ".ui" // Qt Designer UI files
         };
 
         private static readonly HashSet<string> SkipDirectories = new HashSet<string>(
