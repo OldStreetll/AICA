@@ -32,6 +32,8 @@ namespace AICA
         /// </summary>
         private uint _solutionEventsCookie;
 
+        private DocumentSaveListener _documentSaveListener;
+
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -67,6 +69,16 @@ namespace AICA
                     // 注册事件监听器
                     solutionService.AdviseSolutionEvents(_solutionEventListener, out _solutionEventsCookie);
                     System.Diagnostics.Debug.WriteLine("[AICA] Event listener registered successfully");
+
+                    // Subscribe to document save events for incremental indexing
+                    var rdt = await GetServiceAsync(typeof(SVsRunningDocumentTable)) as IVsRunningDocumentTable;
+                    if (rdt != null)
+                    {
+                        _documentSaveListener = new DocumentSaveListener(rdt, _solutionEventListener);
+                        await JoinableTaskFactory.SwitchToMainThreadAsync();
+                        _documentSaveListener.Advise();
+                        System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener initialized");
+                    }
 
                     // 检查是否已有打开的解决方案
                     try
@@ -145,6 +157,20 @@ namespace AICA
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[AICA] Error disposing rules directory listener: {ex.Message}");
+                }
+
+                // Dispose document save listener
+                try
+                {
+                    if (_documentSaveListener != null)
+                    {
+                        _documentSaveListener.Dispose();
+                        _documentSaveListener = null;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Error disposing document save listener: {ex.Message}");
                 }
 
                 // Cancel any running agent before disposing GitNexus (prevents mid-execution disposal)
