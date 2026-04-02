@@ -454,7 +454,7 @@ namespace AICA.Core.Tools
                                   "Provide more surrounding context to make it unique. " +
                                   "replace_all is not supported in multi-edit mode.");
             }
-            // Levels 1-3: internal implementation already enforces uniqueness
+            // Levels 1-5: internal implementation already enforces uniqueness
 
             return (match, null);
         }
@@ -665,7 +665,9 @@ namespace AICA.Core.Tools
             Exact,                  // Level 0: exact string match
             LineTrimmed,            // Level 1: line-end whitespace ignored (NEW in v2.1)
             IndentationFlexible,    // Level 2: leading whitespace ignored (extracted from H3)
-            WhitespaceNormalized    // Level 3: all whitespace compressed (extracted from H3)
+            WhitespaceNormalized,   // Level 3: all whitespace compressed (extracted from H3)
+            UnicodeNormalized,      // Level 4: fullwidth/smart-quote/dash/NBSP/ZWS normalization
+            CommentStripped         // Level 5: C++ line comments (//) stripped before matching
         }
 
         private struct CascadeMatch
@@ -724,6 +726,40 @@ namespace AICA.Core.Tools
                 }
             }
 
+            // Level 4: Unicode normalization (fullwidth → halfwidth, smart quotes, dashes, NBSP, ZWS)
+            var normalizedUnicodeContent = NormalizeUnicode(content);
+            var normalizedUnicodeOld = NormalizeUnicode(oldString);
+            if (normalizedUnicodeContent != content || normalizedUnicodeOld != oldString)
+            {
+                int idx4 = normalizedUnicodeContent.IndexOf(normalizedUnicodeOld, StringComparison.Ordinal);
+                if (idx4 >= 0)
+                {
+                    var second4 = normalizedUnicodeContent.IndexOf(normalizedUnicodeOld, idx4 + 1, StringComparison.Ordinal);
+                    if (second4 < 0)
+                        return new CascadeMatch { MatchIndex = idx4, MatchLength = normalizedUnicodeOld.Length, Level = MatchLevel.UnicodeNormalized };
+                }
+            }
+
+            // Level 5: Comment stripping (strip C++ // line comments before matching)
+            var strippedContent = StripLineComments(content);
+            var strippedOld = StripLineComments(oldString);
+            if (strippedContent != content || strippedOld != oldString)
+            {
+                int idx5 = strippedContent.IndexOf(strippedOld, StringComparison.Ordinal);
+                if (idx5 >= 0)
+                {
+                    var second5 = strippedContent.IndexOf(strippedOld, idx5 + 1, StringComparison.Ordinal);
+                    if (second5 < 0)
+                    {
+                        // Map start/end positions from stripped space back to original content
+                        int origStart5 = MapStrippedToOriginal(content, strippedContent, idx5);
+                        int origEnd5 = MapStrippedToOriginal(content, strippedContent, idx5 + strippedOld.Length);
+                        if (origStart5 >= 0 && origEnd5 >= 0 && origEnd5 <= content.Length)
+                            return new CascadeMatch { MatchIndex = origStart5, MatchLength = origEnd5 - origStart5, Level = MatchLevel.CommentStripped };
+                    }
+                }
+            }
+
             return null; // All levels failed
         }
 
@@ -752,6 +788,97 @@ namespace AICA.Core.Tools
             if (segIndex < 0) return null;
 
             return new CascadeMatch { MatchIndex = segIndex, MatchLength = segment.Length, Level = MatchLevel.LineTrimmed };
+        }
+
+        /// <summary>
+        /// Level 4: Normalize Unicode characters — fullwidth ASCII → halfwidth, smart quotes,
+        /// em/en-dash → hyphen, non-breaking space → space, zero-width chars removed.
+        /// </summary>
+        private static string NormalizeUnicode(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            var sb = new System.Text.StringBuilder(text.Length);
+            foreach (var ch in text)
+            {
+                // Fullwidth ASCII → halfwidth (！→!, Ａ→A, etc.)
+                if (ch >= '\uFF01' && ch <= '\uFF5E')
+                    sb.Append((char)(ch - 0xFEE0));
+                // Smart quotes → straight quotes
+                else if (ch == '\u201C' || ch == '\u201D') sb.Append('"');
+                else if (ch == '\u2018' || ch == '\u2019') sb.Append('\'');
+                // Em-dash / En-dash → hyphen
+                else if (ch == '\u2014' || ch == '\u2013') sb.Append('-');
+                // Non-breaking space → space
+                else if (ch == '\u00A0') sb.Append(' ');
+                // Zero-width characters → skip
+                else if (ch == '\u200B' || ch == '\uFEFF') continue;
+                else sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Level 5: Strip C++ // line comments from each line before matching.
+        /// Uses a simple heuristic: ignores // inside string/char literals.
+        /// </summary>
+        private static string StripLineComments(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            var lines = text.Split('\n');
+            var sb = new System.Text.StringBuilder(text.Length);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                // Find // that's not inside a string literal (simple heuristic)
+                bool inString = false;
+                bool inChar = false;
+                int commentStart = -1;
+                for (int j = 0; j < line.Length - 1; j++)
+                {
+                    var c = line[j];
+                    if (c == '"' && !inChar) inString = !inString;
+                    else if (c == '\'' && !inString) inChar = !inChar;
+                    else if (c == '/' && line[j + 1] == '/' && !inString && !inChar)
+                    {
+                        commentStart = j;
+                        break;
+                    }
+                }
+                if (commentStart >= 0)
+                    sb.Append(line.Substring(0, commentStart).TrimEnd());
+                else
+                    sb.Append(line);
+                if (i < lines.Length - 1) sb.Append('\n');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Map a character index in the stripped (comment-removed) string back to the original string.
+        /// Comment stripping only removes characters from within lines (trailing portions),
+        /// so start-of-line positions are preserved. We scan both strings in parallel.
+        /// </summary>
+        private static int MapStrippedToOriginal(string original, string stripped, int strippedIndex)
+        {
+            int origIdx = 0;
+            int stripIdx = 0;
+            while (origIdx < original.Length && stripIdx < strippedIndex)
+            {
+                // Skip original characters that were removed by stripping
+                // Both strings share newlines at the same relative positions
+                if (origIdx < original.Length && stripIdx < stripped.Length &&
+                    original[origIdx] == stripped[stripIdx])
+                {
+                    origIdx++;
+                    stripIdx++;
+                }
+                else
+                {
+                    // Original has extra chars (the stripped comment) — advance original only
+                    origIdx++;
+                }
+            }
+            return origIdx <= original.Length ? origIdx : -1;
         }
 
         /// <summary>
