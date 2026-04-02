@@ -14,6 +14,7 @@ namespace AICA.Core.Knowledge
         public static ProjectKnowledgeStore Instance { get; } = new ProjectKnowledgeStore();
 
         private volatile ProjectIndex _index;
+        private readonly object _updateLock = new object();
 
         private ProjectKnowledgeStore() { }
 
@@ -56,29 +57,32 @@ namespace AICA.Core.Knowledge
         /// </summary>
         public void UpdateFileSymbols(string relativeFilePath, IReadOnlyList<SymbolRecord> newSymbols)
         {
-            var current = _index;
-            if (current == null)
-                return;
+            lock (_updateLock)
+            {
+                var current = _index;
+                if (current == null)
+                    return;
 
-            // Remove old symbols for this file, add new ones
-            var updatedSymbols = current.Symbols
-                .Where(s => !string.Equals(s.FilePath, relativeFilePath, StringComparison.OrdinalIgnoreCase))
-                .Concat(newSymbols)
-                .ToList();
+                // Remove old symbols for this file, add new ones
+                var updatedSymbols = current.Symbols
+                    .Where(s => !string.Equals(s.FilePath, relativeFilePath, StringComparison.OrdinalIgnoreCase))
+                    .Concat(newSymbols)
+                    .ToList();
 
-            // Recount distinct files
-            var fileCount = updatedSymbols
-                .Select(s => s.FilePath)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
+                // Recount distinct files
+                var fileCount = updatedSymbols
+                    .Select(s => s.FilePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
 
-            var updatedIndex = new ProjectIndex(
-                symbols: updatedSymbols,
-                indexedAt: DateTime.UtcNow,
-                fileCount: fileCount,
-                indexDuration: current.IndexDuration);
+                var updatedIndex = new ProjectIndex(
+                    symbols: updatedSymbols,
+                    indexedAt: DateTime.UtcNow,
+                    fileCount: fileCount,
+                    indexDuration: current.IndexDuration);
 
-            _index = updatedIndex;
+                _index = updatedIndex;
+            }
         }
 
         /// <summary>

@@ -20,8 +20,14 @@ namespace AICA.VSIX.Events
         /// <summary>
         /// The solution directory path, set on solution open, cleared on close.
         /// Used by DocumentSaveListener to compute relative file paths.
+        /// Volatile for cross-thread visibility (UI thread writes, background reads).
         /// </summary>
-        public string SolutionPath { get; private set; }
+        private volatile string _solutionPath;
+        public string SolutionPath
+        {
+            get => _solutionPath;
+            private set => _solutionPath = value;
+        }
 
         public SolutionEventListener(RulesDirectoryInitializer initializer = null)
         {

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
@@ -76,6 +77,10 @@ namespace AICA.VSIX.Events
                 out IVsHierarchy hierarchy,
                 out uint itemId,
                 out IntPtr docData);
+
+            // Release the COM reference — we only need the file path
+            if (docData != IntPtr.Zero)
+                Marshal.Release(docData);
 
             if (string.IsNullOrEmpty(filePath))
                 return VSConstants.S_OK;
