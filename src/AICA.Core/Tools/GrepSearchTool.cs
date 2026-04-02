@@ -14,7 +14,7 @@ namespace AICA.Core.Tools
 {
     /// <summary>
     /// Tool for searching text patterns in files within the workspace.
-    /// v2.1 T4: Dual-path strategy — ripgrep for large projects, C# fallback for small/unavailable.
+    /// v2.1 T4: Ripgrep-first strategy — always prefers rg (respects .gitignore), C# fallback when unavailable.
     /// </summary>
     public class GrepSearchTool : IAgentTool
     {
@@ -23,9 +23,6 @@ namespace AICA.Core.Tools
             "Search file contents using regex patterns. Returns matching lines with file paths and line numbers. " +
             "Do NOT use for finding files by name — use 'glob' instead. " +
             "Do NOT use for reading entire files — use 'read_file' instead.";
-
-        /// <summary>File count threshold for choosing rg vs C# search engine.</summary>
-        private static int RipgrepThreshold => Config.AicaConfig.Current.Tools.GrepRipgrepThreshold;
 
         /// <summary>Timeout for ripgrep process (seconds).</summary>
         private static int RipgrepTimeoutSeconds => Config.AicaConfig.Current.Tools.GrepTimeoutSeconds;
@@ -171,22 +168,18 @@ namespace AICA.Core.Tools
                 return ToolResult.Fail($"Invalid regex pattern: {ex.Message}");
             }
 
-            // v2.1 T4: Dual-path strategy — try ripgrep for large projects
+            // Prefer ripgrep when available — natively respects .gitignore at all project sizes
             var rgPath = FindRipgrep();
             if (rgPath != null)
             {
-                var fileCount = QuickFileCount(fullPath, RipgrepThreshold + 1);
-                if (fileCount >= RipgrepThreshold)
-                {
-                    var rgResult = SearchWithRipgrep(rgPath, query, fullPath,
-                        includePattern, caseSensitive, maxResults, context.WorkingDirectory, ct);
-                    if (rgResult != null)
-                        return rgResult; // ripgrep succeeded
-                    // else: fallback to C# below
-                }
+                var rgResult = SearchWithRipgrep(rgPath, query, fullPath,
+                    includePattern, caseSensitive, maxResults, context.WorkingDirectory, ct);
+                if (rgResult != null)
+                    return rgResult; // ripgrep succeeded
+                // else: fallback to C# below
             }
 
-            // C# in-memory search (small projects or ripgrep unavailable)
+            // C# in-memory search (ripgrep unavailable)
             return await Task.Run(() =>
             {
                 var results = new StringBuilder();
@@ -523,37 +516,6 @@ namespace AICA.Core.Tools
                 _ripgrepPath = string.Empty; // Not found
                 return null;
             }
-        }
-
-        /// <summary>
-        /// Quick count of files in a directory tree (stops at threshold).
-        /// Used to decide rg vs C# path.
-        /// </summary>
-        private static int QuickFileCount(string directory, int stopAt)
-        {
-            int count = 0;
-            try
-            {
-                var dirs = new Stack<string>();
-                dirs.Push(directory);
-                while (dirs.Count > 0 && count < stopAt)
-                {
-                    var dir = dirs.Pop();
-                    var dirName = Path.GetFileName(dir);
-                    if (dirName != null && (dirName == ".git" || dirName == ".vs" || dirName == "node_modules" || dirName == "bin" || dirName == "obj"))
-                        continue;
-                    try
-                    {
-                        count += Directory.GetFiles(dir).Length;
-                        if (count >= stopAt) return count;
-                        foreach (var sub in Directory.GetDirectories(dir))
-                            dirs.Push(sub);
-                    }
-                    catch { /* skip inaccessible */ }
-                }
-            }
-            catch { /* ignore */ }
-            return count;
         }
 
         /// <summary>
