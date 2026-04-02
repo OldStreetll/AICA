@@ -774,7 +774,7 @@ namespace AICA.ToolWindows
                     try
                     {
                         dynamic window = doc?.parentWindow;
-                        window?.execScript("if(typeof hljs!=='undefined'){var bs=document.querySelectorAll('pre code');for(var i=0;i<bs.length;i++){if(!bs[i].getAttribute('data-highlighted')){hljs.highlightElement(bs[i]);}}}");
+                        window?.execScript("if(typeof hljs!=='undefined'){var bs=document.querySelectorAll('pre code');for(var i=0;i<bs.length;i++){if((' '+bs[i].className+' ').indexOf(' hljs ')<0){hljs.highlightBlock(bs[i]);}}}");
                     }
                     catch { }
 
@@ -3307,7 +3307,7 @@ namespace AICA.ToolWindows
         <div id=""plan-content""></div>
     </div>
 </div>
-<script>if(typeof hljs!=='undefined')hljs.highlightAll();</script>
+<script>if(typeof hljs!=='undefined')hljs.initHighlighting();</script>
 </body>
 </html>";
         }
