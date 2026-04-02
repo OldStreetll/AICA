@@ -383,9 +383,10 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 | 多模型适配层 | ⏸ 搁置 — 工程量大，非紧急 |
 | Git 集成（status/diff/commit 工具） | ⏸ 搁置 |
 | ~~Tree-sitter 代码解析~~ | **✅ v2.8 已完成** — TreeSitter.DotNet + ISymbolParser + regex fallback |
-| Diff 可视化增强 | 候选 — UI 增强方向 |
-| Markdown 渲染 | 候选 — 聊天输出代码高亮、标题、列表 |
+| Diff 可视化增强 | 候选 — VS 原生 Diff 已够用，暂缓 |
+| ~~代码语法高亮~~ | **✅ v2.9 已完成** — Highlight.js 9.18.5 (IE11) + VS2015 暗色主题 |
 | ~~消息 Part 化~~ | **✅ v2.6 已完成** — ImagePart + CodePart(四维坐标) + 附件标签 UX |
+| ~~附件 UX 改进~~ | **✅ v2.9 已完成** — 光标处插入 + 前20字符内容预览 |
 | ~~Tree-sitter 增量索引~~ | **✅ v2.8.2 已完成** — DTE DocumentSaved 事件 → 单文件重解析 → 原子更新索引 |
 | ImagePart E2E 验证 | ⏸ 搁置 — 等多模态端点升级 |
 | 更多语言 tree-sitter | ⏸ 搁置 — AICA 定位 C/C++，非紧急 |
@@ -1028,3 +1029,4 @@ EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "ind
 | **v2.6.0** | **`bdca148`** | **消息 Part 化 (ImagePart + CodePart 四维坐标)** | **+1543** |
 | **v2.8.0** | **`b1123a2`** | **Tree-sitter 代码解析 + ISymbolParser + Regex 改进** | **+693/-54** |
 | **v2.8.2** | **`f872176`** | **Tree-sitter 增量索引（保存时单文件重解析）** | **+~250** |
+| **v2.9.0** | **`eb6c2b2`** | **UI 增强：代码语法高亮 (Highlight.js) + 附件 UX 改进** | **+~1440** |
