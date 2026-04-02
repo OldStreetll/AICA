@@ -1036,3 +1036,4 @@ EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "ind
 | **v2.8.2** | **`f872176`** | **Tree-sitter 增量索引（保存时单文件重解析）** | **+~250** |
 | **v2.9.0** | **`eb6c2b2`** | **UI 增强：代码语法高亮 (Highlight.js) + 附件 UX 改进** | **+~1440** |
 | **v2.10.0** | **`dc76f25`** | **搜索增强 + 模糊匹配增强：ripgrep 统一、历史内容搜索、Level 4-5** | **+~270** |
+| **v2.11.0** | **`55e515f`** | **初始化门控 + 进度条 + npm install 可见化 + McpBridge 参数别名** | **+2133/-56** |
