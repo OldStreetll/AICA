@@ -5,6 +5,7 @@ global using Task = System.Threading.Tasks.Task;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.VisualStudio.Shell.Interop;
+using AICA.Core.Initialization;
 using AICA.Options;
 using AICA.ToolWindows;
 using AICA.VSIX.Events;
@@ -20,6 +21,16 @@ namespace AICA
     [ProvideToolWindow(typeof(ChatToolWindow), Style = VsDockStyle.Tabbed, Window = "3ae79031-e1bc-11d0-8f78-00a0c9110057")]
     public sealed class AICAPackage : ToolkitPackage
     {
+        private static AICAPackage _instance;
+
+        /// <summary>
+        /// Get the InitializationManager from the current SolutionEventListener.
+        /// Returns null if package not yet loaded (acceptable degradation —
+        /// user can't interact with AICA before the package loads anyway).
+        /// </summary>
+        internal static InitializationManager CurrentInitManager =>
+            _instance?._solutionEventListener?.InitManager;
+
         /// <summary>
         /// 解决方案事件监听器
         /// 用于自动创建 .aica-rules 目录
@@ -37,6 +48,7 @@ namespace AICA
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            _instance = this;
 
             await this.RegisterCommandsAsync();
 

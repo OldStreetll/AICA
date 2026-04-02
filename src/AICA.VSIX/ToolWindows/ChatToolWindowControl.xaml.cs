@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using AICA.Options;
+using AICA.Core.Initialization;
 using AICA.Core.LLM;
 using AICA.Core.Agent;
 using AICA.Core.Tools;
@@ -53,6 +54,7 @@ namespace AICA.ToolWindows
         private CodePart _pendingCodePart; // v2.6: pending code from right-click command
         private readonly string _highlightJs; // Highlight.js 10.7.3 minified source
         private readonly string _highlightCss; // VS2015 dark theme for Highlight.js
+        private InitializationManager _initManager; // v2.11: initialization gate
 
         public ChatToolWindowControl()
         {
@@ -99,6 +101,15 @@ namespace AICA.ToolWindows
                 _solutionEvents.Opened -= OnSolutionOpened;
                 _solutionEvents.AfterClosing -= OnSolutionClosed;
             }
+
+            // v2.11: Unsubscribe from init events
+            var initManager = AICAPackage.CurrentInitManager;
+            if (initManager != null)
+            {
+                initManager.InitStarted -= OnInitStarted;
+                initManager.InitCompleted -= OnInitManagerCompleted;
+            }
+            InitOverlay.Unbind();
         }
 
         private void OnSolutionOpened()
@@ -134,6 +145,9 @@ namespace AICA.ToolWindows
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
+                // v2.11: Hide progress overlay if init was running
+                TransitionToChat();
+
                 // Save current conversation before closing
                 await SaveConversationAsync();
 
@@ -156,6 +170,15 @@ namespace AICA.ToolWindows
 
         private void ChatToolWindowControl_Loaded(object sender, RoutedEventArgs e)
         {
+            // v2.11: Subscribe to InitStarted — eliminates DTE vs IVsSolutionEvents timing race
+            var initManager = AICAPackage.CurrentInitManager;
+            if (initManager != null)
+            {
+                initManager.InitStarted += OnInitStarted;
+                if (initManager.IsRunning)
+                    BindToInitManager();
+            }
+
             // Run path mismatch check on load (independent of agent initialization)
             try
             {
@@ -220,6 +243,68 @@ namespace AICA.ToolWindows
                 System.Diagnostics.Debug.WriteLine($"[AICA] Path mismatch check on load failed: {ex.Message}");
             }
         }
+
+        #region Initialization Gate (v2.11)
+
+        private void OnInitStarted(object sender, EventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(BindToInitManager));
+        }
+
+        private void BindToInitManager()
+        {
+            var initManager = AICAPackage.CurrentInitManager;
+            if (initManager == null) return;
+
+            _initManager = initManager;
+
+            if (initManager.IsRunning)
+            {
+                InitOverlay.Visibility = Visibility.Visible;
+                ChatBrowser.Visibility = Visibility.Collapsed;
+                InputTextBox.IsEnabled = false;
+                SendButton.IsEnabled = false;
+
+                InitOverlay.Bind(initManager);
+                initManager.InitCompleted += OnInitManagerCompleted;
+            }
+        }
+
+        private void OnInitManagerCompleted(object sender, InitCompletedEventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                // Short delay so user can see the final state
+                var timer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(1500)
+                };
+                timer.Tick += (s, args) =>
+                {
+                    ((System.Windows.Threading.DispatcherTimer)s).Stop();
+                    TransitionToChat();
+                };
+                timer.Start();
+            }));
+        }
+
+        private void TransitionToChat()
+        {
+            InitOverlay.Unbind();
+            InitOverlay.Visibility = Visibility.Collapsed;
+            ChatBrowser.Visibility = Visibility.Visible;
+            InputTextBox.IsEnabled = true;
+            SendButton.IsEnabled = true;
+            SendButton.Content = "Send";
+            InputTextBox.Focus();
+
+            if (_initManager != null)
+            {
+                _initManager.InitCompleted -= OnInitManagerCompleted;
+            }
+        }
+
+        #endregion
 
         private void ChatBrowser_LoadCompleted(object sender, System.Windows.Navigation.NavigationEventArgs e)
         {
@@ -1041,6 +1126,13 @@ namespace AICA.ToolWindows
         {
             var userMessage = InputTextBox.Text.Trim();
             if (string.IsNullOrWhiteSpace(userMessage)) return;
+
+            // v2.11: Block sending during initialization
+            if (_initManager?.IsRunning == true)
+            {
+                AppendMessage("assistant", "\u23F3 正在初始化中，请等待初始化完成后再发送消息...");
+                return;
+            }
 
             if (_isSending) return;
 

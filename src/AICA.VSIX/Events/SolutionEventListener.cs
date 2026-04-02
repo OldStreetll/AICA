@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell.Interop;
 using AICA.Core.Agent;
+using AICA.Core.Initialization;
 using AICA.Core.Knowledge;
 using AICA.Core.Rules;
 
@@ -15,7 +16,14 @@ namespace AICA.VSIX.Events
     public class SolutionEventListener : IVsSolutionEvents, IDisposable
     {
         private readonly RulesDirectoryInitializer _initializer;
+        private readonly InitializationManager _initManager = new InitializationManager();
         private bool _disposed;
+
+        /// <summary>
+        /// Initialization manager for tracking startup progress.
+        /// Exposed for AICAPackage → ChatToolWindowControl binding.
+        /// </summary>
+        public InitializationManager InitManager => _initManager;
 
         /// <summary>
         /// The solution directory path, set on solution open, cleared on close.
@@ -57,19 +65,18 @@ namespace AICA.VSIX.Events
 
         /// <summary>
         /// 处理解决方案打开事件（异步）
+        /// v2.11: Coordinated through InitializationManager for progress tracking.
         /// </summary>
         public async Task OnAfterOpenSolutionAsync(string solutionPath)
         {
             System.Diagnostics.Debug.WriteLine($"[AICA] OnAfterOpenSolutionAsync called with path: {solutionPath ?? "NULL"}");
 
-            // 检查是否已释放
             if (_disposed)
             {
                 System.Diagnostics.Debug.WriteLine("[AICA] Listener is disposed, returning");
                 return;
             }
 
-            // 验证路径
             if (string.IsNullOrWhiteSpace(solutionPath))
             {
                 System.Diagnostics.Debug.WriteLine("[AICA] Solution path is null or empty, returning");
@@ -77,57 +84,113 @@ namespace AICA.VSIX.Events
             }
 
             SolutionPath = solutionPath;
+            _initManager.Start();
 
             try
             {
-                // Resolve git root for .aica-rules directory (colocate with .git)
-                // Also used as the base path for incremental indexing (must match ProjectIndexer.FindProjectRoot)
                 var projectRoot = FindGitRoot(solutionPath) ?? solutionPath;
                 ProjectRootPath = projectRoot;
                 System.Diagnostics.Debug.WriteLine($"[AICA] Initializing rules directory for: {projectRoot} (sln dir: {solutionPath})");
 
-                // 初始化规则目录（在项目根目录，与 .git 同级）
+                // Step 1: Rules directory initialization (synchronous, fast)
+                _initManager.UpdateStep(InitStepId.RulesInit, InitStepStatus.Running);
                 var result = await _initializer.InitializeAsync(projectRoot);
-
                 if (result.Success)
                 {
-                    // 记录成功信息
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] SUCCESS: Rules directory initialized at: {result.RulesPath}");
+                    System.Diagnostics.Debug.WriteLine($"[AICA] SUCCESS: Rules directory initialized at: {result.RulesPath}");
+                    _initManager.UpdateStep(InitStepId.RulesInit, InitStepStatus.Completed, result.RulesPath);
                 }
                 else
                 {
-                    // 记录错误信息（不中断插件）
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] FAILED: {result.Error}");
+                    System.Diagnostics.Debug.WriteLine($"[AICA] FAILED: {result.Error}");
+                    _initManager.UpdateStep(InitStepId.RulesInit, InitStepStatus.Failed, result.Error);
                 }
 
-                // v2.8: Try CodeModel first (accurate), fallback to regex
-                _ = IndexProjectAsync(solutionPath);
+                // Steps 2 + 3+4: Run symbol indexing and GitNexus in parallel
+                var indexingTask = RunSymbolIndexingAsync(solutionPath);
+                var gitNexusTask = RunGitNexusAsync(solutionPath);
 
-                // 并行触发 GitNexus 索引（fire-and-forget，不阻塞其他初始化）
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: triggering index for {solutionPath}");
-                        await GitNexusProcessManager.Instance.TriggerIndexAsync(solutionPath, CancellationToken.None);
-                        System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: index trigger completed");
-                    }
-                    catch (Exception gnEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] GitNexus: index trigger failed (non-fatal): {gnEx.Message}");
-                    }
-                });
+                // Wait for both parallel tasks (doesn't block UI — already on background thread)
+                await Task.WhenAll(indexingTask, gitNexusTask);
             }
             catch (Exception ex)
             {
-                // 捕获所有异常，防止破坏插件
                 System.Diagnostics.Debug.WriteLine(
                     $"[AICA] EXCEPTION: {ex.GetType().Name}: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(
                     $"[AICA] StackTrace: {ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// Step 2: Symbol indexing with progress reporting.
+        /// </summary>
+        private async Task RunSymbolIndexingAsync(string solutionPath)
+        {
+            _initManager.UpdateStep(InitStepId.SymbolIndexing, InitStepStatus.Running);
+            try
+            {
+                await Task.Run(async () =>
+                {
+                    var indexer = new ProjectIndexer();
+                    var index = await indexer.IndexDirectoryAsync(solutionPath);
+                    ProjectKnowledgeStore.Instance.SetIndex(index);
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Project indexed: {index.FileCount} files, " +
+                        $"{index.Symbols.Count} symbols in {index.IndexDuration.TotalSeconds:F1}s");
+                    _initManager.UpdateStep(
+                        InitStepId.SymbolIndexing,
+                        InitStepStatus.Completed,
+                        $"{index.FileCount} files, {index.Symbols.Count} symbols ({index.IndexDuration.TotalSeconds:F1}s)");
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                _initManager.UpdateStep(InitStepId.SymbolIndexing, InitStepStatus.Skipped, "Cancelled");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Indexing failed: {ex.Message}");
+                _initManager.UpdateStep(InitStepId.SymbolIndexing, InitStepStatus.Failed, ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Steps 3+4: GitNexus npm install + analyze with progress reporting.
+        /// </summary>
+        private async Task RunGitNexusAsync(string solutionPath)
+        {
+            _initManager.UpdateStep(InitStepId.GitNexusInstall, InitStepStatus.Running);
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: triggering index for {solutionPath}");
+                await Task.Run(async () =>
+                {
+                    await GitNexusProcessManager.Instance.TriggerIndexWithProgressAsync(
+                        solutionPath, _initManager, _initManager.Token);
+                });
+                System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: index trigger completed");
+            }
+            catch (OperationCanceledException)
+            {
+                _initManager.UpdateStep(InitStepId.GitNexusInstall, InitStepStatus.Skipped, "Cancelled");
+                _initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Skipped, "Cancelled");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: index trigger failed (non-fatal): {ex.Message}");
+                // Determine which step failed
+                var steps = _initManager.GetSteps();
+                var installStep = System.Linq.Enumerable.FirstOrDefault(steps, s => s.Id == InitStepId.GitNexusInstall);
+                if (installStep?.Status == InitStepStatus.Running)
+                {
+                    _initManager.UpdateStep(InitStepId.GitNexusInstall, InitStepStatus.Failed, ex.Message);
+                    _initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Skipped, "Install failed");
+                }
+                else
+                {
+                    _initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Failed, ex.Message);
+                }
             }
         }
 
@@ -164,35 +227,11 @@ namespace AICA.VSIX.Events
             return null;
         }
 
-        /// <summary>
-        /// v2.8: Regex indexing on background thread.
-        /// CodeModel is reserved for on-demand single-file parsing only (not bulk indexing)
-        /// because DTE API requires UI thread and blocks VS on large projects.
-        /// </summary>
-        private async Task IndexProjectAsync(string solutionPath)
-        {
-            await Task.Run(async () =>
-            {
-                try
-                {
-                    var indexer = new ProjectIndexer();
-                    var index = await indexer.IndexDirectoryAsync(solutionPath);
-                    ProjectKnowledgeStore.Instance.SetIndex(index);
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] Project indexed: {index.FileCount} files, " +
-                        $"{index.Symbols.Count} symbols in {index.IndexDuration.TotalSeconds:F1}s");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] Indexing failed: {ex.Message}");
-                }
-            });
-        }
-
         #region IVsSolutionEvents 实现
 
         public int OnAfterCloseSolution(object pUnkReserved)
         {
+            _initManager.Cancel();
             SolutionPath = null;
             ProjectRootPath = null;
             ProjectKnowledgeStore.Instance.Clear();

@@ -1,8 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AICA.Core.Initialization;
 using AICA.Core.LLM;
 
 namespace AICA.Core.Agent
@@ -80,7 +82,7 @@ namespace AICA.Core.Agent
                                 UseShellExecute = false,
                                 RedirectStandardOutput = false,
                                 RedirectStandardError = false,
-                                CreateNoWindow = true
+                                CreateNoWindow = false  // Visible console: let user see npm install progress
                             };
                             using (var npmProc = Process.Start(npmPsi))
                             {
@@ -305,6 +307,109 @@ namespace AICA.Core.Agent
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus analyze error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// TriggerIndexAsync with progress reporting to InitializationManager.
+        /// Splits npm install and analyze into separate reportable steps.
+        /// </summary>
+        /// <param name="initManager">
+        /// Progress coordinator (AICA.Core.Initialization). Intra-project coupling
+        /// is acceptable — this method is only called from SolutionEventListener.
+        /// </param>
+        public async Task TriggerIndexWithProgressAsync(
+            string solutionDirectory,
+            InitializationManager initManager,
+            CancellationToken ct)
+        {
+            if (string.IsNullOrEmpty(solutionDirectory)) return;
+
+            var repoRoot = FindGitRoot(solutionDirectory);
+            if (repoRoot == null)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] GitNexus: no .git found above {solutionDirectory}, skipping index");
+                initManager.UpdateStep(InitStepId.GitNexusInstall, InitStepStatus.Skipped, "No .git directory");
+                initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Skipped, "No .git directory");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] GitNexus: resolved repo root {repoRoot} (from {solutionDirectory})");
+
+            try
+            {
+                // ResolveGitNexusPath may trigger npm install synchronously (visible console).
+                // The caller already set GitNexusInstall to Running.
+                var (cmd, _, analyzeArgs) = ResolveGitNexusPath();
+
+                // npm install finished (synchronous inside ResolveGitNexusPath)
+                initManager.UpdateStep(InitStepId.GitNexusInstall, InitStepStatus.Completed);
+
+                // Step 4: analyze
+                initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Running);
+
+                var repoName = Path.GetFileName(repoRoot);
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c title [AICA] GitNexus Indexing: {repoName} & echo. & echo   [AICA] 正在索引代码库，首次索引可能需要几分钟... & echo   Repository: {repoRoot} & echo. & {cmd} {analyzeArgs} \"{repoRoot}\" & echo. & echo   [AICA] 索引完成! & timeout /t 3 /nobreak >nul",
+                    WorkingDirectory = repoRoot,
+                    UseShellExecute = false,
+                    CreateNoWindow = false
+                };
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] GitNexus: starting analyze in visible console for {repoRoot}");
+
+                using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
+                {
+                    var exitTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    process.Exited += (s, e) =>
+                    {
+                        try { exitTcs.TrySetResult(process.ExitCode); }
+                        catch { exitTcs.TrySetResult(-1); }
+                    };
+
+                    process.Start();
+
+                    using (ct.Register(() =>
+                    {
+                        exitTcs.TrySetCanceled();
+                        try { if (!process.HasExited) process.Kill(); } catch { }
+                    }))
+                    {
+                        var exitCode = await exitTcs.Task.ConfigureAwait(false);
+                        initManager.UpdateStep(
+                            InitStepId.GitNexusAnalyze,
+                            exitCode == 0 ? InitStepStatus.Completed : InitStepStatus.Failed,
+                            exitCode == 0 ? "Indexing complete" : $"Exit code: {exitCode}");
+
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] GitNexus analyze completed: exit={exitCode}, repo={repoRoot}");
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Skipped, "Cancelled");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus error: {ex.Message}");
+                var steps = initManager.GetSteps();
+                var installStep = steps.FirstOrDefault(s => s.Id == InitStepId.GitNexusInstall);
+                if (installStep?.Status == InitStepStatus.Running)
+                {
+                    initManager.UpdateStep(InitStepId.GitNexusInstall, InitStepStatus.Failed, ex.Message);
+                    initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Skipped, "Install failed");
+                }
+                else
+                {
+                    initManager.UpdateStep(InitStepId.GitNexusAnalyze, InitStepStatus.Failed, ex.Message);
+                }
             }
         }
 

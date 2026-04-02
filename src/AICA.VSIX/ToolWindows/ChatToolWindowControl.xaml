@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+             xmlns:local="clr-namespace:AICA.ToolWindows"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="400"
              Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
@@ -63,6 +64,10 @@
 
             <!-- Chat Content -->
             <WebBrowser x:Name="ChatBrowser" Grid.Row="2" />
+
+            <!-- Initialization Progress Overlay (shown during startup, hides chat) -->
+            <local:InitProgressOverlay x:Name="InitOverlay" Grid.Row="2"
+                                        Visibility="Collapsed" />
 
             <!-- Input Area -->
             <Border Grid.Row="3" BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"

@@ -72,6 +72,9 @@
     <Compile Include="ToolWindows\ChatToolWindowControl.xaml.cs">
       <DependentUpon>ChatToolWindowControl.xaml</DependentUpon>
     </Compile>
+    <Compile Include="ToolWindows\InitProgressOverlay.xaml.cs">
+      <DependentUpon>InitProgressOverlay.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="source.extension.cs">
       <AutoGen>True</AutoGen>
@@ -194,6 +197,10 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="ToolWindows\ChatToolWindowControl.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="ToolWindows\InitProgressOverlay.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
