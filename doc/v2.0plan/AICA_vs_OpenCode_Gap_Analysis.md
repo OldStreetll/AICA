@@ -1,7 +1,7 @@
 # AICA vs OpenCode 对比分析报告
 
-> 日期: 2026-03-30 | 更新: 2026-04-01（v2.5 全部 4 项优化实施完成 + E2E 验证通过）
-> 分析基线: AICA v2.0（commit `686c9de`）→ v2.1（`58ab099`）→ v2.2（`de521e7`）→ v2.3+v2.4（`7524761`）→ **v2.5 优化完成**
+> 日期: 2026-03-30 | 更新: 2026-04-02（v2.8.2 增量索引完成 + E2E 验证通过）
+> 分析基线: AICA v2.0（commit `686c9de`）→ … → v2.8.0（`b1123a2`）→ **v2.8.2 增量索引完成**
 > 分析方法: Agent 并行探索两个项目源码，逐维度深度对比
 > 用途: 识别 AICA 的不足与改进方向，跟踪差距填补进展
 >
@@ -242,7 +242,12 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 
 **已排除方案**: VS2022 CodeModel (DTE FileCodeModel API) — E2E 证明不可行，DTE API 必须 UI 线程执行，4705 文件直接卡死 VS。
 
-**下一步**: Tree-sitter 增量索引（DocumentSaved 事件 → 单文件重解析 → 局部更新索引，<100ms）
+**v2.8.2 增量索引（2026-04-02 完成）**:
+- DTE.Events.DocumentEvents.DocumentSaved 事件订阅
+- 保存时后台线程 tree-sitter 单文件重解析 → ProjectKnowledgeStore 原子替换
+- ProjectRootPath（git root）确保相对路径与全量索引一致
+- UpdateFileSymbols: lock 保护的 read-modify-write，防止并发丢失更新
+- E2E 验证通过：保存 .h 文件后 DebugView 确认增量索引触发
 
 ### v2.3 LSP 语义验证 POC 实现
 
@@ -380,7 +385,7 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 | ~~Tree-sitter 代码解析~~ | **✅ v2.8 已完成** — TreeSitter.DotNet + ISymbolParser + regex fallback |
 | Diff 可视化增强 | 提升代码审查体验 |
 | ~~消息 Part 化~~ | **✅ v2.6 已完成** — ImagePart + CodePart(四维坐标) + 附件标签 UX |
-| Tree-sitter 增量索引 | **下一任务** — DocumentSaved 事件触发单文件重解析，<100ms |
+| ~~Tree-sitter 增量索引~~ | **✅ v2.8.2 已完成** — DTE DocumentSaved 事件 → 单文件重解析 → 原子更新索引 |
 
 ---
 
@@ -1019,3 +1024,4 @@ EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "ind
 | v2.5.2 | `4a2aa5f` | C++ Rules 审查 (Q/HNC 43 补充) | ~150 |
 | **v2.6.0** | **`bdca148`** | **消息 Part 化 (ImagePart + CodePart 四维坐标)** | **+1543** |
 | **v2.8.0** | **`b1123a2`** | **Tree-sitter 代码解析 + ISymbolParser + Regex 改进** | **+693/-54** |
+| **v2.8.2** | **`f872176`** | **Tree-sitter 增量索引（保存时单文件重解析）** | **+~250** |
