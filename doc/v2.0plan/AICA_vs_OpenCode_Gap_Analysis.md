@@ -382,9 +382,9 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 | 会话持久化（SQLite）+ 会话标题 | ⏸ 搁置（SQLite）/ **下一批** 自动会话标题 |
 | 快照回滚 | 📋 待办 — 会话状态快照+回滚机制 |
 | 自动会话标题 | ⏸ 搁置 — LLM 生成标题方案尝试后搁置，现有截断实现保留 |
-| 历史检索增强 | **下一批** — 现有搜索框基础上增强关键词过滤 |
-| .gitignore 支持（小项目） | **下一批** — 统一走 ripgrep 或解析 .gitignore |
-| 模糊匹配增强（3级→更多） | **下一批** — 增加空白压缩/Unicode规范化等级别 |
+| ~~历史检索增强~~ | **✅ v2.10 已完成** — 标题即时过滤 + 300ms 防抖内容搜索 |
+| ~~.gitignore 支持（小项目）~~ | **✅ v2.10 已完成** — 统一走 ripgrep，移除文件数阈值 |
+| ~~模糊匹配增强（3级→更多）~~ | **✅ v2.10 已完成** — Level 4 Unicode 规范化 + Level 5 注释剥离 |
 | 多模型适配层 | ⏸ 搁置 — 工程量大，非紧急 |
 | Git 集成（status/diff/commit 工具） | ⏸ 搁置 |
 | ~~Tree-sitter 代码解析~~ | **✅ v2.8 已完成** — TreeSitter.DotNet + ISymbolParser + regex fallback |
@@ -1035,3 +1035,4 @@ EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "ind
 | **v2.8.0** | **`b1123a2`** | **Tree-sitter 代码解析 + ISymbolParser + Regex 改进** | **+693/-54** |
 | **v2.8.2** | **`f872176`** | **Tree-sitter 增量索引（保存时单文件重解析）** | **+~250** |
 | **v2.9.0** | **`eb6c2b2`** | **UI 增强：代码语法高亮 (Highlight.js) + 附件 UX 改进** | **+~1440** |
+| **v2.10.0** | **`dc76f25`** | **搜索增强 + 模糊匹配增强：ripgrep 统一、历史内容搜索、Level 4-5** | **+~270** |
