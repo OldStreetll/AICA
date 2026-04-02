@@ -33,6 +33,7 @@ namespace AICA.ToolWindows
         private bool _isSending;
         private OpenAIClient _llmClient;
         private CancellationTokenSource _currentCts;
+        private CancellationTokenSource _searchCts; // Debounce token for history content search
         private bool _agentMode = true; // Default to Agent mode
         private AgentExecutor _agentExecutor;
         private ToolDispatcher _toolDispatcher;
@@ -2730,6 +2731,11 @@ namespace AICA.ToolWindows
         {
             var searchText = SearchTextBox.Text?.Trim() ?? string.Empty;
 
+            // Cancel any in-flight content search
+            _searchCts?.Cancel();
+            _searchCts = new CancellationTokenSource();
+            var cts = _searchCts;
+
             // Check for /allresume command
             if (searchText.Equals("/allresume", StringComparison.OrdinalIgnoreCase))
             {
@@ -2753,19 +2759,56 @@ namespace AICA.ToolWindows
                 await LoadConversationListAsync();
             }
 
-            // Normal search/filter
-            var searchLower = searchText.ToLowerInvariant();
-
-            if (string.IsNullOrWhiteSpace(searchLower))
+            // Empty keyword: show all conversations immediately
+            if (string.IsNullOrWhiteSpace(searchText))
             {
                 ConversationListBox.ItemsSource = _allConversations;
+                return;
             }
-            else
+
+            // Phase 1: Instant title filter (no disk I/O)
+            var titleFiltered = _allConversations
+                .Where(c => c.Title != null &&
+                            c.Title.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0)
+                .ToList();
+            ConversationListBox.ItemsSource = titleFiltered;
+
+            // Phase 2: Debounced full-content search (300ms delay)
+            try
             {
-                var filtered = _allConversations
-                    .Where(c => c.Title.ToLowerInvariant().Contains(searchLower))
+                await Task.Delay(300, cts.Token);
+                if (cts.IsCancellationRequested) return;
+
+                var projectPath = GetCurrentSolutionPath();
+                var records = await _conversationStorage.SearchConversationsAsync(searchText, projectPath);
+
+                if (cts.IsCancellationRequested) return;
+
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (cts.IsCancellationRequested) return;
+
+                var resultVms = records
+                    .Select(r =>
+                        _allConversations.FirstOrDefault(c => c.Id == r.Id) ??
+                        new ConversationViewModel
+                        {
+                            Id = r.Id,
+                            Title = r.Title ?? "未命名会话",
+                            UpdatedAt = r.UpdatedAt,
+                            TimeAgo = GetTimeAgo(r.UpdatedAt)
+                        })
                     .ToList();
-                ConversationListBox.ItemsSource = filtered;
+
+                ConversationListBox.ItemsSource = resultVms;
+                System.Diagnostics.Debug.WriteLine($"[AICA] Search '{searchText}': {resultVms.Count} result(s)");
+            }
+            catch (OperationCanceledException)
+            {
+                // Search was superseded by a newer keystroke — expected, not an error
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Search failed: {ex.Message}");
             }
         }
 

@@ -285,6 +285,70 @@ namespace AICA.Core.Storage
             return true;
         }
 
+        /// <summary>
+        /// Search conversations by keyword — Phase 1 matches titles, Phase 2 loads and searches message content.
+        /// Results are ordered: title matches first, then content matches.
+        /// </summary>
+        public async Task<List<ConversationRecord>> SearchConversationsAsync(
+            string keyword, string projectPath = null, int limit = 50)
+        {
+            // Load all summaries (fast — from index cache, no per-file disk reads)
+            List<ConversationSummary> allSummaries;
+            if (!string.IsNullOrEmpty(projectPath))
+                allSummaries = await ListConversationsForProjectAsync(projectPath, limit * 2);
+            else
+                allSummaries = await ListConversationsAsync(limit * 2);
+
+            if (string.IsNullOrWhiteSpace(keyword))
+            {
+                // Return full records for the top results
+                var topRecords = new List<ConversationRecord>();
+                foreach (var summary in allSummaries.Take(limit))
+                {
+                    var record = await LoadConversationAsync(summary.Id);
+                    if (record != null)
+                        topRecords.Add(record);
+                }
+                return topRecords;
+            }
+
+            // Phase 1: Fast title search (no extra disk reads)
+            var titleMatches = allSummaries
+                .Where(s => s.Title != null &&
+                            s.Title.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                .ToList();
+
+            var titleMatchIds = new HashSet<string>(titleMatches.Select(s => s.Id));
+
+            // Phase 2: Content search — load full records for non-title-matched conversations
+            var contentMatches = new List<ConversationSummary>();
+            foreach (var summary in allSummaries)
+            {
+                if (titleMatchIds.Contains(summary.Id))
+                    continue;
+
+                var record = await LoadConversationAsync(summary.Id);
+                if (record?.Messages != null &&
+                    record.Messages.Any(m =>
+                        m.Content != null &&
+                        m.Content.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    contentMatches.Add(summary);
+                }
+            }
+
+            // Build result: title matches first, then content matches, capped at limit
+            var combined = titleMatches.Concat(contentMatches).Take(limit).ToList();
+            var results = new List<ConversationRecord>(combined.Count);
+            foreach (var summary in combined)
+            {
+                var record = await LoadConversationAsync(summary.Id);
+                if (record != null)
+                    results.Add(record);
+            }
+            return results;
+        }
+
         private string GetFilePath(string id)
         {
             return Path.Combine(_storageDir, $"{id}.json");
