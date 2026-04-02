@@ -1442,21 +1442,30 @@ namespace AICA.ToolWindows
                 if (string.IsNullOrEmpty(title) || title.Length > 50) return;
 
                 // Update sidebar on UI thread
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: switching to UI thread...");
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: on UI thread, finding VM for {conversationId}");
                 var vm = _allConversations.FirstOrDefault(c => c.Id == conversationId);
                 if (vm != null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: updating VM title from '{vm.Title}' to '{title}'");
                     vm.Title = title;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: VM not found for {conversationId}");
                 }
 
                 // Persist
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: persisting...");
                 await _conversationStorage.UpdateTitleAsync(conversationId, title);
 
                 System.Diagnostics.Debug.WriteLine($"[AICA] Auto title: {title}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation failed: {ex.GetType().Name}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation stack: {ex.StackTrace}");
             }
         }
 
