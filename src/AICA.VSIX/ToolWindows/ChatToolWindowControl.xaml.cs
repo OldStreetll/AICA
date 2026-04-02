@@ -1423,8 +1423,12 @@ namespace AICA.ToolWindows
                 }
                 System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: starting for '{userText}'");
 
-                var prompt = $"Generate a concise title (5-10 Chinese characters) for a conversation that starts with: \"{userText}\". Return ONLY the title, no quotes, no explanation.";
-                var messages = new List<ChatMessage> { ChatMessage.User(prompt) };
+                var truncatedText = userText.Length > 100 ? userText.Substring(0, 100) : userText;
+                var messages = new List<ChatMessage>
+                {
+                    ChatMessage.System("你是标题生成器。用户给你一句话，你只回复一个简短中文标题（5-10个字），不要解释。"),
+                    ChatMessage.User(truncatedText)
+                };
 
                 var titleBuilder = new System.Text.StringBuilder();
                 await foreach (var chunk in _llmClient.StreamChatAsync(messages))
