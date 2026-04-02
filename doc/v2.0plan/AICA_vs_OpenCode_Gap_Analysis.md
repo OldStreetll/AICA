@@ -226,18 +226,23 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 | 维度 | AICA | OpenCode |
 |------|------|----------|
 | LSP 集成 | **v2.3: VS2022 Error List 轮询 + validate_file 工具** | 完整 LSP server（66KB），跳转/补全/诊断 |
-| 代码解析 | 正则 SymbolParser | Tree-sitter 语法树解析 |
-| 代码智能 | 仅文本匹配 | 语义级理解 |
-| 符号提取 | 类/结构体/枚举/函数/命名空间/typedef | 完整语法树 |
-| C++ 复杂语法 | 模板/宏/嵌套命名空间处理不好 | Tree-sitter 完整支持 |
+| 代码解析 | **✅ v2.8: TreeSitter.DotNet AST 解析 + RegexSymbolParser fallback** | Tree-sitter 语法树解析 |
+| 代码智能 | **✅ v2.8: AST 级符号提取（含函数签名、成员变量、访问修饰符）** | 语义级理解 |
+| 符号提取 | **✅ v2.8: 类/结构体/枚举/函数(签名)/成员变量/命名空间/typedef/宏 + Qt .ui 控件** | 完整语法树 |
+| C++ 复杂语法 | **✅ v2.8: Tree-sitter 完整支持（模板/嵌套命名空间/条件编译）** | Tree-sitter 完整支持 |
 
-**AICA SymbolParser 已知缺陷**:
-- `template<class T>` 模板参数解析不完整
-- `#define` 宏展开无法跟踪
-- `namespace a::b::c` 嵌套命名空间匹配失败
-- 条件编译 `#ifdef` 内的符号可能遗漏
+**v2.8 代码解析增强（2026-04-01 完成）**:
+- TreeSitter.DotNet 1.3.0 NuGet 包，C/C++ AST 解析（后台线程，不阻塞 UI）
+- ISymbolParser 接口抽象，tree-sitter 优先 → regex fallback
+- kernel32 LoadLibrary 预加载 native DLL + 熔断机制
+- SymbolRecord 增强: StartLine/EndLine/Signature/AccessModifier
+- E2E: 4705 files, **101335 symbols**（比纯 regex 68230 提升 48%），21s
+- Qt .ui 文件解析（widget class + objectName）
+- 索引范围: .h/.hpp/.hxx/.cpp/.cxx/.cc/.c/.cppm/.ui（移除 .cs）
 
-**改进方向**: 可借助 VS2022 内置的 LSP 能力（Roslyn for C#, vcpkg/clangd for C++），无需自建 LSP server。
+**已排除方案**: VS2022 CodeModel (DTE FileCodeModel API) — E2E 证明不可行，DTE API 必须 UI 线程执行，4705 文件直接卡死 VS。
+
+**下一步**: Tree-sitter 增量索引（DocumentSaved 事件 → 单文件重解析 → 局部更新索引，<100ms）
 
 ### v2.3 LSP 语义验证 POC 实现
 
@@ -369,12 +374,13 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 | 改进项 | 理由 |
 |--------|------|
 | ~~apply_patch（多文件原子操作）~~ | **已完成** — 合并到 edit 统一增强（第十四章） |
-| 会话持久化（SQLite）+ 会话标题 | 用户体验质变，IConversationStorage 接口已预留 |
+| 会话持久化（SQLite）+ 会话标题 | ⏸ 搁置 — JSON 方案当前够用 |
 | 多模型适配层 | 解绑 MiniMax，支持 Claude/GPT（模式 B/C 在强模型上可用） |
 | Git 集成（status/diff/commit 工具） | 开发体验闭环 |
-| Tree-sitter 代码解析 | 替代正则 SymbolParser |
+| ~~Tree-sitter 代码解析~~ | **✅ v2.8 已完成** — TreeSitter.DotNet + ISymbolParser + regex fallback |
 | Diff 可视化增强 | 提升代码审查体验 |
-| 消息 Part 化 | ChatMessage.Content → List\<ContentPart\>，精细化 compaction（延期 v3.0） |
+| ~~消息 Part 化~~ | **✅ v2.6 已完成** — ImagePart + CodePart(四维坐标) + 附件标签 UX |
+| Tree-sitter 增量索引 | **下一任务** — DocumentSaved 事件触发单文件重解析，<100ms |
 
 ---
 
@@ -1008,4 +1014,8 @@ EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "ind
 | v2.1 | `58ab099` | 工具链增强 + 工具集优化 | +2887/-768 |
 | v2.2 | `de521e7` | 上下文管理重建 + 基础设施 | +789/-507 |
 | **v2.3+v2.4** | **`7524761`** | **edit 增强 + LSP 验证 + 权限增强 + 错误分类 + 稳定性修复** | **+2430/-23** |
-| **v2.5** | **pending** | **工具过滤 + 裁剪标记 + Token 计量 + Prompt 缓存** | **+670/-236** |
+| **v2.5** | **`fab9edb`** | **工具过滤 + 裁剪标记 + Token 计量 + Prompt 缓存** | **+670/-236** |
+| v2.5.1 | `5ca0109` | 修复 7 个 pre-existing 测试 (510/510) | ~200 |
+| v2.5.2 | `4a2aa5f` | C++ Rules 审查 (Q/HNC 43 补充) | ~150 |
+| **v2.6.0** | **`bdca148`** | **消息 Part 化 (ImagePart + CodePart 四维坐标)** | **+1543** |
+| **v2.8.0** | **`b1123a2`** | **Tree-sitter 代码解析 + ISymbolParser + Regex 改进** | **+693/-54** |
