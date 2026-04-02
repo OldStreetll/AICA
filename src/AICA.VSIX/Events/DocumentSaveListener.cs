@@ -1,168 +1,123 @@
 using System;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
 using AICA.Core.Knowledge;
 
 namespace AICA.VSIX.Events
 {
     /// <summary>
-    /// Listens for document save events via IVsRunningDocTableEvents3.
+    /// Listens for document save events via DTE.Events.DocumentEvents.
     /// On save of a supported C/C++ file, triggers incremental re-indexing
     /// of that single file using tree-sitter, then updates the in-memory symbol store.
     /// </summary>
-    public sealed class DocumentSaveListener : IVsRunningDocTableEvents3, IDisposable
+    public sealed class DocumentSaveListener : IDisposable
     {
-        private readonly IVsRunningDocumentTable _rdt;
+        private EnvDTE.DocumentEvents _documentEvents;
         private readonly SolutionEventListener _solutionListener;
-        private uint _cookie;
         private bool _disposed;
 
         public DocumentSaveListener(
-            IVsRunningDocumentTable rdt,
+            EnvDTE.DTE dte,
             SolutionEventListener solutionListener)
         {
-            _rdt = rdt ?? throw new ArgumentNullException(nameof(rdt));
+            if (dte == null) throw new ArgumentNullException(nameof(dte));
             _solutionListener = solutionListener ?? throw new ArgumentNullException(nameof(solutionListener));
+
+            // Store a strong reference to prevent GC of the COM event sink
+            _documentEvents = dte.Events.DocumentEvents;
+            _documentEvents.DocumentSaved += OnDocumentSaved;
+
+            System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener: subscribed to DTE.DocumentEvents");
         }
 
-        /// <summary>
-        /// Start listening for document save events.
-        /// Must be called from the UI thread.
-        /// </summary>
-        public void Advise()
+        private void OnDocumentSaved(EnvDTE.Document document)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            _rdt.AdviseRunningDocTableEvents(this, out _cookie);
-            System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener: advised");
-        }
-
-        /// <summary>
-        /// Stop listening for document save events.
-        /// </summary>
-        public void Unadvise()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            if (_cookie != 0)
+            try
             {
-                _rdt.UnadviseRunningDocTableEvents(_cookie);
-                _cookie = 0;
-                System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener: unadvised");
+                var filePath = document?.FullName;
+                if (string.IsNullOrEmpty(filePath))
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] IncrIndex: skip — empty file path");
+                    return;
+                }
+
+                var projectRoot = _solutionListener.ProjectRootPath;
+                if (string.IsNullOrEmpty(projectRoot))
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] IncrIndex: skip — no project root");
+                    return;
+                }
+
+                if (!ProjectKnowledgeStore.Instance.HasIndex)
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] IncrIndex: skip — no index yet");
+                    return;
+                }
+
+                var ext = Path.GetExtension(filePath);
+                if (!ProjectIndexer.IsSupportedExtension(ext))
+                    return; // Non-C/C++ files are silently skipped (too noisy to log)
+
+                // Compute relative path using the same root as ProjectIndexer
+                var basePath = projectRoot.EndsWith("\\") || projectRoot.EndsWith("/")
+                    ? projectRoot
+                    : projectRoot + Path.DirectorySeparatorChar;
+
+                string relativePath;
+                if (filePath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+                    relativePath = filePath.Substring(basePath.Length).Replace('\\', '/');
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] IncrIndex: skip — file outside project root " +
+                        $"(file={filePath}, root={projectRoot})");
+                    return;
+                }
+
+                // Fire-and-forget: re-index on background thread
+                var absPath = filePath;
+                var relPath = relativePath;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var indexer = new ProjectIndexer();
+                        var symbols = await indexer.IndexFileAsync(absPath, relPath);
+                        ProjectKnowledgeStore.Instance.UpdateFileSymbols(relPath, symbols);
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Incremental index: {relPath} -> {symbols.Count} symbols");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Incremental index failed for {relPath}: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] DocumentSaveListener.OnDocumentSaved error: {ex.Message}");
             }
         }
-
-        // --- IVsRunningDocTableEvents3 ---
-
-        public int OnAfterSave(uint docCookie)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var solutionPath = _solutionListener.SolutionPath;
-            if (string.IsNullOrEmpty(solutionPath))
-                return VSConstants.S_OK;
-
-            if (!ProjectKnowledgeStore.Instance.HasIndex)
-                return VSConstants.S_OK;
-
-            // Get the file path from the document cookie
-            _rdt.GetDocumentInfo(
-                docCookie,
-                out uint flags,
-                out uint readLocks,
-                out uint editLocks,
-                out string filePath,
-                out IVsHierarchy hierarchy,
-                out uint itemId,
-                out IntPtr docData);
-
-            // Release the COM reference — we only need the file path
-            if (docData != IntPtr.Zero)
-                Marshal.Release(docData);
-
-            if (string.IsNullOrEmpty(filePath))
-                return VSConstants.S_OK;
-
-            var ext = Path.GetExtension(filePath);
-            if (!ProjectIndexer.IsSupportedExtension(ext))
-                return VSConstants.S_OK;
-
-            // Compute relative path (same logic as ProjectIndexer.GetRelativePath)
-            var basePath = solutionPath.EndsWith("\\") || solutionPath.EndsWith("/")
-                ? solutionPath
-                : solutionPath + Path.DirectorySeparatorChar;
-
-            string relativePath;
-            if (filePath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
-                relativePath = filePath.Substring(basePath.Length).Replace('\\', '/');
-            else
-                return VSConstants.S_OK; // File is outside solution — skip
-
-            // Fire-and-forget: re-index on background thread
-            var absPath = filePath;
-            var relPath = relativePath;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var indexer = new ProjectIndexer();
-                    var symbols = await indexer.IndexFileAsync(absPath, relPath);
-                    ProjectKnowledgeStore.Instance.UpdateFileSymbols(relPath, symbols);
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] Incremental index: {relPath} -> {symbols.Count} symbols");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[AICA] Incremental index failed for {relPath}: {ex.Message}");
-                }
-            });
-
-            return VSConstants.S_OK;
-        }
-
-        // --- Unused events (required by interface) ---
-
-        public int OnAfterFirstDocumentLock(uint docCookie, uint dwRDTLockType,
-            uint dwReadLocksRemaining, uint dwEditLocksRemaining)
-            => VSConstants.S_OK;
-
-        public int OnBeforeLastDocumentUnlock(uint docCookie, uint dwRDTLockType,
-            uint dwReadLocksRemaining, uint dwEditLocksRemaining)
-            => VSConstants.S_OK;
-
-        public int OnAfterAttributeChange(uint docCookie, uint grfAttribs)
-            => VSConstants.S_OK;
-
-        public int OnBeforeDocumentWindowShow(uint docCookie, int fFirstShow, IVsWindowFrame pFrame)
-            => VSConstants.S_OK;
-
-        public int OnAfterDocumentWindowHide(uint docCookie, IVsWindowFrame pFrame)
-            => VSConstants.S_OK;
-
-        public int OnAfterAttributeChangeEx(uint docCookie, uint grfAttribs,
-            IVsHierarchy pHierOld, uint itemidOld, string pszMkDocumentOld,
-            IVsHierarchy pHierNew, uint itemidNew, string pszMkDocumentNew)
-            => VSConstants.S_OK;
-
-        public int OnBeforeSave(uint docCookie)
-            => VSConstants.S_OK;
 
         public void Dispose()
         {
             if (!_disposed)
             {
                 _disposed = true;
-                try
+                if (_documentEvents != null)
                 {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    Unadvise();
-                }
-                catch
-                {
-                    // Best-effort cleanup during disposal
+                    try
+                    {
+                        _documentEvents.DocumentSaved -= OnDocumentSaved;
+                        System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener: unsubscribed");
+                    }
+                    catch
+                    {
+                        // Best-effort cleanup during disposal
+                    }
+                    _documentEvents = null;
                 }
             }
         }

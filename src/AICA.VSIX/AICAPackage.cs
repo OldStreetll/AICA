@@ -70,21 +70,18 @@ namespace AICA
                     solutionService.AdviseSolutionEvents(_solutionEventListener, out _solutionEventsCookie);
                     System.Diagnostics.Debug.WriteLine("[AICA] Event listener registered successfully");
 
-                    // Subscribe to document save events for incremental indexing
-                    var rdt = await GetServiceAsync(typeof(SVsRunningDocumentTable)) as IVsRunningDocumentTable;
-                    if (rdt != null)
-                    {
-                        _documentSaveListener = new DocumentSaveListener(rdt, _solutionEventListener);
-                        await JoinableTaskFactory.SwitchToMainThreadAsync();
-                        _documentSaveListener.Advise();
-                        System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener initialized");
-                    }
-
                     // 检查是否已有打开的解决方案
                     try
                     {
                         var dte = Microsoft.VisualStudio.Shell.ServiceProvider.GlobalProvider
                             .GetService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+
+                        // Subscribe to document save events for incremental indexing
+                        if (dte != null)
+                        {
+                            _documentSaveListener = new DocumentSaveListener(dte, _solutionEventListener);
+                            System.Diagnostics.Debug.WriteLine("[AICA] DocumentSaveListener initialized");
+                        }
 
                         System.Diagnostics.Debug.WriteLine($"[AICA] Checking for already open solution...");
                         System.Diagnostics.Debug.WriteLine($"[AICA] DTE: {(dte != null ? "OK" : "NULL")}");

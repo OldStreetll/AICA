@@ -19,14 +19,19 @@ namespace AICA.VSIX.Events
 
         /// <summary>
         /// The solution directory path, set on solution open, cleared on close.
-        /// Used by DocumentSaveListener to compute relative file paths.
+        /// </summary>
+        public string SolutionPath { get; private set; }
+
+        /// <summary>
+        /// The project root path (git root), used by DocumentSaveListener for relative paths.
+        /// Matches the root that ProjectIndexer.FindProjectRoot uses for indexing.
         /// Volatile for cross-thread visibility (UI thread writes, background reads).
         /// </summary>
-        private volatile string _solutionPath;
-        public string SolutionPath
+        private volatile string _projectRootPath;
+        public string ProjectRootPath
         {
-            get => _solutionPath;
-            private set => _solutionPath = value;
+            get => _projectRootPath;
+            private set => _projectRootPath = value;
         }
 
         public SolutionEventListener(RulesDirectoryInitializer initializer = null)
@@ -76,7 +81,9 @@ namespace AICA.VSIX.Events
             try
             {
                 // Resolve git root for .aica-rules directory (colocate with .git)
+                // Also used as the base path for incremental indexing (must match ProjectIndexer.FindProjectRoot)
                 var projectRoot = FindGitRoot(solutionPath) ?? solutionPath;
+                ProjectRootPath = projectRoot;
                 System.Diagnostics.Debug.WriteLine($"[AICA] Initializing rules directory for: {projectRoot} (sln dir: {solutionPath})");
 
                 // 初始化规则目录（在项目根目录，与 .git 同级）
@@ -187,6 +194,7 @@ namespace AICA.VSIX.Events
         public int OnAfterCloseSolution(object pUnkReserved)
         {
             SolutionPath = null;
+            ProjectRootPath = null;
             ProjectKnowledgeStore.Instance.Clear();
             System.Diagnostics.Debug.WriteLine("[AICA] Project knowledge index cleared (solution closed)");
 
