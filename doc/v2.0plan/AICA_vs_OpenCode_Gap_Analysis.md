@@ -380,12 +380,15 @@ AICA 在**单模型场景的实战健壮性**上很好（流恢复、MiniMax 特
 |--------|------|
 | ~~apply_patch（多文件原子操作）~~ | **已完成** — 合并到 edit 统一增强（第十四章） |
 | 会话持久化（SQLite）+ 会话标题 | ⏸ 搁置 — JSON 方案当前够用 |
-| 多模型适配层 | 解绑 MiniMax，支持 Claude/GPT（模式 B/C 在强模型上可用） |
-| Git 集成（status/diff/commit 工具） | 开发体验闭环 |
+| 多模型适配层 | ⏸ 搁置 — 工程量大，非紧急 |
+| Git 集成（status/diff/commit 工具） | ⏸ 搁置 |
 | ~~Tree-sitter 代码解析~~ | **✅ v2.8 已完成** — TreeSitter.DotNet + ISymbolParser + regex fallback |
-| Diff 可视化增强 | 提升代码审查体验 |
+| Diff 可视化增强 | 候选 — UI 增强方向 |
+| Markdown 渲染 | 候选 — 聊天输出代码高亮、标题、列表 |
 | ~~消息 Part 化~~ | **✅ v2.6 已完成** — ImagePart + CodePart(四维坐标) + 附件标签 UX |
 | ~~Tree-sitter 增量索引~~ | **✅ v2.8.2 已完成** — DTE DocumentSaved 事件 → 单文件重解析 → 原子更新索引 |
+| ImagePart E2E 验证 | ⏸ 搁置 — 等多模态端点升级 |
+| 更多语言 tree-sitter | ⏸ 搁置 — AICA 定位 C/C++，非紧急 |
 
 ---
 
