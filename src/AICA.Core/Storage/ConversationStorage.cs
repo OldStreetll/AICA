@@ -269,6 +269,22 @@ namespace AICA.Core.Storage
             return Task.FromResult(deleted);
         }
 
+        /// <summary>
+        /// Update only the title of an existing conversation record on disk.
+        /// Avoids a full round-trip rewrite of messages.
+        /// </summary>
+        public async Task<bool> UpdateTitleAsync(string id, string title)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+
+            var record = await LoadConversationAsync(id);
+            if (record == null) return false;
+
+            record.Title = title;
+            await SaveConversationAsync(record);
+            return true;
+        }
+
         private string GetFilePath(string id)
         {
             return Path.Combine(_storageDir, $"{id}.json");

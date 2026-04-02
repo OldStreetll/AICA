@@ -17,5 +17,6 @@ namespace AICA.Core.Storage
         Task<bool> DeleteConversationAsync(string id);
         Task<string> ExportAsMarkdownAsync(string id);
         Task<int> CleanupOldConversationsAsync(int keepCount = 100);
+        Task<bool> UpdateTitleAsync(string id, string title);
     }
 }

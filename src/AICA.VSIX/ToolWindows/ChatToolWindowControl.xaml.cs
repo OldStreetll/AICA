@@ -1060,22 +1060,23 @@ namespace AICA.ToolWindows
             // Check if this is the first message (for title update)
             bool isFirstMessage = _conversation.Count == 0;
 
+            // v2.6: Build display text (strip attach tags anywhere in text)
+            // Hoisted above try so it's accessible in catch blocks for title update
+            var displayText = userMessage
+                .Replace(ImageAttachTag, "").Replace(ImageAttachTag.TrimEnd(), "");
+            // Strip dynamic code attach tag
+            if (_currentCodeAttachTag != null)
+                displayText = displayText.Replace(_currentCodeAttachTag, "").Replace(_currentCodeAttachTag.TrimEnd(), "");
+            displayText = displayText.Trim();
+
+            if (string.IsNullOrEmpty(displayText) && imagePart != null)
+                displayText = "[Image]";
+            if (string.IsNullOrEmpty(displayText) && codePart != null)
+                displayText = "[Code attached]";
+
             try
             {
                 InputTextBox.Text = string.Empty;
-
-                // v2.6: Build display text (strip attach tags anywhere in text)
-                var displayText = userMessage
-                    .Replace(ImageAttachTag, "").Replace(ImageAttachTag.TrimEnd(), "");
-                // Strip dynamic code attach tag
-                if (_currentCodeAttachTag != null)
-                    displayText = displayText.Replace(_currentCodeAttachTag, "").Replace(_currentCodeAttachTag.TrimEnd(), "");
-                displayText = displayText.Trim();
-
-                if (string.IsNullOrEmpty(displayText) && imagePart != null)
-                    displayText = "[Image]";
-                if (string.IsNullOrEmpty(displayText) && codePart != null)
-                    displayText = "[Code attached]";
 
                 AppendMessage("user", displayText, imagePart != null ? "📷" : (codePart != null ? "📎" : null));
 
@@ -1124,7 +1125,7 @@ namespace AICA.ToolWindows
                 // Update conversation title if this is the first message
                 if (isFirstMessage)
                 {
-                    await UpdateConversationTitleAsync(userMessage);
+                    await UpdateConversationTitleAsync(displayText);
                 }
             }
             catch (OperationCanceledException)
@@ -1142,7 +1143,7 @@ namespace AICA.ToolWindows
                 // Update conversation title if this is the first message
                 if (isFirstMessage)
                 {
-                    await UpdateConversationTitleAsync(userMessage);
+                    await UpdateConversationTitleAsync(displayText);
                 }
             }
             catch (LLMException ex)
@@ -1385,38 +1386,66 @@ namespace AICA.ToolWindows
         }
 
         /// <summary>
-        /// Update conversation title based on first user message
+        /// Update conversation title based on first user message (2-phase: temp title + LLM refinement)
         /// </summary>
-        private async System.Threading.Tasks.Task UpdateConversationTitleAsync(string firstMessage)
+        private async System.Threading.Tasks.Task UpdateConversationTitleAsync(string displayText)
         {
-            if (string.IsNullOrEmpty(_currentConversationId))
-                return;
+            if (string.IsNullOrEmpty(_currentConversationId)) return;
 
+            // Phase 1: Immediate temp title from user text (truncated to 30 chars)
+            var tempTitle = displayText.Length > 30
+                ? displayText.Substring(0, 30) + "…"
+                : displayText;
+
+            // Update sidebar immediately
+            var vm = _allConversations.FirstOrDefault(c => c.Id == _currentConversationId);
+            if (vm != null)
+            {
+                vm.Title = tempTitle;
+            }
+
+            // Save temp title to storage
+            await _conversationStorage.UpdateTitleAsync(_currentConversationId, tempTitle);
+
+            // Phase 2: Fire-and-forget LLM title generation
+            _ = GenerateTitleWithLlmAsync(_currentConversationId, displayText);
+        }
+
+        private async System.Threading.Tasks.Task GenerateTitleWithLlmAsync(string conversationId, string userText)
+        {
             try
             {
-                // Truncate message to max 50 characters for title
-                var title = firstMessage.Length > 50 ? firstMessage.Substring(0, 50) + "..." : firstMessage;
+                if (_llmClient == null) return;
 
-                // Load conversation record
-                var record = await _conversationStorage.LoadConversationAsync(_currentConversationId);
-                if (record != null)
+                var prompt = $"Generate a concise title (5-10 Chinese characters) for a conversation that starts with: \"{userText}\". Return ONLY the title, no quotes, no explanation.";
+                var messages = new List<ChatMessage> { ChatMessage.User(prompt) };
+
+                var titleBuilder = new System.Text.StringBuilder();
+                await foreach (var chunk in _llmClient.StreamChatAsync(messages))
                 {
-                    record.Title = title;
-                    await _conversationStorage.SaveConversationAsync(record);
-
-                    // Update in UI list (INotifyPropertyChanged will handle UI update)
-                    var viewModel = _allConversations.FirstOrDefault(c => c.Id == _currentConversationId);
-                    if (viewModel != null)
-                    {
-                        viewModel.Title = title;
-                    }
-
-                    System.Diagnostics.Debug.WriteLine($"[AICA] Updated conversation title: {title}");
+                    if (chunk.Type == LLMChunkType.Text)
+                        titleBuilder.Append(chunk.Text);
                 }
+
+                var title = titleBuilder.ToString().Trim().Trim('"', '\'', '「', '」');
+                if (string.IsNullOrEmpty(title) || title.Length > 50) return;
+
+                // Update sidebar on UI thread
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                var vm = _allConversations.FirstOrDefault(c => c.Id == conversationId);
+                if (vm != null)
+                {
+                    vm.Title = title;
+                }
+
+                // Persist
+                await _conversationStorage.UpdateTitleAsync(conversationId, title);
+
+                System.Diagnostics.Debug.WriteLine($"[AICA] Auto title: {title}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AICA] Failed to update conversation title: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation failed: {ex.Message}");
             }
         }
 
