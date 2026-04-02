@@ -74,7 +74,10 @@ namespace AICA.Core.Tools
             {
                 foreach (var kvp in call.Arguments)
                 {
-                    mcpArgs[kvp.Key] = kvp.Value;
+                    // Normalize LLM parameter name hallucinations:
+                    // LLM sometimes sends "pattern" instead of "query" (confused with grep_search)
+                    var key = NormalizeParamName(kvp.Key);
+                    mcpArgs[key] = kvp.Value;
                 }
             }
 
@@ -118,6 +121,31 @@ namespace AICA.Core.Tools
         /// <summary>
         /// Resolve git repo name from working directory for auto-injection.
         /// </summary>
+        /// <summary>
+        /// Normalize LLM parameter name hallucinations for a given MCP tool.
+        /// LLM sometimes confuses parameter names between tools (e.g., sends "pattern"
+        /// from grep_search when calling gitnexus_query which expects "query").
+        /// Only remaps when the target MCP tool actually expects the normalized name.
+        /// </summary>
+        private string NormalizeParamName(string key)
+        {
+            // Only remap for tools whose primary parameter is "query"
+            // (query, context, impact, cypher all accept "query" or "name")
+            if (_mcpToolName == "query" || _mcpToolName == "context" ||
+                _mcpToolName == "impact" || _mcpToolName == "cypher")
+            {
+                switch (key?.ToLowerInvariant())
+                {
+                    case "pattern":
+                    case "search_term":
+                    case "search_query":
+                    case "search":
+                        return "query";
+                }
+            }
+            return key;
+        }
+
         private static string ResolveRepoName(string workingDirectory)
         {
             var dir = workingDirectory;
