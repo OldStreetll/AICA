@@ -1416,7 +1416,12 @@ namespace AICA.ToolWindows
         {
             try
             {
-                if (_llmClient == null) return;
+                if (_llmClient == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[AICA] Title generation: _llmClient is null");
+                    return;
+                }
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: starting for '{userText}'");
 
                 var prompt = $"Generate a concise title (5-10 Chinese characters) for a conversation that starts with: \"{userText}\". Return ONLY the title, no quotes, no explanation.";
                 var messages = new List<ChatMessage> { ChatMessage.User(prompt) };
@@ -1429,6 +1434,7 @@ namespace AICA.ToolWindows
                 }
 
                 var title = titleBuilder.ToString().Trim().Trim('"', '\'', '「', '」');
+                System.Diagnostics.Debug.WriteLine($"[AICA] Title generation: raw result='{title}' (len={title.Length})");
                 if (string.IsNullOrEmpty(title) || title.Length > 50) return;
 
                 // Update sidebar on UI thread
@@ -2779,7 +2785,7 @@ namespace AICA.ToolWindows
                 await Task.Delay(300, cts.Token);
                 if (cts.IsCancellationRequested) return;
 
-                var projectPath = GetCurrentSolutionPath();
+                var projectPath = GetCurrentProjectPath();
                 var records = await _conversationStorage.SearchConversationsAsync(searchText, projectPath);
 
                 if (cts.IsCancellationRequested) return;
