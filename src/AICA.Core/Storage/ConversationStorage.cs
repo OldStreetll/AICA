@@ -270,22 +270,6 @@ namespace AICA.Core.Storage
         }
 
         /// <summary>
-        /// Update only the title of an existing conversation record on disk.
-        /// Avoids a full round-trip rewrite of messages.
-        /// </summary>
-        public async Task<bool> UpdateTitleAsync(string id, string title)
-        {
-            if (string.IsNullOrEmpty(id)) return false;
-
-            var record = await LoadConversationAsync(id);
-            if (record == null) return false;
-
-            record.Title = title;
-            await SaveConversationAsync(record);
-            return true;
-        }
-
-        /// <summary>
         /// Search conversations by keyword — Phase 1 matches titles, Phase 2 loads and searches message content.
         /// Results are ordered: title matches first, then content matches.
         /// </summary>
