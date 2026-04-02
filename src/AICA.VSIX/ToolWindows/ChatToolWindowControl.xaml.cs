@@ -964,16 +964,32 @@ namespace AICA.ToolWindows
         /// <summary>
         /// v2.6: Attach a CodePart from a right-click command (called by SendCodeToAicaCommand).
         /// </summary>
-        private const string CodeAttachTag = "[📎 code] ";
+        private const string CodeAttachPrefix = "[📎 code ";
         private const string ImageAttachTag = "[📎 image] ";
+        private string _currentCodeAttachTag; // Dynamic tag with content preview
+
+        /// <summary>
+        /// Build a code attach tag with first 20 chars of content as preview.
+        /// </summary>
+        private static string BuildCodeAttachTag(string code)
+        {
+            var preview = code.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+            if (preview.Length > 20)
+                preview = preview.Substring(0, 20) + "…";
+            return $"{CodeAttachPrefix}{preview}] ";
+        }
 
         public void AttachCodePart(CodePart codePart)
         {
             _pendingCodePart = codePart;
+            _currentCodeAttachTag = BuildCodeAttachTag(codePart.Code);
 
             ThreadHelper.ThrowIfNotOnUIThread();
-            InputTextBox.Text = CodeAttachTag;
-            InputTextBox.CaretIndex = InputTextBox.Text.Length;
+            // Insert tag at cursor position instead of replacing input
+            var caretIndex = InputTextBox.CaretIndex;
+            var currentText = InputTextBox.Text ?? "";
+            InputTextBox.Text = currentText.Insert(caretIndex, _currentCodeAttachTag);
+            InputTextBox.CaretIndex = caretIndex + _currentCodeAttachTag.Length;
             InputTextBox.Focus();
         }
 
@@ -982,11 +998,12 @@ namespace AICA.ToolWindows
             var text = InputTextBox.Text;
 
             // If user broke the code tag (partial deletion), clear attachment and clean remnants
-            if (_pendingCodePart != null && !text.Contains(CodeAttachTag.TrimEnd()))
+            if (_pendingCodePart != null && _currentCodeAttachTag != null
+                && !text.Contains(_currentCodeAttachTag.TrimEnd()))
             {
                 _pendingCodePart = null;
-                // Clean any partial tag remnants
-                CleanPartialTag(text, CodeAttachTag.TrimEnd());
+                CleanPartialTag(text, CodeAttachPrefix);
+                _currentCodeAttachTag = null;
             }
             // If user broke the image tag, clear attachment and clean remnants
             if (_pendingImagePart != null && !text.Contains(ImageAttachTag.TrimEnd()))
@@ -1038,6 +1055,7 @@ namespace AICA.ToolWindows
             var codePart = _pendingCodePart;
             _pendingImagePart = null;
             _pendingCodePart = null;
+            _currentCodeAttachTag = null;
 
             // Check if this is the first message (for title update)
             bool isFirstMessage = _conversation.Count == 0;
@@ -1048,9 +1066,11 @@ namespace AICA.ToolWindows
 
                 // v2.6: Build display text (strip attach tags anywhere in text)
                 var displayText = userMessage
-                    .Replace(ImageAttachTag, "").Replace(ImageAttachTag.TrimEnd(), "")
-                    .Replace(CodeAttachTag, "").Replace(CodeAttachTag.TrimEnd(), "")
-                    .Trim();
+                    .Replace(ImageAttachTag, "").Replace(ImageAttachTag.TrimEnd(), "");
+                // Strip dynamic code attach tag
+                if (_currentCodeAttachTag != null)
+                    displayText = displayText.Replace(_currentCodeAttachTag, "").Replace(_currentCodeAttachTag.TrimEnd(), "");
+                displayText = displayText.Trim();
 
                 if (string.IsNullOrEmpty(displayText) && imagePart != null)
                     displayText = "[Image]";
