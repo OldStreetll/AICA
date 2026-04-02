@@ -50,6 +50,8 @@ namespace AICA.ToolWindows
         private string _lastProjectPath = null; // Track last project path to detect project switching
         private ImagePart _pendingImagePart; // v2.6: pending image from paste/drop
         private CodePart _pendingCodePart; // v2.6: pending code from right-click command
+        private readonly string _highlightJs; // Highlight.js 10.7.3 minified source
+        private readonly string _highlightCss; // VS2015 dark theme for Highlight.js
 
         public ChatToolWindowControl()
         {
@@ -60,6 +62,10 @@ namespace AICA.ToolWindows
                 .UseSoftlineBreakAsHardlineBreak()
                 .Build();
             _htmlRenderer = new HtmlRenderer(_markdownPipeline);
+
+            // Load Highlight.js resources from embedded resources
+            _highlightJs = LoadEmbeddedResource("AICA.Resources.highlight.min.js");
+            _highlightCss = LoadEmbeddedResource("AICA.Resources.highlight-vs2015.css");
 
             ChatBrowser.LoadCompleted += ChatBrowser_LoadCompleted;
             ChatBrowser.Navigating += ChatBrowser_Navigating;
@@ -763,6 +769,14 @@ namespace AICA.ToolWindows
                     }
 
                     log.innerHTML = innerHtml;
+
+                    // Re-trigger syntax highlighting after DOM update
+                    try
+                    {
+                        dynamic window = doc?.parentWindow;
+                        window?.execScript("if(typeof hljs!=='undefined'){var bs=document.querySelectorAll('pre code');for(var i=0;i<bs.length;i++){if(!bs[i].getAttribute('data-highlighted')){hljs.highlightElement(bs[i]);}}}");
+                    }
+                    catch { }
 
                     if (preserveScroll)
                     {
@@ -2741,6 +2755,31 @@ namespace AICA.ToolWindows
             VS.Commands.ExecuteAsync("Tools.Options").FireAndForget();
         }
 
+        private static string LoadEmbeddedResource(string resourceName)
+        {
+            try
+            {
+                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                using (var stream = assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream == null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Resource not found: {resourceName}");
+                        return "";
+                    }
+                    using (var reader = new StreamReader(stream))
+                    {
+                        return reader.ReadToEnd();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Failed to load resource {resourceName}: {ex.Message}");
+                return "";
+            }
+        }
+
         private string BuildPageHtml(string innerContent)
         {
             return $@"<!DOCTYPE html>
@@ -2825,9 +2864,10 @@ namespace AICA.ToolWindows
         pre {{ overflow-x: auto; }}
         pre code {{
             display: block; padding: 12px; border-radius: 6px;
-            background: #1e1e1e; color: #d4d4d4;
             font-family: Consolas, 'Courier New', monospace; font-size: 13px;
         }}
+        pre code.hljs {{ background: #1e1e1e; }}
+        pre code:not(.hljs) {{ background: #1e1e1e; color: #d4d4d4; }}
         code {{
             font-family: Consolas, 'Courier New', monospace;
             background: rgba(255,255,255,0.08); padding: 0 3px; border-radius: 3px;
@@ -3153,7 +3193,14 @@ namespace AICA.ToolWindows
         }}
         .plan-tab:hover {{ color: #ccc; }}
         .plan-tab.active {{ color: #e06c75; border-bottom-color: #e06c75; }}
+
+        /* Highlight.js VS2015 theme */
+        {_highlightCss}
     </style>
+    <script>
+        /* Highlight.js syntax highlighting */
+        {_highlightJs}
+    </script>
     <script>
         /* Suppress script error dialogs */
         window.onerror = function() {{ return true; }};
@@ -3260,6 +3307,7 @@ namespace AICA.ToolWindows
         <div id=""plan-content""></div>
     </div>
 </div>
+<script>if(typeof hljs!=='undefined')hljs.highlightAll();</script>
 </body>
 </html>";
         }

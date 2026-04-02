@@ -98,6 +98,8 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
+    <EmbeddedResource Include="Resources\highlight.min.js" />
+    <EmbeddedResource Include="Resources\highlight-vs2015.css" />
   </ItemGroup>
   <!-- v2.1 T4: Include ripgrep binary for high-performance code search -->
   <ItemGroup>
