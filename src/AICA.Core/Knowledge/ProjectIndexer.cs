@@ -117,6 +117,15 @@ namespace AICA.Core.Knowledge
             ".ui" // Qt Designer UI files
         };
 
+        /// <summary>
+        /// Check if a file extension is supported for indexing.
+        /// Used by DocumentSaveListener to filter save events.
+        /// </summary>
+        public static bool IsSupportedExtension(string extension)
+        {
+            return SupportedExtensions.Contains(extension);
+        }
+
         private static readonly HashSet<string> SkipDirectories = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase)
         {
@@ -228,6 +237,25 @@ namespace AICA.Core.Knowledge
             var symbols = _parser.Parse(filePath, content);
             if (symbols.Count == 0 && _fallbackParser != null)
                 symbols = _fallbackParser.Parse(filePath, content);
+            return Task.FromResult(symbols);
+        }
+
+        /// <summary>
+        /// Index a single file: read from absolutePath, parse with relativePath for symbol IDs.
+        /// </summary>
+        public Task<IReadOnlyList<SymbolRecord>> IndexFileAsync(
+            string absolutePath, string relativePath, CancellationToken ct = default)
+        {
+            if (string.IsNullOrEmpty(absolutePath))
+                throw new ArgumentNullException(nameof(absolutePath));
+
+            if (!File.Exists(absolutePath))
+                return Task.FromResult<IReadOnlyList<SymbolRecord>>(Array.Empty<SymbolRecord>());
+
+            var content = File.ReadAllText(absolutePath);
+            var symbols = _parser.Parse(relativePath, content);
+            if (symbols.Count == 0 && _fallbackParser != null)
+                symbols = _fallbackParser.Parse(relativePath, content);
             return Task.FromResult(symbols);
         }
 

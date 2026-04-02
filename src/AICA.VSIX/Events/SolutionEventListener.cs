@@ -17,6 +17,12 @@ namespace AICA.VSIX.Events
         private readonly RulesDirectoryInitializer _initializer;
         private bool _disposed;
 
+        /// <summary>
+        /// The solution directory path, set on solution open, cleared on close.
+        /// Used by DocumentSaveListener to compute relative file paths.
+        /// </summary>
+        public string SolutionPath { get; private set; }
+
         public SolutionEventListener(RulesDirectoryInitializer initializer = null)
         {
             _initializer = initializer ?? new RulesDirectoryInitializer();
@@ -58,6 +64,8 @@ namespace AICA.VSIX.Events
                 System.Diagnostics.Debug.WriteLine("[AICA] Solution path is null or empty, returning");
                 return;
             }
+
+            SolutionPath = solutionPath;
 
             try
             {
@@ -172,6 +180,7 @@ namespace AICA.VSIX.Events
 
         public int OnAfterCloseSolution(object pUnkReserved)
         {
+            SolutionPath = null;
             ProjectKnowledgeStore.Instance.Clear();
             System.Diagnostics.Debug.WriteLine("[AICA] Project knowledge index cleared (solution closed)");
 
