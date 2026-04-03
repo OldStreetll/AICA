@@ -30,6 +30,8 @@ namespace AICA.ToolWindows
         public StringBuilder TextAfter { get; set; } = new StringBuilder();
         public int ToolId { get; set; }
         public string ToolCallId { get; set; }
+        /// <summary>Runtime-only DOM element ID for incremental rendering. Not serialized.</summary>
+        public string DomElementId { get; set; }
     }
 
     /// <summary>
@@ -43,6 +45,8 @@ namespace AICA.ToolWindows
         public ToolCallBlock ToolBlock { get; set; }
         public StringBuilder ConclusionText { get; set; } = new StringBuilder();
         public int IterationId { get; set; }
+        /// <summary>Runtime-only DOM element ID for incremental rendering. Not serialized.</summary>
+        public string DomElementId { get; set; }
     }
 
     /// <summary>

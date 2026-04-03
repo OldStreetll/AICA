@@ -72,6 +72,10 @@ namespace AICA.Core.Agent
 
             // ── Plan Agent for complex tasks ──
             string planContext = null;
+            PlanProgressTracker planTracker = null;
+            TaskPlan currentPlan = null;
+            var recentToolSummaries = new List<ToolExecutionSummary>();
+
             if (complexity == TaskComplexity.Complex)
             {
                 yield return AgentStep.TextChunk("🧠 *Planning...*\n\n");
@@ -82,6 +86,14 @@ namespace AICA.Core.Agent
                 {
                     planContext = planResult.PlanText;
                     yield return AgentStep.TextChunk($"📋 **Plan:**\n{planResult.PlanText}\n\n---\n\n");
+
+                    // Parse plan text into structured TaskPlan for progress tracking
+                    currentPlan = ParsePlanFromText(planResult.PlanText);
+                    if (currentPlan != null)
+                    {
+                        planTracker = new PlanProgressTracker(_llmClient);
+                        yield return AgentStep.PlanUpdated(currentPlan);
+                    }
                 }
                 else
                 {
@@ -366,6 +378,18 @@ namespace AICA.Core.Agent
 
                     yield return AgentStep.WithToolResult(toolCall, result);
 
+                    // Collect tool summary for plan progress evaluation
+                    if (planTracker != null)
+                    {
+                        recentToolSummaries.Add(new ToolExecutionSummary
+                        {
+                            ToolName = toolCall.Name,
+                            Success = result.Success,
+                            Summary = TruncateForSummary(
+                                result.Success ? result.Content : result.Error, 200)
+                        });
+                    }
+
                     // Add tool result to conversation
                     var resultContent = result.Success ? result.Content : $"Error: {result.Error}";
                     if (resultContent != null)
@@ -385,6 +409,19 @@ namespace AICA.Core.Agent
                             "用户已多次取消操作。请调用 ask_followup_question 询问用户希望如何继续。"));
                         break;
                     }
+                }
+
+                // Evaluate plan progress after tool execution round
+                if (planTracker != null && currentPlan != null && recentToolSummaries.Count > 0)
+                {
+                    var updatedPlan = await planTracker.EvaluateProgressAsync(
+                        currentPlan, recentToolSummaries, ct).ConfigureAwait(false);
+                    if (updatedPlan != null)
+                    {
+                        currentPlan = updatedPlan;
+                        yield return AgentStep.PlanUpdated(updatedPlan);
+                    }
+                    recentToolSummaries.Clear();
                 }
 
                 // Handle truncated response after tool execution
@@ -1010,5 +1047,54 @@ namespace AICA.Core.Agent
         }
 
         // ResponseProcessor delegates removed — no longer needed in trust-based design
+
+        /// <summary>
+        /// Parse structured markdown plan text from PlanAgent into a TaskPlan.
+        /// Extracts numbered steps from the "## Steps" section.
+        /// </summary>
+        private static TaskPlan ParsePlanFromText(string planText)
+        {
+            if (string.IsNullOrWhiteSpace(planText)) return null;
+
+            var plan = new TaskPlan { Explanation = planText };
+            var lines = planText.Split('\n');
+            bool inSteps = false;
+
+            foreach (var rawLine in lines)
+            {
+                var line = rawLine.Trim();
+
+                if (line.StartsWith("## Steps", StringComparison.OrdinalIgnoreCase))
+                {
+                    inSteps = true;
+                    continue;
+                }
+
+                if (inSteps)
+                {
+                    if (line.StartsWith("##"))
+                        break;
+
+                    var match = System.Text.RegularExpressions.Regex.Match(
+                        line, @"^(?:\d+[\.\)]\s*|-\s+)(.+)$");
+                    if (match.Success)
+                    {
+                        plan.Steps.Add(new PlanStep
+                        {
+                            Description = match.Groups[1].Value.Trim(),
+                            Status = PlanStepStatus.Pending
+                        });
+                    }
+                }
+            }
+
+            return plan.Steps.Count > 0 ? plan : null;
+        }
+
+        private static string TruncateForSummary(string text, int maxLen)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            return text.Length <= maxLen ? text : text.Substring(0, maxLen) + "...";
+        }
     }
 }

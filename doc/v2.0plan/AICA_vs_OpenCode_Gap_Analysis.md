@@ -1,11 +1,11 @@
 # AICA vs OpenCode 对比分析报告
 
-> 日期: 2026-03-30 | 更新: 2026-04-02（v2.8.2 增量索引完成 + E2E 验证通过）
-> 分析基线: AICA v2.0（commit `686c9de`）→ … → v2.8.0（`b1123a2`）→ **v2.8.2 增量索引完成**
+> 日期: 2026-03-30 | 更新: 2026-04-02（v2.12.0 输出优化开发中）
+> 分析基线: AICA v2.0（commit `686c9de`）→ … → v2.11.0（`c33fa56`）→ **v2.12.0 输出优化开发中**
 > 分析方法: Agent 并行探索两个项目源码，逐维度深度对比
 > 用途: 识别 AICA 的不足与改进方向，跟踪差距填补进展
 >
-> **进展摘要**: 第一/二梯队已全部完成（13/13 项 ✅），第三梯队剩余 4 项长期任务。v2.5 全部 4 项优化已实施并通过 E2E 验证（第十五章）。
+> **进展摘要**: 第一/二梯队已全部完成（13/13 项 ✅），第三梯队剩余 4 项长期任务。v2.12.0 输出优化：增量DOM渲染(IncrementalRenderer) + Planning浮动面板重设计 + LLM自动标记步骤完成(PlanProgressTracker)，编译通过+E2E调试中。
 
 ---
 
@@ -1037,3 +1037,47 @@ EditFileTool.FindWithCascade → ToolResult.Metadata["fuzzy_match_level"] = "ind
 | **v2.9.0** | **`eb6c2b2`** | **UI 增强：代码语法高亮 (Highlight.js) + 附件 UX 改进** | **+~1440** |
 | **v2.10.0** | **`dc76f25`** | **搜索增强 + 模糊匹配增强：ripgrep 统一、历史内容搜索、Level 4-5** | **+~270** |
 | **v2.11.0** | **`55e515f`** | **初始化门控 + 进度条 + npm install 可见化 + McpBridge 参数别名** | **+2133/-56** |
+| **v2.12.0** | **开发中** | **输出优化：IncrementalRenderer增量DOM + Planning面板重设计(VS2022暗色主题/进度条/步骤打勾/CSS折叠) + PlanProgressTracker(LLM自动标记步骤完成)** | **+~900** |
+
+---
+
+## 二十一、输出优化（v2.12.0，开发中）
+
+> 日期: 2026-04-02
+> 设计: Agent Team（designer + reviewer 协作，两轮迭代）
+> 设计文档: `AICA_OutputOptimization_Design.md` v1.1 (9/9 APPROVED) + `AICA_PlanPanel_Design.md` v1.0 (8/8 APPROVED)
+> 状态: **编译通过，E2E 调试中**
+
+### 核心改动
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| **IncrementalRenderer** | `ToolWindows/IncrementalRenderer.cs` (新建 ~250行) | 增量DOM渲染器：`insertAdjacentHTML` 追加、scoped hljs、`RemoveElement` 清理 |
+| **PlanProgressTracker** | `Agent/PlanProgressTracker.cs` (新建 ~215行) | LLM自动标记步骤完成：~450 tokens/轮、防降级、静默失败、10s超时 |
+| **ChatModels** | `ToolWindows/ChatModels.cs` (+2行) | IterationBlock/ToolCallBlock 新增 DomElementId |
+| **ChatToolWindowControl** | `ToolWindows/ChatToolWindowControl.xaml.cs` (大量修改) | switch块重构 + CSS/HTML模板 + Planning面板逻辑 |
+| **AgentExecutor** | `Agent/AgentExecutor.cs` (+80行) | ParsePlanFromText + PlanTracker集成 + ToolExecutionSummary收集 |
+
+### 解决的用户问题
+
+1. **有序流式输出**: 思考→工具调用→观察→决策 的顺序，最终回复逐字流式
+2. **Planning 浮动面板**: 固定在输入框上方、可折叠、VS2022暗色主题、进度条+步骤打勾
+3. **LLM 自动标记**: 每轮工具执行后评估步骤完成状态
+
+### E2E 调试修复记录
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | 文本非流式蹦出 | Complete 末尾 `RenderConversation()` 全量重建覆盖流式效果 | 仅在有 CompletionCard 时全量重建 |
+| 2 | 文本和工具调用顺序错误 | `responseBuilder` 跨迭代累积 + streaming-text div 位置固定 | TextChunk 分4路分派：iteration内thinking/conclusion、inter-iteration thinking、独立streaming |
+| 3 | Plan面板多Plan点击白屏 | `showPlan` 用 `window.location.href` 导航离开页面 | 改为纯 JS DOM 操作 + `window._planData` 数组 |
+| 4 | 首段文本重复 | ToolStart 创建 thinking block 但旧 streaming-text div 未清除 | ActionStart 吸收 responseBuilder 文本为 thinking，`UpdateStreamingText("")` 清空旧 div |
+| 5 | 最终回复在 Thought 块里 | `hasToolCalls && currentIteration==null` 分支创建 thinking block | 移除该分支，最终回复走 responseBuilder → streaming-text div |
+| 6 | 最终回复显示在顶部 | streaming-text div ID 复用，`getElementById` 返回旧位置的空壳 | 唯一 ID (递增计数器) + `RemoveElement`(DOM 移除而非清空) |
+
+### 技术亮点
+
+- **性能**: 每步从 ~65KB 全量重建降到 ~0.5KB 增量追加 (O(N)→O(1))
+- **IE11 兼容**: `insertAdjacentHTML`(IE4+) + CSS checkbox hack(IE9+) + HTML 实体替代 emoji
+- **不可变模式**: PlanProgressTracker 创建新 TaskPlan 对象，不修改原 plan
+- **零侵入 Core 层**: AgentExecutor 仅新增 ~80 行，所有 UI 变更在 VSIX 层

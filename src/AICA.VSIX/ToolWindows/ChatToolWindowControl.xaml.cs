@@ -1326,6 +1326,51 @@ namespace AICA.ToolWindows
         }
 
         /// <summary>
+        /// Build steps-only HTML for the floating plan panel (new design).
+        /// Uses HTML entities instead of emoji for IE11 compatibility.
+        /// </summary>
+        private string BuildPlanStepsHtml(AICA.Core.Agent.TaskPlan plan)
+        {
+            if (plan?.Steps == null || plan.Steps.Count == 0)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            foreach (var step in plan.Steps)
+            {
+                string icon;
+                string cssClass;
+                switch (step.Status)
+                {
+                    case AICA.Core.Agent.PlanStepStatus.InProgress:
+                        icon = "&#9654;";   // ▶
+                        cssClass = "pp-inprogress";
+                        break;
+                    case AICA.Core.Agent.PlanStepStatus.Completed:
+                        icon = "&#10003;";  // ✓
+                        cssClass = "pp-completed";
+                        break;
+                    case AICA.Core.Agent.PlanStepStatus.Failed:
+                        icon = "&#10007;";  // ✗
+                        cssClass = "pp-failed";
+                        break;
+                    default:
+                        icon = "&#9675;";   // ○
+                        cssClass = "pp-pending";
+                        break;
+                }
+                var desc = System.Net.WebUtility.HtmlEncode(step.Description ?? "");
+                sb.Append("<div class=\"pp-step ")
+                  .Append(cssClass)
+                  .Append("\"><span class=\"pp-step-icon\">")
+                  .Append(icon)
+                  .Append("</span><span class=\"pp-step-desc\">")
+                  .Append(desc)
+                  .Append("</span></div>");
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Check if the new plan is an update of the same plan (same step descriptions)
         /// </summary>
         private bool IsSamePlanUpdate(AICA.Core.Agent.TaskPlan newPlan)
@@ -1387,56 +1432,91 @@ namespace AICA.ToolWindows
 
                 dynamic doc = ChatBrowser.Document;
 
-                // Build tabs HTML if multiple plans
-                var tabsHtml = new StringBuilder();
-                if (_planHistory.Count > 1)
-                {
-                    tabsHtml.Append("<div class='plan-tabs'>");
-                    for (int i = 0; i < _planHistory.Count; i++)
-                    {
-                        var active = i == _planHistory.Count - 1 ? "active" : "";
-                        tabsHtml.Append($"<div class='plan-tab {active}' onclick='showPlan({i})'>Plan {i + 1}</div>");
-                    }
-                    tabsHtml.Append("</div>");
-                }
+                // Calculate progress
+                var completedCount = _lastPlan?.Steps?.Count(
+                    s => s.Status == AICA.Core.Agent.PlanStepStatus.Completed) ?? 0;
+                var totalCount = _lastPlan?.Steps?.Count ?? 0;
+                var progressPercent = totalCount > 0
+                    ? (int)((completedCount * 100.0) / totalCount) : 0;
 
-                // Build content HTML (all plan cards, only last one visible)
-                var contentHtml = new StringBuilder();
-                for (int i = 0; i < _planHistory.Count; i++)
-                {
-                    var display = i == _planHistory.Count - 1 ? "block" : "none";
-                    contentHtml.Append($"<div style='display:{display}'>{_planHistory[i]}</div>");
-                }
+                // Update title bar elements
+                dynamic badgeEl = doc.getElementById("plan-badge");
+                if (badgeEl != null)
+                    badgeEl.innerHTML = completedCount + "/" + totalCount;
 
-                // Set via direct DOM manipulation — no string escaping issues
+                dynamic progressFill = doc.getElementById("plan-mini-progress-fill");
+                if (progressFill != null)
+                    progressFill.style.width = progressPercent + "%";
+
+                // Tabs (multiple plans) + inject plan data for JS switching
                 dynamic tabsEl = doc.getElementById("plan-tabs-container");
-                dynamic contentEl = doc.getElementById("plan-content");
+                if (tabsEl != null)
+                {
+                    if (_planHistory.Count > 1)
+                    {
+                        var tabsHtml = new StringBuilder();
+                        tabsHtml.Append("<div class='plan-tabs'>");
+                        for (int i = 0; i < _planHistory.Count; i++)
+                        {
+                            var active = i == _planHistory.Count - 1 ? "active" : "";
+                            tabsHtml.Append("<div class='plan-tab ")
+                                    .Append(active)
+                                    .Append("' onclick='showPlan(")
+                                    .Append(i)
+                                    .Append(")'>Plan ")
+                                    .Append(i + 1)
+                                    .Append("</div>");
+                        }
+                        tabsHtml.Append("</div>");
+                        tabsEl.innerHTML = tabsHtml.ToString();
+
+                        // Store plan HTML array in JS for tab switching
+                        try
+                        {
+                            dynamic window = doc.parentWindow;
+                            var planArrayJs = new StringBuilder("window._planData=[");
+                            for (int i = 0; i < _planHistory.Count; i++)
+                            {
+                                if (i > 0) planArrayJs.Append(",");
+                                var escaped = _planHistory[i]
+                                    .Replace("\\", "\\\\")
+                                    .Replace("'", "\\'")
+                                    .Replace("\r", "")
+                                    .Replace("\n", "\\n");
+                                planArrayJs.Append("'").Append(escaped).Append("'");
+                            }
+                            planArrayJs.Append("];");
+                            window?.execScript(planArrayJs.ToString());
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        tabsEl.innerHTML = "";
+                    }
+                }
+
+                // Steps list
+                dynamic stepsEl = doc.getElementById("plan-steps-list");
+                if (stepsEl != null)
+                {
+                    stepsEl.innerHTML = BuildPlanStepsHtml(_lastPlan);
+                }
+
+                // Show panel + expand
                 dynamic panelEl = doc.getElementById("plan-floating-panel");
-
-                if (tabsEl != null) tabsEl.innerHTML = tabsHtml.ToString();
-                if (contentEl != null) contentEl.innerHTML = contentHtml.ToString();
-
-                // Show the panel and expand it
                 if (panelEl != null)
-                {
                     panelEl.style.display = "block";
-                    panelEl.className = ""; // Remove collapsed class to auto-expand
-                }
 
-                // Update toggle label with count info
-                dynamic labelEl = doc.getElementById("plan-toggle-label");
-                if (labelEl != null)
-                {
-                    labelEl.innerHTML = $"📋 Task Plan ({_planHistory.Count})";
-                }
+                // Expand: uncheck the collapse toggle
+                dynamic toggleCb = doc.getElementById("plan-collapse-toggle");
+                if (toggleCb != null)
+                    toggleCb.@checked = false;
 
-                // Adjust chat padding via direct DOM — no execScript
+                // Adjust chat padding
                 dynamic chatLog = doc.getElementById("chat-log");
-                if (chatLog != null && panelEl != null)
-                {
-                    // Panel is expanded (collapsed class removed above), set generous padding
+                if (chatLog != null)
                     chatLog.style.paddingBottom = "200px";
-                }
             }
             catch (Exception ex)
             {
@@ -1450,8 +1530,8 @@ namespace AICA.ToolWindows
             {
                 if (!_isBrowserReady || ChatBrowser.Document == null) return;
                 dynamic doc = ChatBrowser.Document;
-                dynamic panel = doc.getElementById("plan-floating-panel");
-                if (panel != null) panel.className = "collapsed";
+                dynamic toggleCb = doc.getElementById("plan-collapse-toggle");
+                if (toggleCb != null) toggleCb.@checked = true;
                 dynamic chatLog = doc.getElementById("chat-log");
                 if (chatLog != null) chatLog.style.paddingBottom = "48px";
             }
@@ -1560,8 +1640,17 @@ namespace AICA.ToolWindows
             // Add user message to history BEFORE executing agent (v2.6: use parts-aware message)
             _llmHistory.Add(userChatMessage ?? ChatMessage.User(userMessage));
 
-            // Show immediate feedback while waiting for LLM's first token (TTFT)
-            RenderConversation("💭 *思考中...*");
+            // Initialize incremental renderer for streaming output
+            var incrementalRenderer = new IncrementalRenderer(
+                () => ChatBrowser.Document,
+                _htmlRenderer,
+                _markdownPipeline,
+                () => RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString())
+            );
+
+            // Show user message + begin streaming message div
+            RenderConversation();
+            incrementalRenderer.BeginStreamingMessage();
 
             // Capture the WPF dispatcher so we can marshal UI updates from background thread
             var dispatcher = this.Dispatcher;
@@ -1588,90 +1677,105 @@ namespace AICA.ToolWindows
                                         IterationId = _globalIterationCounter++
                                     };
                                     iterationBlocks.Add(currentIteration);
-                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
+                                    currentIteration.DomElementId = incrementalRenderer.AppendThinkingBlock(
+                                        step.Text, null, currentIteration.IterationId);
                                     break;
 
                                 case AgentStepType.ActionStart:
-                                    // Associate action with current iteration block
                                     if (currentIteration != null)
                                     {
+                                        // Existing iteration — add action text
                                         currentIteration.ActionText = step.Text;
+                                        incrementalRenderer.UpdateThinkingContent(
+                                            currentIteration.DomElementId,
+                                            currentIteration.ThinkingContent,
+                                            step.Text,
+                                            currentIteration.IterationId);
                                     }
                                     else
                                     {
-                                        // No thinking preceded this action, create a new iteration block
+                                        // No current iteration — create one.
+                                        // If there's pending streaming text, absorb it as thinking content
+                                        string pendingThinking = null;
+                                        if (responseBuilder.Length > 0)
+                                        {
+                                            pendingThinking = responseBuilder.ToString();
+                                            responseBuilder.Clear();
+                                            // Clear the streaming-text div since text moves to thinking block
+                                            incrementalRenderer.UpdateStreamingText("");
+                                        }
+
                                         currentIteration = new IterationBlock
                                         {
+                                            ThinkingContent = pendingThinking,
                                             ActionText = step.Text,
                                             IterationId = _globalIterationCounter++
                                         };
                                         iterationBlocks.Add(currentIteration);
+                                        currentIteration.DomElementId = incrementalRenderer.AppendThinkingBlock(
+                                            pendingThinking, step.Text, currentIteration.IterationId);
                                     }
-                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.TextChunk:
-                                    // Only append text as conclusion to current iteration if we've already seen a tool result
-                                    // This ensures conclusion text appears AFTER the tool, not inside the thinking block
                                     if (currentIteration != null && currentIteration.ToolBlock != null)
                                     {
+                                        // After tool result in current iteration → conclusion text
                                         currentIteration.ConclusionText.Append(step.Text);
+                                        incrementalRenderer.AppendOrUpdateConclusionText(
+                                            currentIteration.DomElementId,
+                                            currentIteration.ConclusionText.ToString());
+                                    }
+                                    else if (currentIteration != null && currentIteration.ToolBlock == null)
+                                    {
+                                        // Inside an iteration that hasn't seen a tool yet → append to thinking
+                                        currentIteration.ThinkingContent = (currentIteration.ThinkingContent ?? "") + step.Text;
+                                        incrementalRenderer.UpdateThinkingContent(
+                                            currentIteration.DomElementId,
+                                            currentIteration.ThinkingContent,
+                                            currentIteration.ActionText,
+                                            currentIteration.IterationId);
                                     }
                                     else
                                     {
-                                        // No iteration context or no tool yet - append to responseBuilder for independent streaming
+                                        // No active iteration → streaming text (simple chat or final response after tools)
                                         responseBuilder.Append(step.Text);
+                                        incrementalRenderer.AppendStreamingText(responseBuilder.ToString());
                                     }
-
-                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.ToolStart:
-                                    // When first tool arrives: preserve streaming text then clear responseBuilder
-                                    if (!hasToolCalls)
+                                    // P0-007: preserve pre-tool streaming text for final content assembly
+                                    if (!hasToolCalls && responseBuilder.Length > 0)
                                     {
-                                        // P0-007 fix: save pre-tool streaming content before clearing
-                                        // This content (e.g., detailed analysis from Explain/Refactor commands)
-                                        // would otherwise be lost when attempt_completion replaces it
-                                        if (responseBuilder.Length > 0)
-                                        {
-                                            preToolContent.Append(responseBuilder);
-                                            System.Diagnostics.Debug.WriteLine($"[AICA-UI] Preserved {responseBuilder.Length} chars of pre-tool text in preToolContent");
-                                        }
+                                        preToolContent.Append(responseBuilder);
+                                        System.Diagnostics.Debug.WriteLine($"[AICA-UI] Preserved {responseBuilder.Length} chars of pre-tool text in preToolContent");
                                         responseBuilder.Clear();
+                                        // Note: streaming-text div cleared by ActionStart (which runs before ToolStart)
                                     }
                                     hasToolCalls = true;
 
-                                    // Don't show attempt_completion in tool logs
                                     if (step.ToolCall.Name != "attempt_completion")
                                     {
                                         var toolId = _globalToolCallCounter++;
                                         pendingToolCalls[step.ToolCall.Id] = (step.ToolCall, toolId);
 
-                                        var toolHtml = _htmlRenderer.BuildToolCallHtml(
-                                            step.ToolCall.Name,
-                                            step.ToolCall.Arguments,
-                                            null,
-                                            true,
-                                            toolId
-                                        );
-
                                         currentBlock = new ToolCallBlock
                                         {
-                                            ToolHtml = toolHtml,
                                             ToolId = toolId,
                                             ToolCallId = step.ToolCall.Id
                                         };
+                                        currentBlock.DomElementId = incrementalRenderer.AppendToolCallBlock(
+                                            step.ToolCall.Name, step.ToolCall.Arguments, toolId);
+                                        currentBlock.ToolHtml = _htmlRenderer.BuildToolCallHtml(
+                                            step.ToolCall.Name, step.ToolCall.Arguments, null, true, toolId);
                                         toolCallBlocks.Add(currentBlock);
 
-                                        // Associate tool block with current iteration
                                         if (currentIteration != null)
                                         {
                                             currentIteration.ToolBlock = currentBlock;
                                         }
                                     }
-
-                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.ToolResult:
@@ -1684,7 +1788,7 @@ namespace AICA.ToolWindows
                                     {
                                         var resultText = step.Result.Success ? step.Result.Content : step.Result.Error;
 
-                                        var toolHtml = _htmlRenderer.BuildToolCallHtml(
+                                        var fullToolHtml = _htmlRenderer.BuildToolCallHtml(
                                             toolInfo.call.Name,
                                             toolInfo.call.Arguments,
                                             resultText,
@@ -1695,18 +1799,17 @@ namespace AICA.ToolWindows
                                         var block = toolCallBlocks.FirstOrDefault(b => b.ToolCallId == step.ToolCall.Id);
                                         if (block != null)
                                         {
-                                            block.ToolHtml = toolHtml;
+                                            block.ToolHtml = fullToolHtml;
+                                            incrementalRenderer.UpdateToolCallResult(block.DomElementId, fullToolHtml);
                                         }
                                     }
 
                                     // After tool result, reset currentIteration so next thinking starts a new block
                                     currentIteration = null;
-
-                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.PlanUpdate:
-                                    var planHtml = BuildPlanCardHtml(step.Plan, _planHistory.Count);
+                                    var planHtml = BuildPlanStepsHtml(step.Plan);
                                     // Bug 5 fix v2: Within one user message execution, always update
                                     // the same plan entry instead of creating new tabs.
                                     if (_planCreatedThisExecution && _planHistory.Count > 0)
@@ -1727,7 +1830,6 @@ namespace AICA.ToolWindows
                                     }
                                     _lastPlan = step.Plan;
                                     UpdateFloatingPlanPanel();
-                                    RenderStructuredStreaming(iterationBlocks, toolCallBlocks, currentBlock, responseBuilder.ToString());
                                     break;
 
                                 case AgentStepType.Complete:
@@ -1740,7 +1842,7 @@ namespace AICA.ToolWindows
                                                 && ps.Status != AICA.Core.Agent.PlanStepStatus.Failed)
                                                 ps.Status = AICA.Core.Agent.PlanStepStatus.Completed;
                                         }
-                                        var completedPlanHtml = BuildPlanCardHtml(_lastPlan, _planHistory.Count - 1);
+                                        var completedPlanHtml = BuildPlanStepsHtml(_lastPlan);
                                         _planHistory[_planHistory.Count - 1] = completedPlanHtml;
                                         UpdateFloatingPlanPanel();
                                     }
@@ -1816,6 +1918,9 @@ namespace AICA.ToolWindows
                                             "3. 在选项中检查 'Enable Tool Calling' 是否已启用";
                                     }
 
+                                    // Finalize incremental streaming div
+                                    incrementalRenderer.FinalizeMessage();
+
                                     if (!string.IsNullOrWhiteSpace(finalContent) || completionResult != null || !string.IsNullOrWhiteSpace(finalToolLogs))
                                     {
                                         var message = new ConversationMessage
@@ -1831,10 +1936,16 @@ namespace AICA.ToolWindows
                                         _llmHistory.Add(ChatMessage.Assistant(completionResult?.Summary ?? finalContent));
                                     }
 
-                                    RenderConversation();
+                                    // Full re-render only when completion card needs rendering
+                                    // (incremental DOM already has correct content for normal responses)
+                                    if (completionResult != null)
+                                    {
+                                        RenderConversation();
+                                    }
                                     break;
 
                                 case AgentStepType.Error:
+                                    incrementalRenderer.FinalizeMessage();
                                     string errorToolLogs = null;
                                     if (hasToolCalls && iterationBlocks.Count > 0)
                                     {
@@ -1878,6 +1989,7 @@ namespace AICA.ToolWindows
                 {
                     dispatcher.Invoke(new Action(() =>
                     {
+                        incrementalRenderer.FinalizeMessage();
                         var partialContent = responseBuilder.ToString().Trim();
 
                         string partialToolLogs = null;
@@ -1988,6 +2100,7 @@ namespace AICA.ToolWindows
         /// <summary>
         /// Render conversation with structured iteration blocks during streaming
         /// </summary>
+        [System.Obsolete("Replaced by IncrementalRenderer. Kept as fallback.")]
         private void RenderStructuredStreaming(List<IterationBlock> iterationBlocks, List<ToolCallBlock> toolCallBlocks, ToolCallBlock currentBlock, string remainingText, bool preserveScroll = false)
         {
             var bodyBuilder = new StringBuilder();
@@ -3068,20 +3181,23 @@ namespace AICA.ToolWindows
             margin-left: auto;
             font-size: 10px;
             transition: transform 0.2s;
+            transform: rotate(90deg);
         }}
         .thinking-toggle:checked ~ .thinking-header .thinking-expand {{
-            transform: rotate(90deg);
+            transform: rotate(0deg);
         }}
         .thinking-body {{
             padding: 10px 12px;
-            display: none;
+            display: block;
             font-size: 13px;
             color: #b0b0b0;
             border-top: 1px solid rgba(230, 192, 123, 0.15);
         }}
         .thinking-toggle:checked ~ .thinking-body {{
-            display: block;
+            display: none;
         }}
+        .streaming-text {{ padding: 4px 0; }}
+        .streaming-text p {{ margin: 0 0 0.75em 0; }}
         .action-text {{
             padding: 4px 12px;
             font-size: 13px;
@@ -3299,56 +3415,116 @@ namespace AICA.ToolWindows
             transition: width 0.3s ease;
         }}
 
-        /* Floating Plan Panel - fixed at bottom */
+        /* Floating Plan Panel - VS2022 dark theme */
         #plan-floating-panel {{
             position: fixed;
             bottom: 0; left: 0; right: 0;
             z-index: 1000;
-            background: #1e1e1e;
-            border-top: 2px solid #e06c75;
+            background: #2a2a3c;
+            border-top: 2px solid #89b4fa;
+            font-family: 'Segoe UI', sans-serif;
         }}
-        #plan-toggle-bar {{
+        #plan-title-bar {{
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            padding: 4px 12px;
-            background: #1e1e1e;
+            gap: 8px;
+            padding: 6px 12px;
+            background: #252536;
             cursor: pointer;
             user-select: none;
-            border-bottom: 1px solid #333;
         }}
-        #plan-toggle-bar:hover {{ background: #252525; }}
-        #plan-toggle-label {{
-            color: #e06c75;
-            font-size: 12px;
-            font-weight: 600;
+        #plan-title-bar:hover {{ background: #2d2d48; }}
+        #plan-title-icon {{ font-size: 14px; }}
+        #plan-title-text {{
+            font-size: 12px; font-weight: 600;
+            color: #cdd6f4;
         }}
-        #plan-toggle-arrow {{
-            color: #888;
-            font-size: 12px;
+        #plan-badge {{
+            font-size: 11px; font-weight: 600;
+            color: #a6e3a1;
+            background: rgba(166, 227, 161, 0.15);
+            padding: 1px 6px;
+            border-radius: 8px;
+        }}
+        #plan-mini-progress {{
+            flex: 1;
+            max-width: 120px;
+            height: 4px;
+            background: #45475a;
+            border-radius: 2px;
+            overflow: hidden;
+        }}
+        #plan-mini-progress-fill {{
+            display: block;
+            height: 100%;
+            width: 0%;
+            background: #89b4fa;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }}
+        #plan-collapse-arrow {{
+            color: #6c7086;
+            font-size: 10px;
             transition: transform 0.2s ease;
+            margin-left: auto;
         }}
-        #plan-floating-panel.collapsed #plan-toggle-arrow {{
+        /* CSS checkbox hack: checked = collapsed */
+        #plan-collapse-toggle:checked ~ #plan-floating-panel #plan-panel-body {{
+            display: none;
+        }}
+        #plan-collapse-toggle:checked ~ #plan-floating-panel #plan-collapse-arrow {{
             transform: rotate(180deg);
         }}
         #plan-panel-body {{
             max-height: 40vh;
             overflow-y: auto;
+            background: #2a2a3c;
         }}
-        #plan-floating-panel.collapsed #plan-panel-body {{
-            display: none;
+        #plan-steps-list {{ padding: 4px 0 8px 0; }}
+        .pp-step {{
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 14px;
+            font-size: 13px;
+            line-height: 1.4;
         }}
-
+        .pp-step-icon {{
+            flex-shrink: 0;
+            width: 18px;
+            text-align: center;
+            font-size: 13px;
+        }}
+        .pp-step.pp-pending .pp-step-icon {{ color: #6c7086; }}
+        .pp-step.pp-pending .pp-step-desc {{ color: #6c7086; }}
+        .pp-step.pp-inprogress {{
+            background: rgba(137, 180, 250, 0.08);
+        }}
+        .pp-step.pp-inprogress .pp-step-icon {{ color: #89b4fa; }}
+        .pp-step.pp-inprogress .pp-step-desc {{
+            color: #cdd6f4;
+            font-weight: 600;
+        }}
+        .pp-step.pp-completed .pp-step-icon {{ color: #a6e3a1; }}
+        .pp-step.pp-completed .pp-step-desc {{
+            color: #9399b2;
+            text-decoration: line-through;
+        }}
+        .pp-step.pp-failed .pp-step-icon {{ color: #f38ba8; }}
+        .pp-step.pp-failed .pp-step-desc {{
+            color: #f38ba8;
+            text-decoration: line-through;
+        }}
         /* Multi-plan tab bar */
-        .plan-tabs {{ display: flex; gap: 0; border-bottom: 1px solid #333; }}
+        .plan-tabs {{ display: flex; gap: 0; border-bottom: 1px solid #45475a; }}
         .plan-tab {{
             padding: 6px 14px; cursor: pointer;
-            font-size: 12px; color: #888;
+            font-size: 12px; color: #6c7086;
             border-bottom: 2px solid transparent;
             background: transparent; border-top: none; border-left: none; border-right: none;
         }}
-        .plan-tab:hover {{ color: #ccc; }}
-        .plan-tab.active {{ color: #e06c75; border-bottom-color: #e06c75; }}
+        .plan-tab:hover {{ color: #cdd6f4; }}
+        .plan-tab.active {{ color: #89b4fa; border-bottom-color: #89b4fa; }}
 
         /* Highlight.js VS2015 theme */
         {_highlightCss}
@@ -3398,20 +3574,14 @@ namespace AICA.ToolWindows
             window.location.href = 'aica://feedback?messageId=' + messageId + '&feedback=' + currentFeedback;
         }}
 
-        function togglePlanPanel() {{
-            var panel = document.getElementById('plan-floating-panel');
-            if (!panel) return;
-            toggleClass(panel, 'collapsed');
-            adjustChatPadding();
-        }}
-
         function adjustChatPadding() {{
             var panel = document.getElementById('plan-floating-panel');
             var container = document.getElementById('chat-log');
+            var toggle = document.getElementById('plan-collapse-toggle');
             if (!container) return;
             if (!panel || panel.style.display === 'none') {{
                 container.style.paddingBottom = '20px';
-            }} else if (hasClass(panel, 'collapsed')) {{
+            }} else if (toggle && toggle.checked) {{
                 container.style.paddingBottom = '48px';
             }} else {{
                 setTimeout(function() {{
@@ -3422,15 +3592,14 @@ namespace AICA.ToolWindows
 
         function showPlan(index) {{
             var tabs = document.querySelectorAll('.plan-tab');
-            var wrappers = document.querySelectorAll('#plan-content > div');
             for (var i = 0; i < tabs.length; i++) {{
                 removeClass(tabs[i], 'active');
             }}
-            for (var i = 0; i < wrappers.length; i++) {{
-                wrappers[i].style.display = 'none';
-            }}
             if (tabs[index]) addClass(tabs[index], 'active');
-            if (wrappers[index]) wrappers[index].style.display = 'block';
+            var stepsEl = document.getElementById('plan-steps-list');
+            if (stepsEl && window._planData && window._planData[index]) {{
+                stepsEl.innerHTML = window._planData[index];
+            }}
         }}
 
         function toggleToolCall(toolCallId) {{
@@ -3453,14 +3622,18 @@ namespace AICA.ToolWindows
 <div id=""chat-log"" class=""container"">
 {innerContent}
 </div>
-<div id=""plan-floating-panel"" class=""collapsed"" style=""display:none"">
-    <div id=""plan-toggle-bar"" onclick=""togglePlanPanel()"">
-        <span id=""plan-toggle-label"">📋 Task Plan</span>
-        <span id=""plan-toggle-arrow"">▼</span>
-    </div>
+<input type=""checkbox"" id=""plan-collapse-toggle"" style=""display:none"" checked />
+<div id=""plan-floating-panel"" style=""display:none"">
+    <label for=""plan-collapse-toggle"" id=""plan-title-bar"">
+        <span id=""plan-title-icon"">📋</span>
+        <span id=""plan-title-text"">执行计划</span>
+        <span id=""plan-badge"">0/0</span>
+        <span id=""plan-mini-progress""><span id=""plan-mini-progress-fill""></span></span>
+        <span id=""plan-collapse-arrow"">▼</span>
+    </label>
     <div id=""plan-panel-body"">
         <div id=""plan-tabs-container""></div>
-        <div id=""plan-content""></div>
+        <div id=""plan-steps-list""></div>
     </div>
 </div>
 <script>if(typeof hljs!=='undefined')hljs.initHighlighting();</script>

@@ -68,6 +68,7 @@
     </Compile>
     <Compile Include="ToolWindows\ChatModels.cs" />
     <Compile Include="ToolWindows\HtmlRenderer.cs" />
+    <Compile Include="ToolWindows\IncrementalRenderer.cs" />
     <Compile Include="ToolWindows\ChatToolWindow.cs" />
     <Compile Include="ToolWindows\ChatToolWindowControl.xaml.cs">
       <DependentUpon>ChatToolWindowControl.xaml</DependentUpon>
