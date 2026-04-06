@@ -4,6 +4,8 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Config;
+using AICA.Core.Storage;
 
 namespace AICA.Core.Tools
 {
@@ -127,14 +129,37 @@ namespace AICA.Core.Tools
                     var allLines = content.Split('\n');
                     if (allLines.Length > autoTruncateThreshold)
                     {
-                        var truncated = new System.Text.StringBuilder();
-                        truncated.AppendLine($"[AUTO_TRUNCATED] [File has {allLines.Length} lines. Showing first {autoTruncateLimit}. Use offset/limit parameters to read specific sections.]");
-                        truncated.AppendLine();
-                        for (int i = 0; i < autoTruncateLimit && i < allLines.Length; i++)
+                        // v2.1 H1: Persist full output before truncating
+                        if (AicaConfig.Current.Features.TruncationPersistence)
                         {
-                            truncated.AppendLine($"{i + 1,6}: {allLines[i]}");
+                            var tr = ToolOutputPersistenceManager.Instance.PersistAndTruncate(
+                                "read_file", content,
+                                AicaConfig.Current.Truncation.DefaultPreviewChars);
+                            if (tr.WasTruncated)
+                            {
+                                System.Diagnostics.Debug.WriteLine(
+                                    $"[AICA] read_file truncation persisted: {tr.FullOutputPath} ({content.Length} chars)");
+                                content = tr.PreviewText +
+                                    $"\n\n[Full output saved to: {tr.FullOutputPath}]\n" +
+                                    "Use read_file with the above path to see the complete output.";
+                            }
+                            else
+                            {
+                                content = tr.PreviewText;
+                            }
                         }
-                        content = truncated.ToString();
+                        else
+                        {
+                            // Original truncation logic (fallback when feature flag off)
+                            var truncated = new System.Text.StringBuilder();
+                            truncated.AppendLine($"[AUTO_TRUNCATED] [File has {allLines.Length} lines. Showing first {autoTruncateLimit}. Use offset/limit parameters to read specific sections.]");
+                            truncated.AppendLine();
+                            for (int i = 0; i < autoTruncateLimit && i < allLines.Length; i++)
+                            {
+                                truncated.AppendLine($"{i + 1,6}: {allLines[i]}");
+                            }
+                            content = truncated.ToString();
+                        }
                     }
                 }
 

@@ -25,6 +25,7 @@ namespace AICA.Core.Config
         public ToolConfig Tools { get; set; } = new ToolConfig();
         public TelemetryConfig Telemetry { get; set; } = new TelemetryConfig();
         public FeaturesConfig Features { get; set; } = new FeaturesConfig();
+        public TruncationConfig Truncation { get; set; } = new TruncationConfig();
     }
 
     public class AgentConfig
@@ -68,5 +69,26 @@ namespace AICA.Core.Config
     public class TelemetryConfig
     {
         public bool Enabled { get; set; } = true;
+    }
+
+    /// <summary>
+    /// v2.1 H1: Configuration for tool output truncation persistence.
+    /// </summary>
+    public class TruncationConfig
+    {
+        /// <summary>Total disk quota for truncated outputs in MB.</summary>
+        public int MaxTotalSizeMB { get; set; } = 200;
+
+        /// <summary>Days to retain truncated output files before auto-cleanup.</summary>
+        public int RetentionDays { get; set; } = 7;
+
+        /// <summary>Default number of characters to include in the preview when truncating.</summary>
+        public int DefaultPreviewChars { get; set; } = 4000;
+
+        /// <summary>
+        /// Per-tool preview character overrides. Key = tool name (case-insensitive at lookup).
+        /// Tools not listed here fall back to DefaultPreviewChars.
+        /// </summary>
+        public Dictionary<string, int> ToolPreviewChars { get; set; } = new Dictionary<string, int>();
     }
 }

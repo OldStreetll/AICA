@@ -26,7 +26,8 @@ namespace AICA.Core.Tools
         public EditFileTool()
         {
             _pipeline = new EditPipeline();
-            _pipeline.Register(new DiagnosticsStep());
+            _pipeline.Register(new HeaderSyncStep());   // Order=200, PostEdit — S3 头文件同步
+            _pipeline.Register(new DiagnosticsStep());  // Order=900, PostEdit — 诊断信息
         }
 
         public string Name => "edit";

@@ -6,6 +6,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Config;
+using AICA.Core.Storage;
 
 namespace AICA.Core.Tools
 {
@@ -233,7 +235,8 @@ namespace AICA.Core.Tools
                 if (!completed)
                 {
                     try { process.Kill(); } catch { }
-                    return ToolResult.Fail($"Command timed out after {timeoutSeconds} seconds.\n\nPartial stdout:\n{Truncate(stdoutBuilder.ToString(), 2000)}\n\nPartial stderr:\n{Truncate(stderrBuilder.ToString(), 1000)}");
+                    var partialStdout = TruncateStdout(stdoutBuilder.ToString(), 2000);
+                    return ToolResult.Fail($"Command timed out after {timeoutSeconds} seconds.\n\nPartial stdout:\n{partialStdout}\n\nPartial stderr:\n{Truncate(stderrBuilder.ToString(), 1000)}");
                 }
 
                 var exitCode = process.ExitCode;
@@ -246,7 +249,7 @@ namespace AICA.Core.Tools
                 if (!string.IsNullOrWhiteSpace(stdout))
                 {
                     resultBuilder.AppendLine("\nstdout:");
-                    resultBuilder.AppendLine(Truncate(stdout, 6000));
+                    resultBuilder.AppendLine(TruncateStdout(stdout, 6000));
                 }
 
                 if (!string.IsNullOrWhiteSpace(stderr))
@@ -262,6 +265,32 @@ namespace AICA.Core.Tools
             }
         }
 
+        /// <summary>
+        /// v2.1 H1: Truncate stdout with optional persistence of full output.
+        /// When feature flag is on and output exceeds limit, full output is saved to disk.
+        /// </summary>
+        private string TruncateStdout(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxLength) return text;
+
+            if (AicaConfig.Current.Features.TruncationPersistence)
+            {
+                var tr = ToolOutputPersistenceManager.Instance.PersistAndTruncate(
+                    "run_command", text, maxLength);
+                if (tr.WasTruncated)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] run_command stdout truncation persisted: {tr.FullOutputPath} ({text.Length} chars)");
+                    return tr.PreviewText +
+                        $"\n\n[Full output saved to: {tr.FullOutputPath}]\n" +
+                        "Use read_file with the above path to see the complete output.";
+                }
+                return tr.PreviewText;
+            }
+
+            return Truncate(text, maxLength);
+        }
+
         private string Truncate(string text, int maxLength)
         {
             if (string.IsNullOrEmpty(text) || text.Length <= maxLength) return text;
@@ -275,7 +304,7 @@ namespace AICA.Core.Tools
             if (!string.IsNullOrWhiteSpace(stdout))
             {
                 sb.AppendLine("\nstdout:");
-                sb.AppendLine(Truncate(stdout, 6000));
+                sb.AppendLine(TruncateStdout(stdout, 6000));
             }
             if (!string.IsNullOrWhiteSpace(stderr))
             {
