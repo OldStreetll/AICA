@@ -82,6 +82,27 @@ namespace AICA.Core.Rules
         }
 
         /// <summary>
+        /// v2.1 SK: Return skill rules whose intent exactly matches the given intent.
+        /// Conservative matching (横切规则#1): exact string comparison only, no Contains/fuzzy.
+        /// Only returns rules where Metadata.Type == "skill".
+        /// </summary>
+        public List<Rule> EvaluateSkillsByIntent(IReadOnlyList<Rule> rules, string intent)
+        {
+            if (rules == null || rules.Count == 0 || string.IsNullOrEmpty(intent))
+                return new List<Rule>();
+
+            var matched = rules
+                .Where(r => r.Enabled
+                    && string.Equals(r.Metadata?.Type, "skill", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(r.Metadata?.Intent, intent, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(r => r.Priority)
+                .ToList();
+
+            _logger?.LogDebug($"EvaluateSkillsByIntent('{intent}'): {matched.Count} skill(s) matched from {rules.Count} rules");
+            return matched;
+        }
+
+        /// <summary>
         /// Merge multiple rules by priority, with higher priority rules overriding lower ones.
         /// </summary>
         public List<Rule> MergeRules(List<Rule> rules)

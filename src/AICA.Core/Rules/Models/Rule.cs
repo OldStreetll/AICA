@@ -72,6 +72,23 @@ namespace AICA.Core.Rules.Models
         public List<string> Paths { get; set; } = new List<string>();
 
         /// <summary>
+        /// v2.1 SK: Human-readable description of the rule/skill.
+        /// Used for relevance matching and display.
+        /// </summary>
+        public string Description { get; set; }
+
+        /// <summary>
+        /// v2.1 SK: Rule type — "rule" (context-injected guidance) or "skill" (task template).
+        /// </summary>
+        public string Type { get; set; }
+
+        /// <summary>
+        /// v2.1 SK: Intent tag for skill activation (e.g. "bug_fix", "modify", "refactor", "test_write").
+        /// Skills are injected when intent matches exactly (conservative matching).
+        /// </summary>
+        public string Intent { get; set; }
+
+        /// <summary>
         /// Custom metadata fields from YAML frontmatter.
         /// </summary>
         public Dictionary<string, object> Custom { get; set; } = new Dictionary<string, object>();

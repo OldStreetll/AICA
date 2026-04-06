@@ -165,10 +165,28 @@ namespace AICA.Core.Rules
                     }
                 }
 
-                // Store custom metadata
+                // v2.1 SK: Extract description
+                if (parseResult.Data.TryGetValue("description", out var descObj) && descObj is string desc)
+                    rule.Metadata.Description = desc;
+
+                // v2.1 SK: Extract type (skill / rule)
+                if (parseResult.Data.TryGetValue("type", out var typeObj) && typeObj is string type)
+                    rule.Metadata.Type = type;
+
+                // v2.1 SK: Extract intent (bug_fix, modify, refactor, test_write, etc.)
+                if (parseResult.Data.TryGetValue("intent", out var intentObj) && intentObj is string intent)
+                    rule.Metadata.Intent = intent;
+
+                // Override rule.Name from frontmatter "name" field if present
+                if (parseResult.Data.TryGetValue("name", out var nameObj) && nameObj is string name
+                    && !string.IsNullOrEmpty(name))
+                    rule.Name = name;
+
+                // Store remaining custom metadata
+                var knownKeys = new HashSet<string> { "paths", "priority", "enabled", "description", "type", "intent", "name" };
                 foreach (var kvp in parseResult.Data)
                 {
-                    if (!new[] { "paths", "priority", "enabled" }.Contains(kvp.Key))
+                    if (!knownKeys.Contains(kvp.Key))
                     {
                         rule.Metadata.Custom[kvp.Key] = kvp.Value;
                     }

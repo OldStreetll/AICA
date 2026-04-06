@@ -73,6 +73,7 @@ namespace AICA.Core.Prompt
             return this;
         }
 
+        [Obsolete("v2.1 SK: Replaced by skill-bug-fix.md injected via AddSkillsByIntent. Kept for backward compatibility.")]
         public SystemPromptBuilder AddBugFixGuidance(string intent, Agent.ProjectLanguage language)
         {
             if (intent != "bug_fix")
@@ -85,6 +86,7 @@ namespace AICA.Core.Prompt
             return this;
         }
 
+        [Obsolete("v2.1 SK: Replaced by .aica-rules/cpp-qt-specific.md injected via AddRulesFromFilesAsync. Kept for backward compatibility.")]
         public SystemPromptBuilder AddQtTemplateGuidance(string intent)
         {
             if (!IsQtRelated(intent))
@@ -93,6 +95,67 @@ namespace AICA.Core.Prompt
             _dynamicBuilder.AppendLine("## Qt Code Generation");
             _dynamicBuilder.AppendLine("Follow .aica-rules/cpp-qt-specific.md. Generate .h + .cpp pairs with Q_OBJECT, new-style connect, tr() macros.");
             _dynamicBuilder.AppendLine();
+
+            return this;
+        }
+
+        /// <summary>
+        /// v2.1 SK: Inject task template skills by intent (passive injection).
+        /// Loads rules with type="skill" and matching intent from .aica-rules/.
+        /// Conservative matching: only exact intent match triggers injection.
+        /// Feature flag: AicaConfig.Current.Features.TaskTemplatesEnabled.
+        /// </summary>
+        public async Task<SystemPromptBuilder> AddSkillsByIntent(
+            string intent,
+            string workspacePath,
+            CancellationToken ct = default)
+        {
+            if (string.IsNullOrEmpty(intent) || string.IsNullOrEmpty(workspacePath))
+                return this;
+
+            if (!Config.AicaConfig.Current.Features.TaskTemplatesEnabled)
+                return this;
+
+            try
+            {
+                var ruleLoader = new RuleLoader();
+                var allRules = await ruleLoader.LoadAllRulesAsync(workspacePath, ct);
+
+                // Filter: type="skill" + exact intent match (conservative, per横切规则 #1)
+                var matchedSkills = allRules
+                    .Where(r => r.Enabled
+                        && string.Equals(r.Metadata?.Type, "skill", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(r.Metadata?.Intent, intent, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(r => r.Priority)
+                    .ToList();
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] AddSkillsByIntent: intent={intent}, skills_matched_count={matchedSkills.Count}");
+
+                if (matchedSkills.Count == 0)
+                    return this;
+
+                _dynamicBuilder.AppendLine("## Task Template (auto-injected by intent)");
+                _dynamicBuilder.AppendLine();
+
+                foreach (var skill in matchedSkills)
+                {
+                    if (!string.IsNullOrWhiteSpace(skill.Content))
+                    {
+                        _dynamicBuilder.AppendLine(skill.Content);
+                        _dynamicBuilder.AppendLine();
+
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] skill_injected: {skill.Name ?? skill.Id} (intent={intent})");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fail-open: continue without skills
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] AddSkillsByIntent failed (non-fatal): {ex.Message}");
+            }
 
             return this;
         }
