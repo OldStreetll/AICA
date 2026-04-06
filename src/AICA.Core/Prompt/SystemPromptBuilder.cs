@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
 using AICA.Core.Context;
+using AICA.Core.Logging;
 using AICA.Core.Rules;
 using AICA.Core.Rules.Models;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,12 @@ namespace AICA.Core.Prompt
         private readonly StringBuilder _staticBuilder = new StringBuilder();
         private readonly StringBuilder _dynamicBuilder = new StringBuilder();
         private readonly List<ToolDefinition> _tools = new List<ToolDefinition>();
+
+        /// <summary>Optional telemetry logger for skill injection events (T1 埋点).</summary>
+        public TelemetryLogger Telemetry { get; set; }
+
+        /// <summary>Session ID for telemetry correlation.</summary>
+        public string SessionId { get; set; }
 
         public SystemPromptBuilder()
         {
@@ -129,8 +136,18 @@ namespace AICA.Core.Prompt
                     .OrderByDescending(r => r.Priority)
                     .ToList();
 
+                var skillNames = matchedSkills.Select(s => s.Name ?? s.Id).ToList();
+
                 System.Diagnostics.Debug.WriteLine(
                     $"[AICA] AddSkillsByIntent: intent={intent}, skills_matched_count={matchedSkills.Count}");
+
+                // T1 telemetry: skill_injection summary
+                Telemetry?.LogEvent(SessionId, "skill_injection", new Dictionary<string, object>
+                {
+                    ["intent"] = intent,
+                    ["skills_matched_count"] = matchedSkills.Count,
+                    ["skill_names"] = string.Join(",", skillNames)
+                });
 
                 if (matchedSkills.Count == 0)
                     return this;
@@ -145,8 +162,16 @@ namespace AICA.Core.Prompt
                         _dynamicBuilder.AppendLine(skill.Content);
                         _dynamicBuilder.AppendLine();
 
+                        var name = skill.Name ?? skill.Id;
                         System.Diagnostics.Debug.WriteLine(
-                            $"[AICA] skill_injected: {skill.Name ?? skill.Id} (intent={intent})");
+                            $"[AICA] skill_injected: {name} (intent={intent})");
+
+                        // T1 telemetry: per-skill injection
+                        Telemetry?.LogEvent(SessionId, "skill_injected", new Dictionary<string, object>
+                        {
+                            ["skill_name"] = name,
+                            ["intent"] = intent
+                        });
                     }
                 }
             }

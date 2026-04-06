@@ -122,6 +122,16 @@ namespace AICA.Core.Tools.Pipeline
             metadata["format_duration_ms"] = sw.ElapsedMilliseconds.ToString();
             current.Metadata = metadata;
 
+            // v2.1 T1: Persist structured telemetry event
+            ctx.TelemetryLogger?.LogEvent(ctx.SessionId, "format_step",
+                new Dictionary<string, object>
+                {
+                    ["format_changed"] = formatChanged,
+                    ["format_duration_ms"] = sw.ElapsedMilliseconds,
+                    ["file_path"] = ctx.FilePath,
+                    ["language"] = ctx.Language
+                });
+
             return current;
         }
     }

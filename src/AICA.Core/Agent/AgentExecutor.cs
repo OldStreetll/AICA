@@ -127,6 +127,7 @@ namespace AICA.Core.Agent
             // ── State initialization ──
             _taskState = new TaskState();
             var executedToolSignatures = new HashSet<string>(StringComparer.Ordinal);
+            var sessionStartUtc = DateTime.UtcNow;
             var securityBlacklist = new HashSet<string>(StringComparer.Ordinal);
             var recentToolSignatures = new List<string>();
             var telemetryBuilder = new SessionRecordBuilder
@@ -492,6 +493,19 @@ namespace AICA.Core.Agent
             // ── Post-loop: telemetry + progress save ──
             WriteTelemetry(telemetryBuilder, ct);
             await SaveProgressIfNeeded(userRequest, context, ct).ConfigureAwait(false);
+
+            // ── Session-end telemetry (v2.1 telemetry补线) ──
+            var sessionElapsed = DateTime.UtcNow - sessionStartUtc;
+            _telemetryLogger?.LogEvent(_taskState.CurrentPhase ?? "agent", "session_end",
+                new System.Collections.Generic.Dictionary<string, object>
+                {
+                    ["iterations"] = _taskState.Iteration,
+                    ["tool_calls"] = _taskState.TotalToolCallCount,
+                    ["condense_count"] = _taskState.CondenseCount,
+                    ["reset_count"] = _taskState.ResetCount,
+                    ["duration_seconds"] = (int)sessionElapsed.TotalSeconds,
+                    ["completed"] = _taskState.IsCompleted
+                });
 
             // Iteration exhaustion fallback
             if (_taskState.Iteration >= _maxIterations && !_taskState.IsCompleted)

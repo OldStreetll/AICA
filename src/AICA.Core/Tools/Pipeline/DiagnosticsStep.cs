@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,15 +35,27 @@ namespace AICA.Core.Tools.Pipeline
             if (!current.Success)
                 return current;
 
+            var sw = Stopwatch.StartNew();
             var diagnostics = await ctx.AgentContext.GetDiagnosticsAsync(ctx.FilePath, ct);
-            if (diagnostics != null && diagnostics.Count > 0)
+            sw.Stop();
+
+            var count = diagnostics?.Count ?? 0;
+            if (count > 0)
             {
                 var formatted = string.Join("\n", diagnostics.Select(d =>
                     $"  Line {d.Line}, Col {d.Column}: [{d.Severity}] {d.Message}" +
                     (string.IsNullOrEmpty(d.Code) ? "" : $" ({d.Code})")));
-                current.Content += $"\n\n⚠️ DIAGNOSTICS ({diagnostics.Count} issue(s) detected after edit):\n{formatted}\n" +
+                current.Content += $"\n\n⚠️ DIAGNOSTICS ({count} issue(s) detected after edit):\n{formatted}\n" +
                                    "Fix these issues before proceeding.";
             }
+
+            // v2.1 T1: Persist structured telemetry event
+            ctx.TelemetryLogger?.LogEvent(ctx.SessionId, "diagnostics_step",
+                new Dictionary<string, object>
+                {
+                    ["diagnostics_count"] = count,
+                    ["duration_ms"] = sw.ElapsedMilliseconds
+                });
 
             return current;
         }

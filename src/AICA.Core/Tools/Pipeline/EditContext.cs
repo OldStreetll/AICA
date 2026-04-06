@@ -54,5 +54,11 @@ namespace AICA.Core.Tools.Pipeline
         /// Always true for Single and MultiEdit modes.
         /// </summary>
         public bool IsLastFileInBatch { get; set; } = true;
+
+        /// <summary>
+        /// v2.1 T1: Telemetry logger for structured event recording.
+        /// Null when telemetry is disabled or not yet wired.
+        /// </summary>
+        public Logging.TelemetryLogger TelemetryLogger { get; set; }
     }
 }

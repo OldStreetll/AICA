@@ -17,6 +17,12 @@ namespace AICA.Core.Tools
         private string _lastMatchLevel;
         private readonly EditPipeline _pipeline;
 
+        /// <summary>
+        /// Optional TelemetryLogger for pipeline step telemetry (v2.1 telemetry补線).
+        /// Set externally after construction (e.g. during tool registration).
+        /// </summary>
+        public Logging.TelemetryLogger TelemetryLogger { get; set; }
+
         public EditFileTool()
         {
             _pipeline = new EditPipeline();
@@ -333,7 +339,8 @@ namespace AICA.Core.Tools
                         AgentContext = context,
                         InitialResult = editResult,
                         EditMode = EditMode.Single,
-                        IsLastFileInBatch = true
+                        IsLastFileInBatch = true,
+                        TelemetryLogger = TelemetryLogger
                     };
                     return await _pipeline.ExecutePostEditAsync(singleCtx, editResult, ct);
                 }
@@ -581,7 +588,8 @@ namespace AICA.Core.Tools
                 AgentContext = context,
                 InitialResult = editResult,
                 EditMode = EditMode.MultiEdit,
-                IsLastFileInBatch = true
+                IsLastFileInBatch = true,
+                TelemetryLogger = TelemetryLogger
             };
             editResult = await _pipeline.ExecutePostEditAsync(multiCtx, editResult, ct);
             return new MultiEditResult { Outcome = MultiEditOutcome.Applied, ToolResult = editResult };
