@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AICA.Core.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace AICA.Core.Agent.Middleware
@@ -27,11 +28,18 @@ namespace AICA.Core.Agent.Middleware
     {
         private readonly ILogger<MonitoringMiddleware> _logger;
         private readonly ConcurrentBag<ToolExecutionMetrics> _metrics;
+        private readonly TelemetryLogger _telemetryLogger;
+        private readonly string _sessionId;
 
-        public MonitoringMiddleware(ILogger<MonitoringMiddleware> logger = null)
+        public MonitoringMiddleware(
+            ILogger<MonitoringMiddleware> logger = null,
+            TelemetryLogger telemetryLogger = null,
+            string sessionId = null)
         {
             _logger = logger;
             _metrics = new ConcurrentBag<ToolExecutionMetrics>();
+            _telemetryLogger = telemetryLogger;
+            _sessionId = sessionId ?? Guid.NewGuid().ToString("N").Substring(0, 12);
         }
 
         public async Task<ToolResult> ProcessAsync(ToolExecutionContext context, CancellationToken ct)
@@ -58,6 +66,7 @@ namespace AICA.Core.Agent.Middleware
                 };
 
                 _metrics.Add(metrics);
+                PersistToTelemetry(metrics);
 
                 _logger?.LogDebug(
                     "Tool metrics recorded: {ToolName} (Success: {Success}, Elapsed: {ElapsedMs}ms)",
@@ -78,6 +87,7 @@ namespace AICA.Core.Agent.Middleware
                 };
 
                 _metrics.Add(metrics);
+                PersistToTelemetry(metrics);
                 throw;
             }
             catch (Exception ex)
@@ -93,7 +103,31 @@ namespace AICA.Core.Agent.Middleware
                 };
 
                 _metrics.Add(metrics);
+                PersistToTelemetry(metrics);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Persist a metric to TelemetryLogger (JSONL) if available.
+        /// Failures are silently ignored — telemetry must not break tool execution.
+        /// </summary>
+        private void PersistToTelemetry(ToolExecutionMetrics metrics)
+        {
+            try
+            {
+                _telemetryLogger?.LogToolExecution(
+                    _sessionId,
+                    metrics.ToolName,
+                    metrics.ElapsedMilliseconds,
+                    metrics.Success,
+                    metrics.ErrorMessage != null
+                        ? new Dictionary<string, object> { ["error"] = metrics.ErrorMessage }
+                        : null);
+            }
+            catch
+            {
+                // Telemetry failures must never propagate
             }
         }
 

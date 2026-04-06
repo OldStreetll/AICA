@@ -24,6 +24,7 @@ namespace AICA.Core.Config
         public CondenseConfig Condense { get; set; } = new CondenseConfig();
         public ToolConfig Tools { get; set; } = new ToolConfig();
         public TelemetryConfig Telemetry { get; set; } = new TelemetryConfig();
+        public FeaturesConfig Features { get; set; } = new FeaturesConfig();
     }
 
     public class AgentConfig
