@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Tools.Pipeline;
 
 namespace AICA.Core.Tools
 {
@@ -14,6 +15,13 @@ namespace AICA.Core.Tools
     public class EditFileTool : IAgentTool
     {
         private string _lastMatchLevel;
+        private readonly EditPipeline _pipeline;
+
+        public EditFileTool()
+        {
+            _pipeline = new EditPipeline();
+            _pipeline.Register(new DiagnosticsStep());
+        }
 
         public string Name => "edit";
         public string Description =>
@@ -316,8 +324,18 @@ namespace AICA.Core.Tools
                     var editResult = ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
                     if (!string.IsNullOrEmpty(_lastMatchLevel))
                         editResult.Metadata = new Dictionary<string, string> { ["fuzzy_match_level"] = _lastMatchLevel };
-                    // v2.3: Append diagnostics after successful edit
-                    return await AppendDiagnosticsAsync(editResult, path, context, ct);
+                    // v2.1: Run PostEdit pipeline (DiagnosticsStep etc.)
+                    var singleCtx = new EditContext
+                    {
+                        FilePath = path,
+                        OriginalContent = content,
+                        NewContent = newContent,
+                        AgentContext = context,
+                        InitialResult = editResult,
+                        EditMode = EditMode.Single,
+                        IsLastFileInBatch = true
+                    };
+                    return await _pipeline.ExecutePostEditAsync(singleCtx, editResult, ct);
                 }
             }
             catch (ToolParameterException ex)
@@ -392,37 +410,6 @@ namespace AICA.Core.Tools
         {
             public MultiEditOutcome Outcome { get; set; }
             public ToolResult ToolResult { get; set; }
-        }
-
-        /// <summary>
-        /// v2.3: Append IDE diagnostics to a successful edit result.
-        /// Non-fatal — if diagnostics retrieval fails, the original result is returned unchanged.
-        /// </summary>
-        private static async Task<ToolResult> AppendDiagnosticsAsync(
-            ToolResult result, string filePath, IAgentContext context, CancellationToken ct)
-        {
-            if (!result.Success)
-                return result;
-
-            try
-            {
-                var diagnostics = await context.GetDiagnosticsAsync(filePath, ct);
-                if (diagnostics != null && diagnostics.Count > 0)
-                {
-                    var formatted = string.Join("\n", diagnostics.Select(d =>
-                        $"  Line {d.Line}, Col {d.Column}: [{d.Severity}] {d.Message}" +
-                        (string.IsNullOrEmpty(d.Code) ? "" : $" ({d.Code})")));
-                    result.Content += $"\n\n⚠️ DIAGNOSTICS ({diagnostics.Count} issue(s) detected after edit):\n{formatted}\n" +
-                                      "Fix these issues before proceeding.";
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch
-            {
-                // Non-fatal: diagnostics unavailable, return original result
-            }
-
-            return result;
         }
 
         private static List<EditEntry> ParseEditsFromDicts(List<Dictionary<string, object>> dicts)
@@ -585,8 +572,18 @@ namespace AICA.Core.Tools
                 ["edit_mode"] = "multi_edit",
                 ["edit_count"] = edits.Count.ToString()
             };
-            // v2.3: Append diagnostics after successful multi-edit
-            editResult = await AppendDiagnosticsAsync(editResult, path, context, ct);
+            // v2.1: Run PostEdit pipeline (DiagnosticsStep etc.)
+            var multiCtx = new EditContext
+            {
+                FilePath = path,
+                OriginalContent = content,
+                NewContent = newContent,
+                AgentContext = context,
+                InitialResult = editResult,
+                EditMode = EditMode.MultiEdit,
+                IsLastFileInBatch = true
+            };
+            editResult = await _pipeline.ExecutePostEditAsync(multiCtx, editResult, ct);
             return new MultiEditResult { Outcome = MultiEditOutcome.Applied, ToolResult = editResult };
         }
 

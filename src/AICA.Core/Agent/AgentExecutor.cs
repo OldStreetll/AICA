@@ -24,6 +24,7 @@ namespace AICA.Core.Agent
         private readonly ILLMClient _llmClient;
         private readonly ToolDispatcher _toolDispatcher;
         private readonly ILogger<AgentExecutor> _logger;
+        private readonly Logging.TelemetryLogger _telemetryLogger;
         private readonly int _maxIterations;
         private readonly int _maxTokenBudget;
         private readonly string _customInstructions;
@@ -43,6 +44,7 @@ namespace AICA.Core.Agent
             ILLMClient llmClient,
             ToolDispatcher toolDispatcher,
             ILogger<AgentExecutor> logger = null,
+            Logging.TelemetryLogger telemetryLogger = null,
             int maxIterations = 50,
             int maxTokenBudget = 32000,
             string customInstructions = null,
@@ -51,6 +53,7 @@ namespace AICA.Core.Agent
             _llmClient = llmClient ?? throw new ArgumentNullException(nameof(llmClient));
             _toolDispatcher = toolDispatcher ?? throw new ArgumentNullException(nameof(toolDispatcher));
             _logger = logger;
+            _telemetryLogger = telemetryLogger;
             _maxIterations = maxIterations;
             _maxTokenBudget = maxTokenBudget;
             _customInstructions = customInstructions;
@@ -164,13 +167,36 @@ namespace AICA.Core.Agent
                         $"[AICA] Max-steps message injected ({_taskState.Iteration}/{_maxIterations})");
                 }
 
-                // ── Auto-condense based on estimated token usage (OpenCode-inspired) ──
-                // Trigger when accumulated tokens reach 70% of conversation budget,
-                // with re-condense gap protection to avoid excessive condensation.
+                // ── v2.1 M1: Prune before condense (cheap before expensive) ──
                 var estimatedTokens = history.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
                 var condenseThreshold = (int)(conversationBudget * 0.70);
                 var reCondenseGap = TokenBudgetManager.ComputeReCondenseGap(_maxTokenBudget);
-                if (_taskState.CanCondenseAgain(history.Count, reCondenseGap)
+                bool compactionAvoided = false;
+
+                if (Config.AicaConfig.Current.Features.PruneBeforeCompaction
+                    && estimatedTokens >= condenseThreshold
+                    && history.Count >= 6)
+                {
+                    var tokensBefore = estimatedTokens;
+                    PruneOldToolOutputs(history, protectRecentTurns: 2, protectTokens: 40000, minPruneTokens: 20000);
+                    estimatedTokens = history.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                    var pruneTokensFreed = tokensBefore - estimatedTokens;
+                    compactionAvoided = estimatedTokens < condenseThreshold;
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA] Pre-condense prune: freed ~{pruneTokensFreed} tokens, compaction {(compactionAvoided ? "avoided" : "still needed")}");
+                    _telemetryLogger?.LogEvent(_taskState.CurrentPhase ?? "agent", "prune_before_compaction",
+                        new Dictionary<string, object>
+                        {
+                            ["prune_tokens_freed"] = pruneTokensFreed,
+                            ["compaction_avoided"] = compactionAvoided
+                        });
+                }
+
+                // ── Auto-condense based on estimated token usage (OpenCode-inspired) ──
+                // Trigger when accumulated tokens reach 70% of conversation budget,
+                // with re-condense gap protection to avoid excessive condensation.
+                if (!compactionAvoided
+                    && _taskState.CanCondenseAgain(history.Count, reCondenseGap)
                     && estimatedTokens >= condenseThreshold
                     && history.Count >= 6) // minimum message count safety floor
                 {
@@ -187,6 +213,28 @@ namespace AICA.Core.Agent
                     telemetryBuilder.RecordCondenseEvent(msgBefore, history.Count, Context.ContextManager.EstimateTokens(summary), "proactive");
                     System.Diagnostics.Debug.WriteLine(
                         $"[AICA] LLM-based condense #{_taskState.CondenseCount} complete, messages {msgBefore} → {history.Count}");
+
+                    // v2.1 M1: Context Reset — if condense still over threshold OR consecutive doom loops
+                    var postCondenseTokens = history.Sum(m => Context.ContextManager.EstimateTokens(m.Content));
+                    if (postCondenseTokens >= condenseThreshold || _taskState.ConsecutiveDoomLoopCount >= 3)
+                    {
+                        var resetReason = postCondenseTokens >= condenseThreshold
+                            ? $"post-condense still over threshold ({postCondenseTokens}/{condenseThreshold})"
+                            : $"consecutive doom loops ({_taskState.ConsecutiveDoomLoopCount})";
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Context reset triggered: {resetReason}");
+
+                        history = ConversationCompactor.ResetToClean(history, _taskState, planContext);
+                        executedToolSignatures.Clear();
+                        recentToolSignatures.Clear();
+
+                        _telemetryLogger?.LogEvent(_taskState.CurrentPhase ?? "agent", "context_reset",
+                            new Dictionary<string, object>
+                            {
+                                ["reason"] = resetReason,
+                                ["reset_count"] = _taskState.ResetCount,
+                                ["iteration"] = _taskState.Iteration
+                            });
+                    }
                 }
 
                 // ── Call LLM with retry ──
@@ -302,8 +350,10 @@ namespace AICA.Core.Agent
                         var tail = recentToolSignatures.Skip(recentToolSignatures.Count - DoomLoopThreshold).ToList();
                         if (tail.Distinct().Count() == 1)
                         {
+                            _taskState.ConsecutiveDoomLoopCount++;
                             System.Diagnostics.Debug.WriteLine(
-                                $"[AICA] Doom loop detected: {toolCall.Name} called {DoomLoopThreshold}x with identical args, asking user");
+                                $"[AICA] Doom loop detected: {toolCall.Name} called {DoomLoopThreshold}x with identical args, " +
+                                $"consecutive doom loops: {_taskState.ConsecutiveDoomLoopCount}, asking user");
                             // Instead of blocking, tell LLM to ask the user
                             var doomMsg = $"You have called {toolCall.Name} with identical arguments {DoomLoopThreshold} times. " +
                                           "You MUST call ask_followup_question to ask the user how to proceed. " +
@@ -314,6 +364,8 @@ namespace AICA.Core.Agent
                             continue;
                         }
                     }
+                    // v2.1 M1: Reset consecutive doom loop counter on non-doom tool execution
+                    _taskState.ConsecutiveDoomLoopCount = 0;
 
                     // Dedup detection
                     var toolSignature = ToolCallProcessor.GetToolCallSignature(toolCall);

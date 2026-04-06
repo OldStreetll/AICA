@@ -39,6 +39,10 @@ namespace AICA.Core.Agent
         // Context management — multi-condense support
         public int CondenseCount { get; set; }
         public int LastCondenseAtMessageCount { get; set; }
+        /// <summary>v2.1 M1: Number of context resets performed in this session.</summary>
+        public int ResetCount { get; set; }
+        /// <summary>v2.1 M1: Consecutive doom loop detections (reset to 0 on successful non-doom iteration).</summary>
+        public int ConsecutiveDoomLoopCount { get; set; }
 
         public bool CanCondenseAgain(int currentMessageCount, int reCondenseGap)
         {
