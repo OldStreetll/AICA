@@ -7,6 +7,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Config;
+using AICA.Core.Storage;
 
 namespace AICA.Core.Tools
 {
@@ -158,7 +160,28 @@ namespace AICA.Core.Tools
                     }
                 }
 
-                return Task.FromResult(ToolResult.Ok(sb.ToString()));
+                var output = sb.ToString();
+
+                // v2.1 H1: Truncation persistence
+                if (AicaConfig.Current.Features.TruncationPersistence)
+                {
+                    var tr = ToolOutputPersistenceManager.Instance.PersistAndTruncate(
+                        "glob", output, AicaConfig.Current.Truncation.DefaultPreviewChars);
+                    if (tr.WasTruncated)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] glob truncation persisted: {tr.FullOutputPath} ({output.Length} chars)");
+                        output = tr.PreviewText +
+                            $"\n\n[Full output saved to: {tr.FullOutputPath}]\n" +
+                            "Use read_file with the above path to see the complete output.";
+                    }
+                    else
+                    {
+                        output = tr.PreviewText;
+                    }
+                }
+
+                return Task.FromResult(ToolResult.Ok(output));
             }
             catch (ToolParameterException ex)
             {

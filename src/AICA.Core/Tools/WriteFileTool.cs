@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Config;
+using AICA.Core.Storage;
 
 namespace AICA.Core.Tools
 {
@@ -107,7 +109,7 @@ namespace AICA.Core.Tools
 
                     var lineCount = normalizedContent.Split('\n').Length;
                     var byteCount = System.Text.Encoding.UTF8.GetByteCount(normalizedContent);
-                    return ToolResult.Ok($"File overwritten: {path} ({lineCount} lines, {FormatSize(byteCount)})");
+                    return ToolResult.Ok(ApplyTruncationIfNeeded($"File overwritten: {path} ({lineCount} lines, {FormatSize(byteCount)})"));
                 }
                 else
                 {
@@ -130,7 +132,7 @@ namespace AICA.Core.Tools
 
                     var lineCount = normalizedContent.Split('\n').Length;
                     var byteCount = System.Text.Encoding.UTF8.GetByteCount(normalizedContent);
-                    return ToolResult.Ok($"File created: {path} ({lineCount} lines, {FormatSize(byteCount)})");
+                    return ToolResult.Ok(ApplyTruncationIfNeeded($"File created: {path} ({lineCount} lines, {FormatSize(byteCount)})"));
                 }
             }
             catch (ToolParameterException ex)
@@ -142,6 +144,27 @@ namespace AICA.Core.Tools
                 var error = ToolErrorHandler.ClassifyException(ex, "write_file");
                 return ToolErrorHandler.HandleError(error);
             }
+        }
+
+        /// <summary>
+        /// v2.1 H1: Apply truncation persistence if output exceeds limit.
+        /// </summary>
+        private string ApplyTruncationIfNeeded(string output)
+        {
+            if (!AicaConfig.Current.Features.TruncationPersistence)
+                return output;
+
+            var tr = ToolOutputPersistenceManager.Instance.PersistAndTruncate(
+                "write_file", output, AicaConfig.Current.Truncation.DefaultPreviewChars);
+            if (tr.WasTruncated)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA] write_file truncation persisted: {tr.FullOutputPath} ({output.Length} chars)");
+                return tr.PreviewText +
+                    $"\n\n[Full output saved to: {tr.FullOutputPath}]\n" +
+                    "Use read_file with the above path to see the complete output.";
+            }
+            return tr.PreviewText;
         }
 
         /// <summary>

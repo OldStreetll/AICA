@@ -9,6 +9,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Config;
+using AICA.Core.Storage;
 
 namespace AICA.Core.Tools
 {
@@ -300,6 +302,26 @@ namespace AICA.Core.Tools
 
                 var output = summary.ToString() + results.ToString();
                 output += $"\n[TOOL_EXACT_STATS: matches={totalMatches}, files_matched={filesMatched}, files_searched={filesSearched}]";
+
+                // v2.1 H1: Truncation persistence
+                if (AicaConfig.Current.Features.TruncationPersistence)
+                {
+                    var tr = ToolOutputPersistenceManager.Instance.PersistAndTruncate(
+                        "grep_search", output, AicaConfig.Current.Truncation.DefaultPreviewChars);
+                    if (tr.WasTruncated)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] grep_search truncation persisted: {tr.FullOutputPath} ({output.Length} chars)");
+                        output = tr.PreviewText +
+                            $"\n\n[Full output saved to: {tr.FullOutputPath}]\n" +
+                            "Use read_file with the above path to see the complete output.";
+                    }
+                    else
+                    {
+                        output = tr.PreviewText;
+                    }
+                }
+
                 return ToolResult.Ok(output);
             }, ct).ConfigureAwait(false);
         }
@@ -655,6 +677,26 @@ namespace AICA.Core.Tools
 
                 var output = summary.ToString() + results.ToString();
                 output += $"\n[TOOL_EXACT_STATS: matches={totalMatches}, files_matched={filesMatched}, engine=ripgrep]";
+
+                // v2.1 H1: Truncation persistence
+                if (AicaConfig.Current.Features.TruncationPersistence)
+                {
+                    var tr = ToolOutputPersistenceManager.Instance.PersistAndTruncate(
+                        "grep_search", output, AicaConfig.Current.Truncation.DefaultPreviewChars);
+                    if (tr.WasTruncated)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] grep_search truncation persisted: {tr.FullOutputPath} ({output.Length} chars)");
+                        output = tr.PreviewText +
+                            $"\n\n[Full output saved to: {tr.FullOutputPath}]\n" +
+                            "Use read_file with the above path to see the complete output.";
+                    }
+                    else
+                    {
+                        output = tr.PreviewText;
+                    }
+                }
+
                 return ToolResult.Ok(output);
             }
             catch (Exception ex)
