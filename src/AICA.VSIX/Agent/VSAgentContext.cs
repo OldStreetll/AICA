@@ -26,6 +26,11 @@ namespace AICA.Agent
         private SolutionSourceIndex _sourceIndex;
         private PathResolver _pathResolver;
 
+        // Encoding cache: preserves detected encoding between ReadFileAsync and WriteFileAsync/ShowDiffAndApplyAsync
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, AICA.Core.Utils.EncodingDetector.EncodingInfo>
+            _fileEncodings = new System.Collections.Concurrent.ConcurrentDictionary<string, AICA.Core.Utils.EncodingDetector.EncodingInfo>(
+                StringComparer.OrdinalIgnoreCase);
+
         public string WorkingDirectory { get; private set; }
 
         // H6: Track files edited during this session
@@ -408,7 +413,7 @@ namespace AICA.Agent
             return _safetyGuard.CheckCommand(command);
         }
 
-        public async Task<string> ReadFileAsync(string path, CancellationToken ct = default)
+        public Task<string> ReadFileAsync(string path, CancellationToken ct = default)
         {
             // Try PathResolver first (covers source roots), fallback to GetFullPath
             var fullPath = ResolveFilePath(path) ?? GetFullPath(path);
@@ -416,10 +421,14 @@ namespace AICA.Agent
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException($"File not found: {path}", fullPath);
 
-            using (var reader = new StreamReader(fullPath))
-            {
-                return await reader.ReadToEndAsync();
-            }
+            string content;
+            AICA.Core.Utils.EncodingDetector.EncodingInfo encodingInfo;
+            AICA.Core.Utils.EncodingDetector.ReadWithEncoding(fullPath, out content, out encodingInfo);
+            _fileEncodings[fullPath] = encodingInfo;
+            System.Diagnostics.Debug.WriteLine(
+                string.Format("[AICA] ReadFile encoding: {0}, BOM: {1}, file: {2}",
+                    encodingInfo.Encoding.EncodingName, encodingInfo.HasBom, fullPath));
+            return Task.FromResult(content);
         }
 
         public async Task WriteFileAsync(string path, string content, CancellationToken ct = default)
@@ -449,10 +458,22 @@ namespace AICA.Agent
                 Directory.CreateDirectory(dir);
             }
 
-            using (var writer = new StreamWriter(fullPath, false))
+            AICA.Core.Utils.EncodingDetector.EncodingInfo encodingInfo;
+            if (!_fileEncodings.TryGetValue(fullPath, out encodingInfo))
+                encodingInfo = new AICA.Core.Utils.EncodingDetector.EncodingInfo
+                {
+                    Encoding = System.Text.Encoding.UTF8,
+                    HasBom = false
+                };
+
+            var writeEncoding = encodingInfo.GetWriteEncoding();
+            using (var writer = new StreamWriter(fullPath, false, writeEncoding))
             {
                 await writer.WriteAsync(content);
             }
+            System.Diagnostics.Debug.WriteLine(
+                string.Format("[AICA] WriteFile encoding: {0}, BOM: {1}, file: {2}",
+                    writeEncoding.EncodingName, encodingInfo.HasBom, fullPath));
         }
 
         /// <summary>
@@ -643,10 +664,15 @@ namespace AICA.Agent
 
             try
             {
-                File.WriteAllText(tempFile, newContent);
+                // Resolve file encoding for consistent read/write (GBK, UTF-8 BOM, etc.)
+                AICA.Core.Utils.EncodingDetector.EncodingInfo encInfo;
+                _fileEncodings.TryGetValue(fullPath, out encInfo);
+                var writeEnc = encInfo != null ? encInfo.GetWriteEncoding() : System.Text.Encoding.UTF8;
+
+                File.WriteAllText(tempFile, newContent, writeEnc);
                 System.Diagnostics.Debug.WriteLine($"[AICA] Created temp file: {tempFile}");
 
-                File.WriteAllText(backupFile, originalContent);
+                File.WriteAllText(backupFile, originalContent, writeEnc);
 
                 // Use VS diff command to show the comparison
                 if (_dte != null)
@@ -696,10 +722,10 @@ namespace AICA.Agent
                 }
 
                 // Read the content from the temp file (user may have edited it in the diff view)
-                var finalContent = File.ReadAllText(tempFile);
+                var finalContent = File.ReadAllText(tempFile, writeEnc);
 
                 // Apply the changes to the original file
-                File.WriteAllText(fullPath, finalContent);
+                File.WriteAllText(fullPath, finalContent, writeEnc);
                 System.Diagnostics.Debug.WriteLine($"[AICA] Changes applied to file");
 
                 // Open the file in VS editor so user can see the result
