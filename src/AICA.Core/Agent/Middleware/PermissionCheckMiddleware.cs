@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using AICA.Core.Config;
+using AICA.Core.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace AICA.Core.Agent.Middleware
@@ -12,13 +15,19 @@ namespace AICA.Core.Agent.Middleware
     {
         private readonly IPermissionHandler _permissionHandler;
         private readonly ILogger<PermissionCheckMiddleware> _logger;
+        private readonly TelemetryLogger _telemetryLogger;
+        private readonly string _sessionId;
 
         public PermissionCheckMiddleware(
             IPermissionHandler permissionHandler,
-            ILogger<PermissionCheckMiddleware> logger = null)
+            ILogger<PermissionCheckMiddleware> logger = null,
+            TelemetryLogger telemetryLogger = null,
+            string sessionId = null)
         {
             _permissionHandler = permissionHandler ?? throw new ArgumentNullException(nameof(permissionHandler));
             _logger = logger;
+            _telemetryLogger = telemetryLogger;
+            _sessionId = sessionId;
         }
 
         public async Task<ToolResult> ProcessAsync(ToolExecutionContext context, CancellationToken ct)
@@ -46,7 +55,7 @@ namespace AICA.Core.Agent.Middleware
                     if (!approved)
                     {
                         _logger?.LogWarning("Tool {ToolName} execution denied by user", toolName);
-                        return ToolResult.Fail($"Tool execution denied: {toolName}");
+                        return await BuildDenialResultAsync(toolName, context, ct).ConfigureAwait(false);
                     }
                 }
 
@@ -64,7 +73,7 @@ namespace AICA.Core.Agent.Middleware
                     if (!confirmed)
                     {
                         _logger?.LogWarning("Tool {ToolName} execution not confirmed by user", toolName);
-                        return ToolResult.Fail($"Tool execution not confirmed: {toolName}");
+                        return await BuildDenialResultAsync(toolName, context, ct).ConfigureAwait(false);
                     }
                 }
 
@@ -82,6 +91,46 @@ namespace AICA.Core.Agent.Middleware
             {
                 _logger?.LogError(ex, "Permission check failed for tool: {ToolName}", toolName);
                 return ToolResult.Fail($"Permission check failed: {ex.Message}");
+            }
+        }
+
+        private async Task<ToolResult> BuildDenialResultAsync(
+            string toolName, ToolExecutionContext context, CancellationToken ct)
+        {
+            if (AicaConfig.Current.Features.PermissionFeedback && context.UIContext != null)
+            {
+                try
+                {
+                    var feedback = await context.UIContext.RequestDenialFeedbackAsync(
+                        toolName, toolName, ct).ConfigureAwait(false);
+
+                    if (!string.IsNullOrEmpty(feedback))
+                    {
+                        feedback = feedback.Substring(0, Math.Min(feedback.Length, 500));
+                        LogPermissionDenied(true);
+                        return ToolResult.SecurityDenied(
+                            $"Permission denied. User feedback: {feedback}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to collect denial feedback for tool: {ToolName}", toolName);
+                }
+            }
+
+            LogPermissionDenied(false);
+            return ToolResult.SecurityDenied($"Tool execution denied: {toolName}");
+        }
+
+        private void LogPermissionDenied(bool withFeedback)
+        {
+            if (_telemetryLogger != null)
+            {
+                _telemetryLogger.LogEvent(_sessionId, "permission_denied_with_feedback",
+                    new Dictionary<string, object>
+                    {
+                        { "with_feedback", withFeedback }
+                    });
             }
         }
     }

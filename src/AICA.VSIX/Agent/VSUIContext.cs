@@ -155,6 +155,39 @@ namespace AICA.Agent
             return $"Lines: {originalLines} → {modifiedLines} ({diffText})\n\nApply these changes?";
         }
 
+        public async Task<string> RequestDenialFeedbackAsync(
+            string toolName, string operationDescription, CancellationToken ct = default)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+            try
+            {
+                var options = new List<QuestionOption>
+                {
+                    new QuestionOption { Label = "跳过", Value = "" }
+                };
+
+                var dialog = new FollowupQuestionDialog(
+                    $"您拒绝了 {toolName} 的执行。如有原因可在此说明，AI 将据此调整策略：",
+                    options,
+                    allowCustomInput: true);
+                dialog.Title = "工具调用被拒绝 - 可选反馈";
+
+                var result = dialog.ShowDialog();
+                if (result == true && dialog.Result != null && !string.IsNullOrEmpty(dialog.Result.Answer))
+                {
+                    return dialog.Result.Answer;
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] Error showing denial feedback dialog: {ex}");
+                return null;
+            }
+        }
+
         public async Task<FollowupQuestionResult> ShowFollowupQuestionAsync(
             string question,
             List<QuestionOption> options,

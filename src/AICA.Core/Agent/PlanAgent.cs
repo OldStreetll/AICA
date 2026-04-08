@@ -41,6 +41,8 @@ namespace AICA.Core.Agent
             => Task.FromResult(DiffPreviewResult.Approved(newContent));
         public Task<FollowupQuestionResult> ShowFollowupQuestionAsync(string question, System.Collections.Generic.List<QuestionOption> options, bool allowCustomInput = false, CancellationToken ct = default)
             => Task.FromResult<FollowupQuestionResult>(null);
+        public Task<string> RequestDenialFeedbackAsync(string toolName, string operationDescription, CancellationToken ct)
+            => Task.FromResult<string>(null);
     }
 
     /// <summary>

@@ -91,5 +91,18 @@ namespace AICA.Core.Tests.Agent.Mocks
             var answer = options != null && options.Count > 0 ? options[0].Value : "yes";
             return Task.FromResult(new FollowupQuestionResult { Answer = answer });
         }
+
+        /// <summary>
+        /// Configurable denial feedback response. Default: null (skip).
+        /// </summary>
+        public string DenialFeedbackResponse { get; set; }
+
+        public Task<string> RequestDenialFeedbackAsync(
+            string toolName,
+            string operationDescription,
+            CancellationToken ct)
+        {
+            return Task.FromResult(DenialFeedbackResponse);
+        }
     }
 }

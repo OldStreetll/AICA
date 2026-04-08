@@ -550,12 +550,25 @@ namespace AICA.Core.Agent
             // This is what OpenCode does — inject resource content so the LLM knows how to use MCP tools
             await InjectMcpResources(builder, context, ct).ConfigureAwait(false);
 
-            // Load memory bank
+            // Load memory bank (v2.1 OH2: pass user query for relevance scoring)
             if (context?.WorkingDirectory != null)
             {
-                var memoryContent = await Storage.MemoryBank.LoadAsync(context.WorkingDirectory, ct).ConfigureAwait(false);
-                if (memoryContent != null)
-                    builder.AddMemoryContext(memoryContent);
+                var query = ExtractLatestUserMessage(previousMessages);
+                var memoryResult = await Storage.MemoryBank.LoadWithMetricsAsync(
+                    context.WorkingDirectory, query, ct).ConfigureAwait(false);
+                if (memoryResult.Content != null)
+                {
+                    builder.AddMemoryContext(memoryResult.Content);
+
+                    // v2.1 OH2: Formal telemetry for memory loading
+                    _telemetryLogger?.LogEvent(_taskState.CurrentPhase ?? "agent", "memory_loaded",
+                        new Dictionary<string, object>
+                        {
+                            { "memories_total", memoryResult.MemoriesTotal },
+                            { "memories_injected", memoryResult.MemoriesInjected },
+                            { "memory_tokens_used", memoryResult.MemoryTokensUsed }
+                        });
+                }
             }
 
             // Load resume context
@@ -619,6 +632,24 @@ namespace AICA.Core.Agent
             }
 
             return history;
+        }
+
+        /// <summary>
+        /// v2.1 OH2: Extract the latest user message text from conversation history.
+        /// Used as query for memory relevance scoring.
+        /// </summary>
+        private static string ExtractLatestUserMessage(List<LLM.ChatMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+                return null;
+
+            for (int i = messages.Count - 1; i >= 0; i--)
+            {
+                if (messages[i].Role == LLM.ChatRole.User && !string.IsNullOrEmpty(messages[i].Content))
+                    return messages[i].Content;
+            }
+
+            return null;
         }
 
         private struct LLMStreamResult

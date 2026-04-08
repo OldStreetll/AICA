@@ -52,6 +52,15 @@ namespace AICA.Core.Agent
             List<QuestionOption> options,
             bool allowCustomInput = false,
             CancellationToken ct = default);
+
+        /// <summary>
+        /// Request optional feedback from the user when a tool call is denied.
+        /// Returns the feedback text, or null/empty if the user skipped.
+        /// </summary>
+        Task<string> RequestDenialFeedbackAsync(
+            string toolName,
+            string operationDescription,
+            CancellationToken ct);
     }
 
     /// <summary>
