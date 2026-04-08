@@ -561,7 +561,7 @@ namespace AICA.Core.Agent
                     builder.AddMemoryContext(memoryResult.Content);
 
                     // v2.1 OH2: Formal telemetry for memory loading
-                    _telemetryLogger?.LogEvent(_taskState.CurrentPhase ?? "agent", "memory_loaded",
+                    _telemetryLogger?.LogEvent(_taskState != null ? _taskState.CurrentPhase ?? "agent" : "agent", "memory_loaded",
                         new Dictionary<string, object>
                         {
                             { "memories_total", memoryResult.MemoriesTotal },
