@@ -61,6 +61,19 @@ namespace AICA.Core.Storage
         /// <summary>Replace the singleton (for testing or to inject a TelemetryLogger).</summary>
         public static void SetInstance(ToolOutputPersistenceManager instance) => _instance = instance;
 
+        /// <summary>
+        /// Initialize the singleton with optional dependencies.
+        /// Must be called before first use of Instance if telemetry is desired.
+        /// If Instance was already lazily created, this replaces it.
+        /// </summary>
+        public static void Initialize(Logging.TelemetryLogger telemetryLogger = null)
+        {
+            lock (_instanceLock)
+            {
+                _instance = new ToolOutputPersistenceManager(telemetryLogger: telemetryLogger);
+            }
+        }
+
         /// <summary>Reset the singleton (for testing).</summary>
         public static void ResetInstance() => _instance = null;
 

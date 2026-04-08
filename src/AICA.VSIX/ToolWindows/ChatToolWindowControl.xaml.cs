@@ -38,6 +38,7 @@ namespace AICA.ToolWindows
         private bool _agentMode = true; // Default to Agent mode
         private AgentExecutor _agentExecutor;
         private ToolDispatcher _toolDispatcher;
+        private AICA.Core.Logging.TelemetryLogger _telemetryLogger;
         private VSAgentContext _agentContext;
         private VSUIContext _uiContext;
         private readonly ConversationStorage _conversationStorage = new ConversationStorage();
@@ -110,6 +111,10 @@ namespace AICA.ToolWindows
                 initManager.InitCompleted -= OnInitManagerCompleted;
             }
             InitOverlay.Unbind();
+
+            // Flush and dispose telemetry logger
+            _telemetryLogger?.Dispose();
+            _telemetryLogger = null;
         }
 
         private void OnSolutionOpened()
@@ -464,10 +469,19 @@ namespace AICA.ToolWindows
                 System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: tool registration failed (non-fatal): {ex.Message}");
             }
 
-            // H5: Register pre-validation middleware to catch obvious parameter errors
-            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PreValidationMiddleware());
+            // Create telemetry logger (reuse existing instance to avoid timer leaks on re-init)
+            if (_telemetryLogger == null)
+                _telemetryLogger = new AICA.Core.Logging.TelemetryLogger();
+            var sessionId = System.Guid.NewGuid().ToString("N").Substring(0, 8);
+            AICA.Core.Storage.ToolOutputPersistenceManager.Initialize(_telemetryLogger);
 
-            // H1: Register post-edit verification middleware
+            // Register middleware — execution order: PreValidation → Monitoring → Permission → Verification → [Core]
+            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PreValidationMiddleware());
+            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.MonitoringMiddleware(
+                telemetryLogger: _telemetryLogger, sessionId: sessionId));
+            var permissionHandler = new AICA.Agent.VSPermissionHandler();
+            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PermissionCheckMiddleware(
+                permissionHandler, telemetryLogger: _telemetryLogger, sessionId: sessionId));
             _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.VerificationMiddleware());
 
             // Initialize LLM client
@@ -585,7 +599,8 @@ namespace AICA.ToolWindows
                 _toolDispatcher,
                 maxIterations: options.MaxAgentIterations,
                 maxTokenBudget: tokenBudget,
-                customInstructions: options.CustomInstructions);
+                customInstructions: options.CustomInstructions,
+                telemetryLogger: _telemetryLogger);
         }
 
         /// <summary>

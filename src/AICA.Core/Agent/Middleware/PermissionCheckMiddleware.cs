@@ -59,23 +59,9 @@ namespace AICA.Core.Agent.Middleware
                     }
                 }
 
-                // Check if tool requires confirmation
-                if (context.Metadata?.RequiresConfirmation ?? false)
-                {
-                    _logger?.LogDebug("Tool {ToolName} requires confirmation", toolName);
-
-                    var confirmed = await _permissionHandler.RequestConfirmationAsync(
-                        context.Tool,
-                        context.Call,
-                        context.UIContext,
-                        ct).ConfigureAwait(false);
-
-                    if (!confirmed)
-                    {
-                        _logger?.LogWarning("Tool {ToolName} execution not confirmed by user", toolName);
-                        return await BuildDenialResultAsync(toolName, context, ct).ConfigureAwait(false);
-                    }
-                }
+                // RequiresConfirmation is handled by each tool internally with specialized UI
+                // (diff preview, command preview, etc.). Middleware only handles RequiresApproval
+                // to avoid double-confirmation.
 
                 _logger?.LogDebug("Permissions granted for tool: {ToolName}", toolName);
 

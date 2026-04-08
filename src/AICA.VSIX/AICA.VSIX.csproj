@@ -58,6 +58,7 @@
     <Compile Include="Options\SecurityOptions.cs" />
     <Compile Include="Agent\VSAgentContext.cs" />
     <Compile Include="Agent\VSUIContext.cs" />
+    <Compile Include="Agent\VSPermissionHandler.cs" />
     <Compile Include="Dialogs\FollowupQuestionDialog.xaml.cs">
       <DependentUpon>FollowupQuestionDialog.xaml</DependentUpon>
     </Compile>
