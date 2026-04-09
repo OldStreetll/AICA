@@ -48,6 +48,9 @@ namespace AICA.Core.Config
         public int CommandDefaultTimeoutSeconds { get; set; } = 30;
         public int GitNexusStartTimeoutMs { get; set; } = 15000;
 
+        /// <summary>Timeout in milliseconds for GitNexus npm install (first-time only). Default: 5 minutes.</summary>
+        public int NpmInstallTimeoutMs { get; set; } = 300000;
+
         public List<string> ExcludeDirectories { get; set; } = new List<string>
         {
             ".git", ".vs", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults",

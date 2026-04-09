@@ -52,12 +52,15 @@ cd AICA
 | Phase 1 R2 | SK Skills系统（Rule扩展+SkillTool+被动注入+4模板） | ✅ |
 | Telemetry补线 | 全链路JSONL持久化 + telemetry-analysis.ps1 | ✅ |
 | Phase 2 R1 | H1截断持久化Pilot（ReadFile+RunCommand）+ S3头文件同步 | ✅ |
+| Phase 2 R2 | H1截断持久化批量接入 + MCP-A冗余清理 | ✅ `2194697` |
+| Phase 3 | OH2 结构化记忆升级 + H3a 权限反馈注入 | ✅ `e7e1b2f` |
+| Bug fix | TelemetryLogger注入 + 中间件注册 + PermissionCheck修正 | ✅ `9ad9a1c` |
+| Bug fix | 文件编码检测与保留（修复中文乱码） | ✅ `98b7f96` |
+| Bug fix | 修复_taskState null NullReferenceException | ✅ `6a9ae71` |
 
 ### 待完成
 
 ```
-Phase 2 R2  ⬜ H1 剩余5工具接入（GrepSearch/ListDir/Glob/Write/Edit截断逻辑）
-Phase 3     ⬜ OH2 结构化记忆升级 + H3a 权限反馈注入
 Phase 4     ⬜ H2 文件快照与回滚 + H3b 权限决策持久化
 Phase 5     ⬜ OH5 SubAgent泛化+ReviewAgent PoC + PA1 PlanAgent优化 + S2 后台构建
 Phase 6     ⬜ OH3 Hooks钩子系统 + S1 符号检索增强
@@ -67,7 +70,7 @@ Phase 7     ⬜ S4 GitNexus主动触发
 
 ### 排期
 
-内部 26-28 周，对外 24-26 周。当前约在第 3-4 周位置。
+内部 26-28 周，对外 24-26 周。当前约在第 4-5 周位置。
 
 ## 第四步：关键文档
 

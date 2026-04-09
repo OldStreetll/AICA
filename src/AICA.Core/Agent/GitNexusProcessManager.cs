@@ -72,7 +72,7 @@ namespace AICA.Core.Agent
                         {
                             var npmCmd = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "npm";
                             var npmArgs = Environment.OSVersion.Platform == PlatformID.Win32NT
-                                ? "/c npm install --omit=dev"
+                                ? "/c echo [AICA] 正在安装依赖，请勿点击此窗口，安装完成后将自动关闭。 && echo [AICA] 如果下方的旋转光标卡死不动，请直接重启VS后再打开AICA。 && echo. && npm install --omit=dev"
                                 : "install --omit=dev";
                             var npmPsi = new ProcessStartInfo
                             {
@@ -84,9 +84,10 @@ namespace AICA.Core.Agent
                                 RedirectStandardError = false,
                                 CreateNoWindow = false  // Visible console: let user see npm install progress
                             };
+                            var npmTimeoutMs = Config.AicaConfig.Current.Tools.NpmInstallTimeoutMs;
                             using (var npmProc = Process.Start(npmPsi))
                             {
-                                bool exited = npmProc.WaitForExit(120000);
+                                bool exited = npmProc.WaitForExit(npmTimeoutMs);
                                 if (exited)
                                 {
                                     System.Diagnostics.Debug.WriteLine(
@@ -95,8 +96,19 @@ namespace AICA.Core.Agent
                                 else
                                 {
                                     System.Diagnostics.Debug.WriteLine(
-                                        "[AICA] GitNexus: npm install timed out (120s), killing process");
+                                        $"[AICA] GitNexus: npm install timed out ({npmTimeoutMs / 1000}s), killing process");
                                     try { npmProc.Kill(); } catch { }
+                                    // Clean up incomplete node_modules to allow retry on next launch
+                                    try
+                                    {
+                                        if (Directory.Exists(nodeModulesDir))
+                                            Directory.Delete(nodeModulesDir, true);
+                                        System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: cleaned up incomplete node_modules after timeout");
+                                    }
+                                    catch (Exception cleanEx)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: failed to clean node_modules: {cleanEx.Message}");
+                                    }
                                 }
                             }
                         }
@@ -104,6 +116,17 @@ namespace AICA.Core.Agent
                         {
                             System.Diagnostics.Debug.WriteLine(
                                 $"[AICA] GitNexus: npm install failed: {ex.Message}");
+                            // Clean up incomplete node_modules to allow retry on next launch
+                            try
+                            {
+                                if (Directory.Exists(nodeModulesDir))
+                                    Directory.Delete(nodeModulesDir, true);
+                                System.Diagnostics.Debug.WriteLine("[AICA] GitNexus: cleaned up incomplete node_modules after exception");
+                            }
+                            catch (Exception cleanEx)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[AICA] GitNexus: failed to clean node_modules: {cleanEx.Message}");
+                            }
                         }
                     }
 
