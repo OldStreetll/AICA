@@ -55,6 +55,9 @@ namespace AICA.Core.Tools.Pipeline
         public async Task<ToolResult> ExecutePreEditAsync(EditContext ctx, CancellationToken ct)
         {
             var preSteps = GetStepsForPhase(EditPhase.PreEdit);
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA][H2-2] EditPipeline.ExecutePreEditAsync — PreEdit step count={preSteps.Count}, " +
+                $"steps=[{string.Join(", ", preSteps.Select(s => $"{s.Name}(Enabled={s.IsEnabled},Phase={s.Phase})"))}]");
 
             foreach (var step in preSteps)
             {
@@ -62,16 +65,23 @@ namespace AICA.Core.Tools.Pipeline
 
                 if (!step.IsEnabled)
                 {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA][H2-2] EditPipeline PreEdit — SKIP {step.Name} (IsEnabled=false)");
                     _logger?.LogDebug("EditPipeline: skipping disabled step {StepName}", step.Name);
                     continue;
                 }
 
                 if (!step.ShouldRun(ctx))
                 {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[AICA][H2-2] EditPipeline PreEdit — SKIP {step.Name} (ShouldRun=false) " +
+                        $"SessionId={ctx.SessionId ?? "NULL"}, FilePath={ctx.FilePath ?? "NULL"}");
                     _logger?.LogDebug("EditPipeline: step {StepName} skipped (ShouldRun=false)", step.Name);
                     continue;
                 }
 
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA][H2-2] EditPipeline PreEdit — EXECUTING {step.Name}");
                 try
                 {
                     _logger?.LogDebug("EditPipeline: executing PreEdit step {StepName}", step.Name);

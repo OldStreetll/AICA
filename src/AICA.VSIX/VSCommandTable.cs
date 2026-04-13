@@ -18,5 +18,7 @@ namespace AICA
         public const int GenerateTestCommand = 0x0103;
         public const int OpenChatWindowMenuCommand = 0x0104;
         public const int SendCodeToAicaCommand = 0x0105;
+        public const int ResetPermissionsCommand = 0x0106;
+        public const int RollbackEditStepCommand = 0x0107;
     }
 }

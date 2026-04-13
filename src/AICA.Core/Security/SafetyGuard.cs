@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using AICA.Core.Config;
 
 namespace AICA.Core.Security
 {
@@ -18,9 +19,26 @@ namespace AICA.Core.Security
         private readonly string _workingDirectory;
         private readonly HashSet<string> _sourceRoots;
         private readonly PermissionRuleEngine _ruleEngine;
+        private readonly PermissionDecisionStore _decisionStore;
+
+        /// <summary>
+        /// Tools that are never eligible for "always allow" persistent decisions.
+        /// RunCommand is entirely blocked; other dangerous tools can only persist "always deny".
+        /// This is the single source of truth — PermissionDecisionStore references it.
+        /// </summary>
+        public static readonly HashSet<string> DangerousTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "RunCommand"
+        };
 
         /// <summary>v2.3: Permission rule engine for glob+action+level checks</summary>
         public PermissionRuleEngine RuleEngine => _ruleEngine;
+
+        /// <summary>v2.1 H3b: Persistent permission decision store</summary>
+        public PermissionDecisionStore DecisionStore => _decisionStore;
+
+        /// <summary>Current working directory for this guard instance</summary>
+        public string WorkingDirectory => _workingDirectory;
 
         public SafetyGuard(SafetyGuardOptions options)
         {
@@ -48,6 +66,42 @@ namespace AICA.Core.Security
             _ignorePatterns = new List<Regex>();
 
             LoadIgnorePatterns(options?.AicaIgnorePath);
+
+            // v2.1 H3b: Load persistent permission decisions if feature enabled
+            if (Config.AicaConfig.Current.Features.PermissionPersistence)
+            {
+                _decisionStore = options?.DecisionStore ?? new PermissionDecisionStore();
+                _decisionStore.Load();
+                PermissionDecisionStore.Current = _decisionStore;
+            }
+        }
+
+        /// <summary>
+        /// v2.1 H3b: Check if a tool has a persistent "always allow" decision for the current project.
+        /// Returns true if allowed, false if denied, null if no decision stored.
+        /// Respects DangerousTools constraints.
+        /// </summary>
+        public bool? CheckPersistentDecision(string toolName)
+        {
+            if (_decisionStore == null || string.IsNullOrEmpty(toolName))
+                return null;
+
+            var decision = _decisionStore.Query(toolName, _workingDirectory);
+            if (decision == null)
+                return null;
+
+            if (string.Equals(decision, "allow", StringComparison.OrdinalIgnoreCase))
+            {
+                // Safety: DangerousTools can never have "always allow"
+                if (DangerousTools.Contains(toolName))
+                    return null;
+                return true;
+            }
+
+            if (string.Equals(decision, "deny", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return null;
         }
 
         private void LoadIgnorePatterns(string aicaIgnorePath)
@@ -298,6 +352,8 @@ namespace AICA.Core.Security
         public string AicaIgnorePath { get; set; }
         /// <summary>v2.3: Permission rules (glob + action + level)</summary>
         public List<PermissionRule> PermissionRules { get; set; }
+        /// <summary>v2.1 H3b: Pre-built decision store (for testing). If null, auto-created.</summary>
+        public PermissionDecisionStore DecisionStore { get; set; }
     }
 
     #region v2.3: Permission Rule System (glob + action + three-level control)

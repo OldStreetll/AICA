@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AICA.Core.Agent;
+using AICA.Core.Storage;
 using AICA.Core.Tools.Pipeline;
 
 namespace AICA.Core.Tools
@@ -16,6 +17,12 @@ namespace AICA.Core.Tools
     {
         private string _lastMatchLevel;
         private readonly EditPipeline _pipeline;
+        private int _currentTurnIndex = -1;
+        private int _stepCounter;  // 不再使用 Interlocked，全部在 lock 内操作
+        private readonly object _turnLock = new object();
+        private readonly Dictionary<int, List<int>> _turnStepMap
+            = new Dictionary<int, List<int>>();
+        private string _sessionId;
 
         /// <summary>
         /// Optional TelemetryLogger for pipeline step telemetry (v2.1 telemetry补線).
@@ -23,9 +30,102 @@ namespace AICA.Core.Tools
         /// </summary>
         public Logging.TelemetryLogger TelemetryLogger { get; set; }
 
+        /// <summary>
+        /// v2.1 H2-2: Session identifier for snapshot naming.
+        /// Set externally after construction (from VSIX session init).
+        /// Resets _stepCounter when session changes.
+        /// </summary>
+        public string SessionId
+        {
+            get => _sessionId;
+            set
+            {
+                lock (_turnLock)  // [F2] 全部状态变更在 lock 内
+                {
+                    if (_sessionId != value)
+                    {
+                        _sessionId = value;
+                        _stepCounter = 0;           // lock 内，无需 Interlocked
+                        _currentTurnIndex = -1;
+                        _turnStepMap.Clear();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 标记新一轮对话开始。由 VSIX 层在 ExecuteAgentModeAsync 入口调用。
+        /// 返回分配的 turnIndex。
+        /// </summary>
+        public int BeginTurn()
+        {
+            lock (_turnLock)
+            {
+                _currentTurnIndex++;
+                _turnStepMap[_currentTurnIndex] = new List<int>();
+                return _currentTurnIndex;
+            }
+        }
+
+        /// <summary>
+        /// 标记当前轮次结束。返回该轮产生的所有 stepIndex。
+        /// </summary>
+        public TurnStepMapping EndTurn()
+        {
+            lock (_turnLock)
+            {
+                if (_currentTurnIndex < 0)
+                    return TurnStepMapping.Empty;
+
+                var turnIndex = _currentTurnIndex;
+                _turnStepMap.TryGetValue(turnIndex, out var steps);
+                return new TurnStepMapping
+                {
+                    TurnIndex = turnIndex,
+                    StepIndices = steps?.ToArray() ?? Array.Empty<int>(),
+                    SessionId = SessionId
+                };
+            }
+        }
+
+        /// <summary>
+        /// 原子地分配 stepIndex 并注册到当前 turn。
+        /// 替代原有的 Interlocked.Increment + RegisterStepForCurrentTurn 两步操作。
+        /// 供 EditFileTool 内部和 WriteFileTool 共用。
+        /// [F1: D2 竞态修复] [F12: D9 命名统一]
+        /// </summary>
+        public int AllocateStepIndex()
+        {
+            lock (_turnLock)
+            {
+                var stepIndex = ++_stepCounter;  // lock 内无需 Interlocked
+                if (_currentTurnIndex >= 0
+                    && _turnStepMap.TryGetValue(_currentTurnIndex, out var list))
+                {
+                    list.Add(stepIndex);
+                }
+                return stepIndex;
+            }
+        }
+
+        /// <summary>
+        /// 会话加载后恢复 counter 状态，防止 stepIndex/turnIndex 与历史快照冲突。
+        /// [F3: D5 从 P2 提升至 P0]
+        /// </summary>
+        public void RestoreCounters(int lastTurnIndex, int lastStepIndex)
+        {
+            lock (_turnLock)
+            {
+                _currentTurnIndex = lastTurnIndex;
+                _stepCounter = lastStepIndex;
+                // 不恢复 _turnStepMap，历史映射从 ConversationMessage.StepIndices/TurnIndex 读取
+            }
+        }
+
         public EditFileTool()
         {
             _pipeline = new EditPipeline();
+            _pipeline.Register(new SnapshotStep());      // Order=100, PreEdit  — H2 文件快照
             _pipeline.Register(new HeaderSyncStep());    // Order=200, PostEdit — S3 头文件同步
             _pipeline.Register(new TruncationStep());    // Order=400, PostEdit — H1 截断持久化
             _pipeline.Register(new DiagnosticsStep());   // Order=900, PostEdit — 诊断信息
@@ -145,6 +245,8 @@ namespace AICA.Core.Tools
 
         public async Task<ToolResult> ExecuteAsync(ToolCall call, IAgentContext context, IUIContext uiContext, CancellationToken ct = default)
         {
+            System.Diagnostics.Debug.WriteLine(
+                $"[AICA] EditFileTool.ExecuteAsync ENTERED — SessionId={SessionId ?? "NULL"}");
             try
             {
                 // v2.3: Detect call mode (files → multi-file, edits → multi-edit, else → single edit)
@@ -290,8 +392,30 @@ namespace AICA.Core.Tools
                         newContent = newContent.Replace("\n", "\r\n");
                 }
 
-                // Show diff and let user apply changes
+                // v2.1 H2-2: Run PreEdit pipeline (SnapshotStep captures file before edit)
                 applyEdit:
+                var preStepIndex = AllocateStepIndex();  // [F1] 替代 Interlocked.Increment + RegisterStep
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA][H2-2] EditFileTool.Single PreEdit START — path={path}, SessionId={SessionId ?? "NULL"}, StepIndex={preStepIndex}");
+                var preCtx = new EditContext
+                {
+                    FilePath = path,
+                    OriginalContent = content,
+                    NewContent = newContent,
+                    AgentContext = context,
+                    EditMode = EditMode.Single,
+                    IsLastFileInBatch = true,
+                    TelemetryLogger = TelemetryLogger,
+                    SessionId = SessionId,
+                    StepIndex = preStepIndex
+                };
+                var preEditAbort = await _pipeline.ExecutePreEditAsync(preCtx, ct);
+                System.Diagnostics.Debug.WriteLine(
+                    $"[AICA][H2-2] EditFileTool.Single PreEdit END — abort={preEditAbort != null}");
+                if (preEditAbort != null)
+                    return preEditAbort;
+
+                // Show diff and let user apply changes
                 var result = await context.ShowDiffAndApplyAsync(path, content, newContent, ct);
 
                 if (!result.Applied)
@@ -332,7 +456,7 @@ namespace AICA.Core.Tools
                     var editResult = ToolResult.Ok($"File edited: {path} ({occurrences} replacement(s) made)");
                     if (!string.IsNullOrEmpty(_lastMatchLevel))
                         editResult.Metadata = new Dictionary<string, string> { ["fuzzy_match_level"] = _lastMatchLevel };
-                    // v2.1: Run PostEdit pipeline (DiagnosticsStep etc.)
+                    // v2.1: Run PostEdit pipeline (DiagnosticsStep etc.) — reuse preStepIndex
                     var singleCtx = new EditContext
                     {
                         FilePath = path,
@@ -342,7 +466,9 @@ namespace AICA.Core.Tools
                         InitialResult = editResult,
                         EditMode = EditMode.Single,
                         IsLastFileInBatch = true,
-                        TelemetryLogger = TelemetryLogger
+                        TelemetryLogger = TelemetryLogger,
+                        SessionId = SessionId,
+                        StepIndex = preStepIndex
                     };
                     return await _pipeline.ExecutePostEditAsync(singleCtx, editResult, ct);
                 }
@@ -460,7 +586,8 @@ namespace AICA.Core.Tools
         /// one diff preview for a single user confirmation.
         /// </summary>
         private async Task<MultiEditResult> ExecuteMultiEditAsync(
-            string path, List<EditEntry> edits, IAgentContext context, CancellationToken ct)
+            string path, List<EditEntry> edits, IAgentContext context, CancellationToken ct,
+            int? sharedStepIndex = null, bool isLastFileInBatch = true)
         {
             // 1. Validate
             if (edits.Count == 0)
@@ -534,7 +661,26 @@ namespace AICA.Core.Tools
             if (originalLineEnding == "\r\n")
                 newContent = newContent.Replace("\n", "\r\n");
 
-            // 7. Single diff confirmation
+            // 7a. v2.1 H2-2: Run PreEdit pipeline (SnapshotStep)
+            // Use shared stepIndex from MultiFile caller, or allocate own for standalone MultiEdit
+            var meStepIndex = sharedStepIndex ?? AllocateStepIndex();  // [F1] 仅独立调用时分配
+            var mePreCtx = new EditContext
+            {
+                FilePath = path,
+                OriginalContent = content,
+                NewContent = newContent,
+                AgentContext = context,
+                EditMode = sharedStepIndex.HasValue ? EditMode.MultiFile : EditMode.MultiEdit,
+                IsLastFileInBatch = isLastFileInBatch,
+                TelemetryLogger = TelemetryLogger,
+                SessionId = SessionId,
+                StepIndex = meStepIndex
+            };
+            var mePreAbort = await _pipeline.ExecutePreEditAsync(mePreCtx, ct);
+            if (mePreAbort != null)
+                return new MultiEditResult { Outcome = MultiEditOutcome.Failed, ToolResult = mePreAbort };
+
+            // 7b. Single diff confirmation
             var diffResult = await context.ShowDiffAndApplyAsync(path, content, newContent, ct);
             if (!diffResult.Applied)
             {
@@ -581,7 +727,7 @@ namespace AICA.Core.Tools
                 ["edit_mode"] = "multi_edit",
                 ["edit_count"] = edits.Count.ToString()
             };
-            // v2.1: Run PostEdit pipeline (DiagnosticsStep etc.)
+            // v2.1: Run PostEdit pipeline (DiagnosticsStep etc.) — reuse meStepIndex
             var multiCtx = new EditContext
             {
                 FilePath = path,
@@ -589,9 +735,11 @@ namespace AICA.Core.Tools
                 NewContent = newContent,
                 AgentContext = context,
                 InitialResult = editResult,
-                EditMode = EditMode.MultiEdit,
-                IsLastFileInBatch = true,
-                TelemetryLogger = TelemetryLogger
+                EditMode = sharedStepIndex.HasValue ? EditMode.MultiFile : EditMode.MultiEdit,
+                IsLastFileInBatch = isLastFileInBatch,
+                TelemetryLogger = TelemetryLogger,
+                SessionId = SessionId,
+                StepIndex = meStepIndex
             };
             editResult = await _pipeline.ExecutePostEditAsync(multiCtx, editResult, ct);
             return new MultiEditResult { Outcome = MultiEditOutcome.Applied, ToolResult = editResult };
@@ -614,9 +762,16 @@ namespace AICA.Core.Tools
             var results = new List<string>();
             int applied = 0, cancelled = 0, failed = 0;
 
-            foreach (var file in files)
+            // v2.1 H2-2: One ExecuteAsync call = one stepIndex for all files in the batch
+            var batchStepIndex = AllocateStepIndex();  // [F1] 替代 Interlocked.Increment + RegisterStep
+
+            for (int fi = 0; fi < files.Count; fi++)
             {
-                var mer = await ExecuteMultiEditAsync(file.FilePath, file.Edits, context, ct);
+                var file = files[fi];
+                bool isLast = (fi == files.Count - 1);
+                var mer = await ExecuteMultiEditAsync(
+                    file.FilePath, file.Edits, context, ct,
+                    sharedStepIndex: batchStepIndex, isLastFileInBatch: isLast);
                 switch (mer.Outcome)
                 {
                     case MultiEditOutcome.Applied:

@@ -16,6 +16,14 @@ namespace AICA.Core.Tools
     /// </summary>
     public class WriteFileTool : IAgentTool
     {
+        // Phase 4: 引用 EditFileTool 以共享 AllocateStepIndex + SessionId
+        private EditFileTool _editFileTool;
+
+        public void SetEditFileTool(EditFileTool editFileTool)
+        {
+            _editFileTool = editFileTool;
+        }
+
         public string Name => "write_file";
         public string Description =>
             "Create a new file with the provided content. Parent directories are created automatically. " +
@@ -97,6 +105,16 @@ namespace AICA.Core.Tools
 
                 if (fileExists)
                 {
+                    // Phase 4: 覆写前捕获快照
+                    if (_editFileTool != null
+                        && !string.IsNullOrEmpty(_editFileTool.SessionId))
+                    {
+                        var resolvedPath = ResolveFullPath(path, context);
+                        var stepIndex = _editFileTool.AllocateStepIndex();
+                        var captureResult = await SnapshotManager.Instance.CaptureAsync(
+                            _editFileTool.SessionId, stepIndex, resolvedPath);
+                    }
+
                     // Overwrite: show diff for user confirmation
                     var existingContent = await context.ReadFileAsync(path, ct);
                     var result = await context.ShowDiffAndApplyAsync(path, existingContent, normalizedContent, ct);
@@ -126,6 +144,14 @@ namespace AICA.Core.Tools
 
                     if (!result.Applied)
                         return ToolResult.Ok("File creation cancelled by user.");
+
+                    // Phase 4: 新建文件后记录标记快照，支持回滚时删除
+                    if (_editFileTool != null && !string.IsNullOrEmpty(_editFileTool.SessionId))
+                    {
+                        var stepIndex = _editFileTool.AllocateStepIndex();
+                        await SnapshotManager.Instance.CaptureAsync(
+                            _editFileTool.SessionId, stepIndex, resolvedPath, isNewFile: true);
+                    }
 
                     // v2.1 T6: Record new file for conflict detection
                     FileTimeTracker.Instance.RecordEdit(resolvedPath);

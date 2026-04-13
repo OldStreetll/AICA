@@ -19,6 +19,26 @@ namespace AICA.ToolWindows
         public List<ToolCallBlock> ToolCallBlocks { get; set; }
         /// <summary>v2.6: Serialized content parts JSON for multimodal messages (null for plain text).</summary>
         public string PartsJson { get; set; }
+
+        // ── Phase 4 新增 ──
+
+        /// <summary>
+        /// 本轮 AI 回复关联的所有 stepIndex（文件编辑/覆写操作）。
+        /// 仅 Role == "assistant" 的消息有值。空列表 = 本轮无文件操作。
+        /// </summary>
+        public List<int> StepIndices { get; set; } = new List<int>();
+
+        /// <summary>
+        /// 该消息所属的对话轮次编号。user/assistant 消息成对共享同一 TurnIndex。
+        /// 用于会话恢复时精确重建 turn→step 映射，不依赖位置推算。
+        /// </summary>
+        public int? TurnIndex { get; set; }
+
+        /// <summary>
+        /// 回滚状态。null=未回滚, "rolled_back"=已回滚, "partial"=部分回滚
+        /// 使用 string 而非 bool 以支持未来扩展。
+        /// </summary>
+        public string RollbackState { get; set; }
     }
 
     /// <summary>

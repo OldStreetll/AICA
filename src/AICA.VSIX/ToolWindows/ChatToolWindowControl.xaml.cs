@@ -1,4 +1,5 @@
 using Markdig;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
@@ -56,6 +57,11 @@ namespace AICA.ToolWindows
         private readonly string _highlightJs; // Highlight.js 10.7.3 minified source
         private readonly string _highlightCss; // VS2015 dark theme for Highlight.js
         private InitializationManager _initManager; // v2.11: initialization gate
+        private string _sessionId; // v2.1 H2-3: current session ID for snapshot rollback
+        private AICA.Core.Tools.EditFileTool _editFileTool; // Phase 4: retained for RestoreCounters on session load
+
+        /// <summary>Current session ID, accessible by rollback command.</summary>
+        public static string CurrentSessionId { get; private set; }
 
         public ChatToolWindowControl()
         {
@@ -318,28 +324,253 @@ namespace AICA.ToolWindows
 
         private void ChatBrowser_Navigating(object sender, System.Windows.Navigation.NavigatingCancelEventArgs e)
         {
-            // Intercept feedback navigation
-            if (e.Uri != null && e.Uri.Scheme == "aica" && e.Uri.Host == "feedback")
+            if (e.Uri != null && e.Uri.Scheme == "aica")
             {
-                e.Cancel = true; // Prevent actual navigation
+                e.Cancel = true;
 
-                try
+                if (e.Uri.Host == "feedback")
                 {
-                    // Parse query parameters
-                    var query = e.Uri.Query.TrimStart('?');
-                    var parameters = System.Web.HttpUtility.ParseQueryString(query);
-                    var messageIdStr = parameters["messageId"];
-                    var feedback = parameters["feedback"];
-
-                    if (int.TryParse(messageIdStr, out int messageId))
+                    try
                     {
-                        RecordFeedback(messageId, feedback);
+                        var query = e.Uri.Query.TrimStart('?');
+                        var parameters = System.Web.HttpUtility.ParseQueryString(query);
+                        var messageIdStr = parameters["messageId"];
+                        var feedback = parameters["feedback"];
+
+                        if (int.TryParse(messageIdStr, out int messageId))
+                        {
+                            RecordFeedback(messageId, feedback);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[AICA] Error handling feedback navigation: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
+                else if (e.Uri.Host == "rollback")
                 {
-                    System.Diagnostics.Debug.WriteLine($"[AICA] Error handling feedback navigation: {ex.Message}");
+                    var query = System.Web.HttpUtility.ParseQueryString(e.Uri.Query.TrimStart('?'));
+                    if (int.TryParse(query["msgIndex"], out int msgIndex))
+                    {
+                        ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                        {
+                            await HandleRollbackAsync(msgIndex);
+                        });
+                    }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Phase 4: 按消息索引执行回滚。msgIndex 为用户消息在 _conversation 中的索引。
+        /// </summary>
+        private async Task HandleRollbackAsync(int msgIndex)
+        {
+            try
+            {
+                // [F7] 并发保护：Agent 执行期间禁止回滚
+                if (_isSending)
+                {
+                    await VS.MessageBox.ShowWarningAsync(
+                        "AICA: Undo",
+                        "Cannot undo while AI is processing. Please wait or cancel first.");
+                    RenderConversation(preserveScroll: true);
+                    return;
+                }
+
+                // 1. [F15] 查找对应的 assistant 消息（向后搜索，不硬编码 +1）
+                ConversationMessage assistantMsg = null;
+                int assistantIndex = -1;
+                for (int k = msgIndex + 1; k < _conversation.Count; k++)
+                {
+                    var candidate = _conversation[k];
+                    if (candidate.Role == "user") break;
+                    if (candidate.Role == "assistant" && candidate.StepIndices?.Count > 0)
+                    {
+                        assistantMsg = candidate;
+                        assistantIndex = k;
+                        break;
+                    }
+                }
+                if (assistantMsg == null)
+                {
+                    RenderConversation(preserveScroll: true);
+                    return;
+                }
+
+                // 2. 禁止跳跃回滚检查（从 assistantIndex+1 开始，避免误判目标自身）
+                for (int i = assistantIndex + 1; i < _conversation.Count; i++)
+                {
+                    var laterMsg = _conversation[i];
+                    if (laterMsg.Role == "assistant"
+                        && laterMsg.StepIndices?.Count > 0
+                        && laterMsg.RollbackState == null)
+                    {
+                        await VS.MessageBox.ShowWarningAsync(
+                            "AICA: Undo",
+                            "Please undo later edit turns first before undoing this one.");
+                        RenderConversation(preserveScroll: true);
+                        return;
+                    }
+                }
+
+                // 3. 构建确认摘要
+                var snapshotMgr = SnapshotManager.Instance;
+                var allSnapshots = await snapshotMgr.GetSnapshotsAsync(CurrentSessionId);
+                var turnSnapshots = allSnapshots
+                    .Where(s => assistantMsg.StepIndices.Contains(s.StepIndex))
+                    .ToList();
+
+                if (turnSnapshots.Count == 0)
+                {
+                    await VS.MessageBox.ShowWarningAsync(
+                        "AICA: Undo", "Snapshots not found or expired for this turn.");
+                    RenderConversation(preserveScroll: true);
+                    return;
+                }
+
+                // [F4] 构建扁平映射：每个文件只取最早 stepIndex 的快照路径
+                var fileRestorePlan = turnSnapshots
+                    .GroupBy(s => s.OriginalFilePath, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderBy(s => s.StepIndex).First())
+                    .ToList();
+
+                var files = fileRestorePlan.Select(s => s.OriginalFilePath).ToList();
+                var editCount = turnSnapshots.Count;
+
+                // 检测文件是否在快照后被修改
+                var warnings = new List<string>();
+                int newFileCount = 0;
+                foreach (var snap in fileRestorePlan)
+                {
+                    if (snap.IsNewFile)
+                    {
+                        newFileCount++;
+                        if (File.Exists(snap.OriginalFilePath)
+                            && new FileInfo(snap.OriginalFilePath).LastWriteTimeUtc > snap.CreatedUtc)
+                            warnings.Add($"[NEW][MODIFIED] {Path.GetFileName(snap.OriginalFilePath)} — created by AI but modified after, will be deleted");
+                    }
+                    else if (!File.Exists(snap.OriginalFilePath))
+                        warnings.Add($"[DELETED] {Path.GetFileName(snap.OriginalFilePath)} — will be re-created");
+                    else if (new FileInfo(snap.OriginalFilePath).LastWriteTimeUtc > snap.CreatedUtc)
+                        warnings.Add($"[MODIFIED] {Path.GetFileName(snap.OriginalFilePath)} — changed after AI edit");
+                }
+
+                var confirmSb = new StringBuilder();
+                confirmSb.AppendLine("Undo edits from this conversation turn?\n");
+                confirmSb.AppendLine("Files affected:");
+                int shown = 0;
+                foreach (var snap in fileRestorePlan)
+                {
+                    if (shown >= 10) break;
+                    if (snap.IsNewFile)
+                        confirmSb.AppendLine($"  • [NEW] {Path.GetFileName(snap.OriginalFilePath)} — will be deleted");
+                    else
+                        confirmSb.AppendLine($"  • {Path.GetFileName(snap.OriginalFilePath)}");
+                    shown++;
+                }
+                if (files.Count > 10)
+                    confirmSb.AppendLine($"  ... and {files.Count - 10} more");
+                var totalLine = $"\nTotal: {editCount} edit(s) across {files.Count} file(s)";
+                if (newFileCount > 0)
+                    totalLine += $", {newFileCount} new file(s) will be deleted";
+                confirmSb.AppendLine(totalLine);
+
+                if (warnings.Count > 0)
+                {
+                    confirmSb.AppendLine("\nWarnings:");
+                    foreach (var w in warnings)
+                        confirmSb.AppendLine($"  {w}");
+                }
+                confirmSb.AppendLine("\nThis will overwrite current file contents. Git status not affected.");
+
+                // 4. 确认
+                var confirm = await VS.MessageBox.ShowAsync(
+                    "AICA: Confirm Undo",
+                    confirmSb.ToString(),
+                    OLEMSGICON.OLEMSGICON_WARNING,
+                    OLEMSGBUTTON.OLEMSGBUTTON_YESNO);
+
+                if (confirm != VSConstants.MessageBoxResult.IDYES)
+                {
+                    RenderConversation(preserveScroll: true);
+                    return;
+                }
+
+                // 5. [F4] 执行回滚 — 扁平映射 + 直接文件复制，不调用 RestoreAsync
+                bool allSuccess = true;
+                int restoredCount = 0;
+                var failedFiles = new List<string>();
+
+                int newFilesDeleted = 0;
+                foreach (var snap in fileRestorePlan.OrderByDescending(s => s.StepIndex))
+                {
+                    try
+                    {
+                        if (snap.IsNewFile)
+                        {
+                            // 新建文件回滚：删除文件
+                            if (File.Exists(snap.OriginalFilePath))
+                                File.Delete(snap.OriginalFilePath);
+                            newFilesDeleted++;
+                        }
+                        else
+                        {
+                            // 编辑/覆写回滚：恢复快照
+                            var dir = Path.GetDirectoryName(snap.OriginalFilePath);
+                            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                            File.Copy(snap.SnapshotFilePath, snap.OriginalFilePath, overwrite: true);
+                        }
+                        restoredCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        allSuccess = false;
+                        failedFiles.Add(snap.OriginalFilePath);
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[AICA] Rollback file {(snap.IsNewFile ? "delete" : "copy")} failed: {snap.OriginalFilePath} — {ex.Message}");
+                    }
+                }
+
+                // 6. [F17] 遥测日志
+                _telemetryLogger?.LogEvent(CurrentSessionId, "snapshot_restored_by_turn",
+                    new Dictionary<string, object>
+                    {
+                        ["step_indices"] = assistantMsg.StepIndices.ToList(),
+                        ["files_restored"] = restoredCount,
+                        ["files_failed"] = failedFiles.Count,
+                        ["new_files_deleted"] = newFilesDeleted,
+                        ["success"] = allSuccess
+                    });
+
+                // 7. [F5] 更新状态 + 重渲染
+                if (allSuccess)
+                {
+                    assistantMsg.RollbackState = "rolled_back";
+                    await VS.StatusBar.ShowMessageAsync(
+                        $"AICA: Undone {restoredCount} file(s) from this turn");
+                }
+                else
+                {
+                    assistantMsg.RollbackState = "partial";
+                    await VS.MessageBox.ShowWarningAsync(
+                        "AICA: Undo Partial",
+                        $"Restored {restoredCount} file(s), but failed on:\n"
+                        + string.Join("\n", failedFiles.Select(f => $"  • {Path.GetFileName(f)}")));
+                }
+
+                RenderConversation(preserveScroll: true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AICA] HandleRollbackAsync error: {ex}");
+                try
+                {
+                    RenderConversation(preserveScroll: true);
+                    await VS.MessageBox.ShowErrorAsync(
+                        "AICA: Undo", $"Unexpected error: {ex.Message}");
+                }
+                catch { }
             }
         }
 
@@ -410,14 +641,17 @@ namespace AICA.ToolWindows
             // Initialize tool dispatcher with available tools
             _toolDispatcher = new ToolDispatcher();
             _toolDispatcher.RegisterTool(new ReadFileTool());
-            _toolDispatcher.RegisterTool(new EditFileTool());
+            _editFileTool = new EditFileTool();
+            _toolDispatcher.RegisterTool(_editFileTool);
             _toolDispatcher.RegisterTool(new ListDirTool());
             _toolDispatcher.RegisterTool(new GrepSearchTool());
             _toolDispatcher.RegisterTool(new RunCommandTool());
 
             _toolDispatcher.RegisterTool(new AskFollowupQuestionTool());
             _toolDispatcher.RegisterTool(new ListProjectsTool());
-            _toolDispatcher.RegisterTool(new WriteFileTool());  // v2.1 T2: separated from edit full_replace
+            var writeFileTool = new WriteFileTool();
+            writeFileTool.SetEditFileTool(_editFileTool);  // Phase 4: 共享 AllocateStepIndex + SessionId
+            _toolDispatcher.RegisterTool(writeFileTool);
             _toolDispatcher.RegisterTool(new GlobTool());       // v2.1 T3: file pattern matching
             _toolDispatcher.RegisterTool(new ValidateFileTool()); // v2.3: LSP semantic validation
 
@@ -473,15 +707,25 @@ namespace AICA.ToolWindows
             if (_telemetryLogger == null)
                 _telemetryLogger = new AICA.Core.Logging.TelemetryLogger();
             var sessionId = System.Guid.NewGuid().ToString("N").Substring(0, 8);
+            _sessionId = sessionId;
+            CurrentSessionId = sessionId;
             AICA.Core.Storage.ToolOutputPersistenceManager.Initialize(_telemetryLogger);
+            AICA.Core.Storage.SnapshotManager.Initialize(_telemetryLogger);
+            // Phase 4 T10: subscribe to cleanup event to invalidate snapshot cache
+            SnapshotManager.Instance.SnapshotsCleanedUp += () => _snapshotAvailability.Clear();
+
+            // v2.1 H2-2: Wire SessionId + TelemetryLogger to EditFileTool for snapshot pipeline
+            _editFileTool.SessionId = sessionId;
+            _editFileTool.TelemetryLogger = _telemetryLogger;
 
             // Register middleware — execution order: PreValidation → Monitoring → Permission → Verification → [Core]
             _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PreValidationMiddleware());
             _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.MonitoringMiddleware(
                 telemetryLogger: _telemetryLogger, sessionId: sessionId));
             var permissionHandler = new AICA.Agent.VSPermissionHandler();
-            _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.PermissionCheckMiddleware(
-                permissionHandler, telemetryLogger: _telemetryLogger, sessionId: sessionId));
+            var permissionMiddleware = new AICA.Core.Agent.Middleware.PermissionCheckMiddleware(
+                permissionHandler, telemetryLogger: _telemetryLogger, sessionId: sessionId);
+            _toolDispatcher.UseMiddleware(permissionMiddleware);
             _toolDispatcher.UseMiddleware(new AICA.Core.Agent.Middleware.VerificationMiddleware());
 
             // Initialize LLM client
@@ -590,6 +834,13 @@ namespace AICA.ToolWindows
                     WarningBanner.Visibility = Visibility.Visible;
                 }
             });
+
+            // v2.1 H3b: Late-bind SafetyGuard to PermissionCheckMiddleware
+            // (middleware is registered before VSAgentContext creates SafetyGuard)
+            if (_agentContext?.SafetyGuard != null)
+            {
+                permissionMiddleware.SafetyGuard = _agentContext.SafetyGuard;
+            }
 
             // Initialize Agent executor with custom instructions and token budget from options
             // Token budget derived from model's actual context window, reserving space for output and system prompt
@@ -781,11 +1032,14 @@ namespace AICA.ToolWindows
                     var completionResult = CompletionResult.Deserialize(message.CompletionData);
                     if (completionResult != null)
                     {
+                        // Phase 4: rolled-back visual marker
+                        var completionRbClass = !string.IsNullOrEmpty(message.RollbackState) ? " rolled-back-msg" : "";
+
                         // Render final layout in the desired order:
                         // 1. tool logs (includes thinking, actions, tools, conclusions)
                         // 2. independent streaming content (part 3)
                         // 3. completion card
-                        bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
+                        bodyBuilder.AppendLine($"<div class=\"message {roleClass}{completionRbClass}\">");
                         bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
 
                         if (!string.IsNullOrEmpty(message.ToolLogsHtml))
@@ -801,13 +1055,23 @@ namespace AICA.ToolWindows
                         }
 
                         bodyBuilder.AppendLine(_htmlRenderer.BuildCompletionCardHtml(completionResult.Summary, completionResult.Command, i));
+
+                        // Phase 4: rolled-back tag
+                        if (message.RollbackState == "rolled_back")
+                            bodyBuilder.AppendLine("<span class=\"rolled-back-tag\">[已回滚]</span>");
+                        else if (message.RollbackState == "partial")
+                            bodyBuilder.AppendLine("<span class=\"rolled-back-tag\">[部分回滚]</span>");
+
                         bodyBuilder.AppendLine("</div>");
                         continue;
                     }
                 }
 
+                // Phase 4: rolled-back visual marker for regular messages
+                var rbClass = (message.Role == "assistant" && !string.IsNullOrEmpty(message.RollbackState)) ? " rolled-back-msg" : "";
+
                 // Regular message rendering (includes natural completion with tool logs)
-                bodyBuilder.AppendLine($"<div class=\"message {roleClass}\">");
+                bodyBuilder.AppendLine($"<div class=\"message {roleClass}{rbClass}\">");
                 bodyBuilder.AppendLine($"<div class=\"role\">{roleName}</div>");
 
                 // Render tool logs if present (natural completion — no CompletionData but has ToolLogsHtml)
@@ -826,6 +1090,100 @@ namespace AICA.ToolWindows
                     {
                         var html = Markdig.Markdown.ToHtml(message.Content, _markdownPipeline);
                         bodyBuilder.AppendLine($"<div class=\"content\">{html}</div>");
+                    }
+                }
+
+                // Phase 4: rolled-back tag for regular assistant messages
+                if (message.Role == "assistant" && message.RollbackState == "rolled_back")
+                    bodyBuilder.AppendLine("<span class=\"rolled-back-tag\">[已回滚]</span>");
+                else if (message.Role == "assistant" && message.RollbackState == "partial")
+                    bodyBuilder.AppendLine("<span class=\"rolled-back-tag\">[部分回滚]</span>");
+
+                // Phase 4: Rollback button for user messages
+                if (message.Role == "user")
+                {
+                    // [F15] 向后搜索最近的有 StepIndices 的 assistant 消息
+                    bool showRollback = false;
+                    string rollbackState = null;
+                    int assistantIdx = -1;
+                    for (int k = i + 1; k < _conversation.Count; k++)
+                    {
+                        if (_conversation[k].Role == "user") break;
+                        if (_conversation[k].Role == "assistant" && _conversation[k].StepIndices?.Count > 0)
+                        {
+                            showRollback = true;
+                            rollbackState = _conversation[k].RollbackState;
+                            assistantIdx = k;
+                            break;
+                        }
+                    }
+
+                    if (showRollback)
+                    {
+                        // 禁止跳跃：检查后方是否有未回滚的编辑轮
+                        bool hasLaterUnrolled = false;
+                        for (int j = assistantIdx + 1; j < _conversation.Count; j++)
+                        {
+                            var later = _conversation[j];
+                            if (later.Role == "assistant"
+                                && later.StepIndices?.Count > 0
+                                && later.RollbackState == null)
+                            {
+                                hasLaterUnrolled = true;
+                                break;
+                            }
+                        }
+
+                        // 快照过期检查（T10: 同步查缓存，零 I/O）
+                        bool snapshotsExpired = false;
+                        var assistantSteps = _conversation[assistantIdx].StepIndices;
+                        if (assistantSteps != null && assistantSteps.Count > 0)
+                        {
+                            // 仅当缓存中有条目时才判断过期（首次渲染未加载缓存时不标记为过期）
+                            if (assistantSteps.Any(si => _snapshotAvailability.ContainsKey(si)))
+                            {
+                                snapshotsExpired = assistantSteps.All(si =>
+                                    _snapshotAvailability.ContainsKey(si) && !_snapshotAvailability[si]);
+                            }
+                        }
+
+                        // 生成按钮 HTML
+                        string btnClass = "rollback-btn";
+                        string btnLabel = "Undo";
+                        string btnTitle = "Undo all file changes from this turn";
+                        string btnExtra = "";
+                        if (rollbackState == "rolled_back")
+                        {
+                            btnClass += " rolled-back";
+                            btnLabel = "Undone";
+                            btnTitle = "Changes have been undone";
+                            btnExtra = " disabled";
+                        }
+                        else if (rollbackState == "partial")
+                        {
+                            // partial 状态：可重试
+                            btnTitle = "Partially undone — click to retry";
+                        }
+                        else if (snapshotsExpired)
+                        {
+                            btnClass += " expired";
+                            btnLabel = "Expired";
+                            btnTitle = "Snapshots have expired";
+                            btnExtra = " disabled";
+                        }
+                        else if (hasLaterUnrolled)
+                        {
+                            btnClass += " disabled";
+                            btnTitle = "Undo later turns first";
+                            btnExtra = " disabled";
+                        }
+
+                        bodyBuilder.Append($"<div class=\"rollback-footer\">" +
+                            $"<button class=\"{btnClass}\" data-msg-index=\"{i}\" " +
+                            $"onclick=\"requestRollback({i})\" title=\"{btnTitle}\"{btnExtra}>" +
+                            $"<span class=\"rollback-icon\">&#x21A9;</span>" +
+                            $"<span class=\"rollback-label\">{btnLabel}</span>" +
+                            $"</button></div>");
                     }
                 }
 
@@ -1285,6 +1643,8 @@ namespace AICA.ToolWindows
         /// Plan card history for floating panel display (persists across tasks)
         /// </summary>
         private readonly List<string> _planHistory = new List<string>();
+        private readonly List<TurnStepMapping> _turnMappings = new List<TurnStepMapping>();
+        private Dictionary<int, bool> _snapshotAvailability = new Dictionary<int, bool>();
         private bool _planCreatedThisExecution = false;
         private AICA.Core.Agent.TaskPlan _lastPlan;
 
@@ -1652,6 +2012,10 @@ namespace AICA.ToolWindows
             _lastPlan = null;
             _planCreatedThisExecution = false;
 
+            // ── Phase 4: 标记轮次开始 ──
+            int turnIndex = _editFileTool?.BeginTurn() ?? -1;
+            bool turnEnded = false; // guard against double EndTurn
+
             // Add user message to history BEFORE executing agent (v2.6: use parts-aware message)
             _llmHistory.Add(userChatMessage ?? ChatMessage.User(userMessage));
 
@@ -1951,12 +2315,30 @@ namespace AICA.ToolWindows
                                         _llmHistory.Add(ChatMessage.Assistant(completionResult?.Summary ?? finalContent));
                                     }
 
-                                    // Full re-render only when completion card needs rendering
-                                    // (incremental DOM already has correct content for normal responses)
-                                    if (completionResult != null)
+                                    // ── Phase 4: 轮次结束，在 RenderConversation 之前收集映射 ──
+                                    if (_editFileTool != null && !turnEnded)
                                     {
-                                        RenderConversation();
+                                        turnEnded = true;
+                                        var mapping = _editFileTool.EndTurn();
+                                        _turnMappings.Add(mapping);
+
+                                        var lastAssistant = _conversation.LastOrDefault(m => m.Role == "assistant");
+                                        if (lastAssistant != null)
+                                        {
+                                            lastAssistant.StepIndices = mapping.StepIndices.ToList();
+                                            lastAssistant.TurnIndex = mapping.TurnIndex;
+                                        }
+                                        var lastUser = _conversation.LastOrDefault(m => m.Role == "user");
+                                        if (lastUser != null)
+                                            lastUser.TurnIndex = mapping.TurnIndex;
+
+                                        // T10: Update snapshot availability cache
+                                        foreach (var si in mapping.StepIndices)
+                                            _snapshotAvailability[si] = true;
                                     }
+
+                                    // Phase 4: 始终全量渲染以确保 rollback 按钮正确显示
+                                    RenderConversation();
                                     break;
 
                                 case AgentStepType.Error:
@@ -1994,6 +2376,28 @@ namespace AICA.ToolWindows
                                         AppendMessage("assistant", errorMessage);
                                     }
 
+                                    // ── Phase 4: 轮次结束（Error 路径） ──
+                                    if (_editFileTool != null && !turnEnded)
+                                    {
+                                        turnEnded = true;
+                                        var mapping = _editFileTool.EndTurn();
+                                        _turnMappings.Add(mapping);
+
+                                        var lastAssistant = _conversation.LastOrDefault(m => m.Role == "assistant");
+                                        if (lastAssistant != null)
+                                        {
+                                            lastAssistant.StepIndices = mapping.StepIndices.ToList();
+                                            lastAssistant.TurnIndex = mapping.TurnIndex;
+                                        }
+                                        var lastUser = _conversation.LastOrDefault(m => m.Role == "user");
+                                        if (lastUser != null)
+                                            lastUser.TurnIndex = mapping.TurnIndex;
+
+                                        // T10: Update snapshot availability cache
+                                        foreach (var si in mapping.StepIndices)
+                                            _snapshotAvailability[si] = true;
+                                    }
+
                                     RenderConversation();
                                     break;
                             }
@@ -2029,6 +2433,28 @@ namespace AICA.ToolWindows
                         });
 
                         _llmHistory.Add(ChatMessage.Assistant(pausedContent));
+
+                        // ── Phase 4: 轮次结束（Paused 路径） ──
+                        if (_editFileTool != null && !turnEnded)
+                        {
+                            turnEnded = true;
+                            var mapping = _editFileTool.EndTurn();
+                            _turnMappings.Add(mapping);
+
+                            var lastAssistant = _conversation.LastOrDefault(m => m.Role == "assistant");
+                            if (lastAssistant != null)
+                            {
+                                lastAssistant.StepIndices = mapping.StepIndices.ToList();
+                                lastAssistant.TurnIndex = mapping.TurnIndex;
+                            }
+                            var lastUser = _conversation.LastOrDefault(m => m.Role == "user");
+                            if (lastUser != null)
+                                lastUser.TurnIndex = mapping.TurnIndex;
+
+                            // T10: Update snapshot availability cache
+                            foreach (var si in mapping.StepIndices)
+                                _snapshotAvailability[si] = true;
+                        }
 
                         RenderConversation();
                     }));
@@ -2435,7 +2861,11 @@ namespace AICA.ToolWindows
                         Role = msg.Role,
                         Content = msg.Content,
                         ToolLogsHtml = msg.ToolLogsHtml,
-                        CompletionData = msg.CompletionData
+                        CompletionData = msg.CompletionData,
+                        // [F18] Phase 4 新字段：
+                        StepIndices = msg.StepIndices ?? new List<int>(),
+                        TurnIndex = msg.TurnIndex,
+                        RollbackState = msg.RollbackState,
                     });
 
                     // Restore to LLM history (for context)
@@ -2461,6 +2891,43 @@ namespace AICA.ToolWindows
                 if (record.PlanHistory != null && record.PlanHistory.Count > 0)
                 {
                     _planHistory.AddRange(record.PlanHistory);
+                }
+
+                // [F19] Phase 4: Restore _turnMappings from TurnStepMappings
+                _turnMappings.Clear();
+                if (record.TurnStepMappings != null)
+                {
+                    _turnMappings.AddRange(record.TurnStepMappings
+                        .Select(r => new TurnStepMapping
+                        {
+                            TurnIndex = r.TurnIndex,
+                            StepIndices = r.StepIndices ?? Array.Empty<int>(),
+                            SessionId = _currentConversationId
+                        }));
+                }
+
+                // [F19][SF14] Phase 4: Restore EditFileTool counters to prevent stepIndex/turnIndex collision
+                if (record.TurnStepMappings != null && record.TurnStepMappings.Count > 0)
+                {
+                    var maxTurn = record.TurnStepMappings.Max(m => m.TurnIndex);
+                    var maxStep = record.TurnStepMappings
+                        .SelectMany(m => m.StepIndices ?? Array.Empty<int>())
+                        .DefaultIfEmpty(0)
+                        .Max();
+                    _editFileTool?.RestoreCounters(maxTurn, maxStep);
+                }
+
+                // Phase 4 T10: Populate snapshot availability cache from disk
+                _snapshotAvailability.Clear();
+                try
+                {
+                    var snapshots = await SnapshotManager.Instance.GetSnapshotsAsync(conversationId);
+                    foreach (var s in snapshots)
+                        _snapshotAvailability[s.StepIndex] = true;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[AICA] Snapshot cache load failed: {ex.Message}");
                 }
 
                 // Set current conversation ID
@@ -2651,12 +3118,28 @@ namespace AICA.ToolWindows
                         Content = msg.Content,
                         ToolLogsHtml = msg.ToolLogsHtml,
                         CompletionData = msg.CompletionData,
-                        PartsJson = msg.PartsJson
+                        PartsJson = msg.PartsJson,
+                        // [F18] Phase 4 新字段映射：
+                        StepIndices = msg.StepIndices?.Count > 0 ? msg.StepIndices : null,
+                        TurnIndex = msg.TurnIndex,
+                        RollbackState = msg.RollbackState,
                     });
                 }
 
                 if (_planHistory.Count > 0)
                     record.PlanHistory = new List<string>(_planHistory);
+
+                // [SF18] Phase 4: Save _turnMappings → TurnStepMappings
+                if (_turnMappings.Count > 0)
+                {
+                    record.TurnStepMappings = _turnMappings
+                        .Select(m => new TurnStepMappingRecord
+                        {
+                            TurnIndex = m.TurnIndex,
+                            StepIndices = m.StepIndices
+                        })
+                        .ToList();
+                }
 
                 await _conversationStorage.SaveConversationAsync(record);
 
@@ -3160,6 +3643,20 @@ namespace AICA.ToolWindows
         a:hover {{ text-decoration: underline; }}
         h1, h2, h3, h4, h5, h6 {{ margin-top: 1.4em; margin-bottom: 0.6em; }}
 
+        /* Phase 4: Rolled-back message styles */
+        .message.rolled-back-msg {{
+            opacity: 0.6;
+        }}
+        .rolled-back-tag {{
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: rgba(255,150,50,0.15);
+            color: #e6a050;
+            font-size: 10px;
+            margin-left: 8px;
+        }}
+
         /* Thinking Block Styles - Light Yellow */
         .thinking-container {{
             margin: 8px 0;
@@ -3541,6 +4038,83 @@ namespace AICA.ToolWindows
         .plan-tab:hover {{ color: #cdd6f4; }}
         .plan-tab.active {{ color: #89b4fa; border-bottom-color: #89b4fa; }}
 
+        /* Rollback Button Styles */
+        .rollback-footer {{
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid rgba(255,255,255,0.06);
+        }}
+        .rollback-btn {{
+            display: inline-flex;
+            align-items: center;
+            /* [F9] gap 不用：IE11 不支持 flexbox gap */
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.06);
+            color: #9ca3af;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+            -ms-user-select: none;
+            user-select: none;
+        }}
+        .rollback-btn:hover {{
+            background: rgba(255,150,50,0.15);
+            border-color: #e6a050;
+            color: #e6a050;
+        }}
+        .rollback-btn:active {{
+            background: rgba(255,150,50,0.25);
+        }}
+        .rollback-btn.rolled-back {{
+            background: rgba(255,255,255,0.03);
+            border-color: rgba(255,255,255,0.08);
+            color: #555;
+            cursor: default;
+            opacity: 0.6;
+        }}
+        .rollback-btn.rolled-back:hover {{
+            background: rgba(255,255,255,0.03);
+            border-color: rgba(255,255,255,0.08);
+            color: #555;
+        }}
+        .rollback-btn.processing {{
+            cursor: wait;
+            opacity: 0.7;
+        }}
+        .rollback-btn.disabled {{
+            border-color: rgba(255,255,255,0.08);
+            color: #555;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }}
+        .rollback-btn.disabled:hover {{
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.08);
+            color: #555;
+        }}
+        /* [F10] MF-3: expired 状态 CSS */
+        .rollback-btn.expired {{
+            background: rgba(255,255,255,0.03);
+            border-color: rgba(255,255,255,0.08);
+            color: #555;
+            cursor: default;
+            opacity: 0.5;
+        }}
+        .rollback-btn.expired:hover {{
+            background: rgba(255,255,255,0.03);
+            border-color: rgba(255,255,255,0.08);
+            color: #555;
+        }}
+        .rollback-icon {{
+            font-size: 13px;
+            line-height: 1;
+            margin-right: 4px;  /* [F9] 替代 gap: 4px */
+        }}
+
         /* Highlight.js VS2015 theme */
         {_highlightCss}
     </style>
@@ -3630,6 +4204,21 @@ namespace AICA.ToolWindows
                     addClass(expand, 'expanded');
                 }}
             }}
+        }}
+
+        function requestRollback(msgIndex) {{
+            var btn = document.querySelector('.rollback-btn[data-msg-index=""' + msgIndex + '""]');
+            if (!btn) return;
+            // [F10] guard 增加 expired 检查
+            if (hasClass(btn, 'rolled-back') || hasClass(btn, 'processing')
+                || hasClass(btn, 'disabled') || hasClass(btn, 'expired')) return;
+
+            // [SF15] 状态变更在 guard 之后、导航之前
+            addClass(btn, 'processing');
+            var label = btn.querySelector('.rollback-label');
+            if (label) label.innerText = 'Undoing...';
+
+            window.location.href = 'aica://rollback?msgIndex=' + msgIndex;
         }}
     </script>
 </head>

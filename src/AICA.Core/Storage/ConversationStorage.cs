@@ -551,6 +551,21 @@ namespace AICA.Core.Storage
         /// Null for old conversations without plan data (backward compatible).
         /// </summary>
         public List<string> PlanHistory { get; set; }
+
+        /// <summary>
+        /// v2.1 H4: Turn-to-step mapping for message-level rollback.
+        /// Null for old conversations (backward compatible).
+        /// </summary>
+        public List<TurnStepMappingRecord> TurnStepMappings { get; set; }
+    }
+
+    /// <summary>
+    /// Record for persisting turn-to-step mapping in ConversationRecord.
+    /// </summary>
+    public class TurnStepMappingRecord
+    {
+        public int TurnIndex { get; set; }
+        public int[] StepIndices { get; set; }
     }
 
     /// <summary>
@@ -573,6 +588,24 @@ namespace AICA.Core.Storage
         public string PartsJson { get; set; }
 
         public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
+
+        // ── Phase 4 新增 ──
+
+        /// <summary>
+        /// v2.1 H4: stepIndex 列表，用于消息级回滚。
+        /// Null for old conversations (backward compatible).
+        /// </summary>
+        public List<int> StepIndices { get; set; }
+
+        /// <summary>
+        /// v2.1 H4: 对话轮次编号。Null for old conversations.
+        /// </summary>
+        public int? TurnIndex { get; set; }
+
+        /// <summary>
+        /// v2.1 H4: 回滚状态。null=未回滚。
+        /// </summary>
+        public string RollbackState { get; set; }
     }
 
     /// <summary>

@@ -22,6 +22,9 @@ namespace AICA.Agent
         private readonly DTE2 _dte;
         private readonly Func<string, string, CancellationToken, Task<bool>> _confirmationHandler;
         private SafetyGuard _safetyGuard;
+
+        /// <summary>v2.1 H3b: Expose SafetyGuard for PermissionCheckMiddleware late-binding.</summary>
+        internal SafetyGuard SafetyGuard => _safetyGuard;
         private AutoApproveManager _autoApproveManager;
         private SolutionSourceIndex _sourceIndex;
         private PathResolver _pathResolver;

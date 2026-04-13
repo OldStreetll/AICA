@@ -81,6 +81,26 @@
           <ButtonText>AICA Chat</ButtonText>
         </Strings>
       </Button>
+
+      <!-- Reset Permission Decisions (command palette) -->
+      <Button guid="AICACommandSet" id="ResetPermissionsCommand" priority="0x0005" type="Button">
+        <Icon guid="ImageCatalogGuid" id="StatusInformation" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>AICA: Reset Permission Decisions</ButtonText>
+          <LocCanonicalName>.AICA.ResetPermissions</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <!-- Rollback Edit Step (command palette) -->
+      <Button guid="AICACommandSet" id="RollbackEditStepCommand" priority="0x0006" type="Button">
+        <Icon guid="ImageCatalogGuid" id="Undo" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>AICA: Rollback Edit Step</ButtonText>
+          <LocCanonicalName>.AICA.RollbackEditStep</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
 
   </Commands>
@@ -113,6 +133,12 @@
     <CommandPlacement guid="AICACommandSet" id="SendCodeToAicaCommand" priority="0x0004">
       <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
     </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="ResetPermissionsCommand" priority="0x0005">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="AICACommandSet" id="RollbackEditStepCommand" priority="0x0006">
+      <Parent guid="AICACommandSet" id="AICA_CommandGroup" />
+    </CommandPlacement>
   </CommandPlacements>
 
   <KeyBindings>
@@ -132,6 +158,8 @@
       <IDSymbol name="GenerateTestCommand" value="0x0103" />
       <IDSymbol name="OpenChatWindowMenuCommand" value="0x0104" />
       <IDSymbol name="SendCodeToAicaCommand" value="0x0105" />
+      <IDSymbol name="ResetPermissionsCommand" value="0x0106" />
+      <IDSymbol name="RollbackEditStepCommand" value="0x0107" />
     </GuidSymbol>
   </Symbols>
 

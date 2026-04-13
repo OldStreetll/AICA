@@ -26,6 +26,7 @@ namespace AICA.Core.Config
         public TelemetryConfig Telemetry { get; set; } = new TelemetryConfig();
         public FeaturesConfig Features { get; set; } = new FeaturesConfig();
         public TruncationConfig Truncation { get; set; } = new TruncationConfig();
+        public SnapshotsConfig Snapshots { get; set; } = new SnapshotsConfig();
     }
 
     public class AgentConfig
@@ -93,5 +94,20 @@ namespace AICA.Core.Config
         /// Tools not listed here fall back to DefaultPreviewChars.
         /// </summary>
         public Dictionary<string, int> ToolPreviewChars { get; set; } = new Dictionary<string, int>();
+    }
+
+    /// <summary>
+    /// v2.1 H2: Configuration for file snapshot and rollback.
+    /// </summary>
+    public class SnapshotsConfig
+    {
+        /// <summary>Total disk quota for snapshots in MB.</summary>
+        public int MaxTotalSizeMB { get; set; } = 500;
+
+        /// <summary>Days to retain snapshot sessions before auto-cleanup.</summary>
+        public int RetentionDays { get; set; } = 7;
+
+        /// <summary>Maximum file size in bytes that can be snapshotted. Files larger are skipped.</summary>
+        public long MaxFileSizeBytes { get; set; } = 2 * 1024 * 1024; // 2MB
     }
 }

@@ -52,6 +52,8 @@
     <Compile Include="Commands\RefactorCommand.cs" />
     <Compile Include="Commands\GenerateTestCommand.cs" />
     <Compile Include="Commands\SendCodeToAicaCommand.cs" />
+    <Compile Include="Commands\ResetPermissionsCommand.cs" />
+    <Compile Include="Commands\RollbackEditStepCommand.cs" />
     <Compile Include="Events\SolutionEventListener.cs" />
     <Compile Include="Events\DocumentSaveListener.cs" />
     <Compile Include="Options\GeneralOptions.cs" />
